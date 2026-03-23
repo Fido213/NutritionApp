@@ -1,0 +1,9 @@
+putergenai
+fastapi[standard]
+uvicorn
+psycopg[binary]
+psycorg3
+alembic
+sqlalchemy
+pydantic-settings
+python-multipart
