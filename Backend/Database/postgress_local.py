@@ -1,3 +1,6 @@
+# This module is used for local testing and experimentation
+
+
 from sqlalchemy import CHAR, create_engine, text, Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +27,7 @@ class PlaygroundTable(Base):
     Name = Column(CHAR(2))
     Variable = Column(CHAR(2))
 
+# Base.metadata.create_all(engine)
 
 def check_connection():
     try:
@@ -50,7 +54,7 @@ def add_entry(name, variable, id):
 
 
 def read_entries():
-    entries = session.query(PlaygroundTable).all()
+    entries = session.query(PlaygroundTable).order_by(PlaygroundTable.ID).all()
     for entry in entries:
         print(f"ID: {entry.ID}, Name: {entry.Name}, Variable: {entry.Variable}")
 
@@ -77,7 +81,7 @@ def update_entry(id, new_name, new_variable):
 
 
 # Example usage
-# add_entry("e", "3", 3)
+# add_entry("d", "4", 40)
 # read_entries()
-read_entry(20)
-# update_entry(3, "f", "4")
+# read_entry(20)
+update_entry(20, "b", "2")
