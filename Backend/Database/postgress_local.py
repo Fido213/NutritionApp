@@ -1,9 +1,10 @@
 # This module is used for local testing and experimentation
 
 
-from sqlalchemy import CHAR, create_engine, text, Column, Integer, String, Float
+from sqlalchemy import CHAR, create_engine, Column, Integer
 from sqlalchemy.orm import declarative_base, sessionmaker
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 # finding environment variable for database connection
 class Settings(BaseSettings):
@@ -84,4 +85,4 @@ def update_entry(id, new_name, new_variable):
 # add_entry("d", "4", 40)
 # read_entries()
 # read_entry(20)
-update_entry(20, "b", "2")
+# update_entry(20, "b", "2")
