@@ -5,18 +5,21 @@ from postgress_util import list_results
 
 
 def create(table, id, user, Food):
-    try:
-        with open_session() as session:
-            current_time = datetime.datetime.now(datetime.timezone.utc)
-            new_entry = table(ID=id, created_at=current_time, user_id=user, food=Food)
-            session.add(new_entry)
-            session.commit()
-            print("success")
-    except Exception as e:
-        print(f"error: \n{e}")
+    if read(Log, False, "ID", id):
+        print("Item already exists")
+    else:
+        try:
+            with open_session() as session:
+                current_time = datetime.datetime.now(datetime.timezone.utc)
+                new_entry = table(ID=id, created_at=current_time, user_id=user, food=Food)
+                session.add(new_entry)
+                session.commit()
+                print(f"Success, created: \n {new_entry}")
+        except Exception as e:
+            print(f"error: \n{e}")
 
 
-def read(Table, showresults: bool, attribute: str, id=None):
+def read(Table, showresults: bool, attribute: str = "ID", id=None):
     try:
         with open_session() as session:
             if not id:
@@ -26,6 +29,7 @@ def read(Table, showresults: bool, attribute: str, id=None):
                     order = getattr(Table, "ID")
                 rows = session.query(Table).order_by(order).all()
                 if showresults:
+                    print(f"\n Sorted by: {attribute}:")
                     list_results(rows)
                 return rows
             else:
@@ -44,6 +48,3 @@ def update():
 
 def delete():
     pass
-
-
-read(Log, True, "user_id", 2)
