@@ -37,6 +37,7 @@ class Log(Base):
 
 # Setup functions
 
+
 @contextmanager
 def open_session():
     session = Session()

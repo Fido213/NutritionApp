@@ -30,6 +30,7 @@ class PlaygroundTable(Base):
 
 # Base.metadata.create_all(engine)
 
+
 def check_connection():
     try:
         with engine.connect():
