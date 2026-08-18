@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EverydayFuel</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="toast-wrapper"></div>
+
+    <!-- Numpad Modal -->
+    <div id="numpad-modal" class="modal">
+        <div class="modal-content numpad-box">
+            <div id="numpad-display" class="numpad-display">0</div>
+            <div class="numpad-grid">
+                <button data-val="1">1</button>
+                <button data-val="2">2</button>
+                <button data-val="3">3</button>
+                <button data-val="4">4</button>
+                <button data-val="5">5</button>
+                <button data-val="6">6</button>
+                <button data-val="7">7</button>
+                <button data-val="8">8</button>
+                <button data-val="9">9</button>
+                <button id="numpad-del" class="btn-del">DEL</button>
+                <button data-val="0">0</button>
+                <button id="numpad-enter" class="btn-enter">ENTER</button>
+            </div>
+            <button id="numpad-close" class="btn-close">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Scanner / Label OCR Modal -->
+    <div id="scanner-modal" class="modal">
+        <div class="modal-content scanner-box">
+            <div id="reader"></div>
+            <button id="btn-decode-label" class="btn-primary" style="margin-top: 10px; width: 100%; background: var(--pro);">Scan Nutrition Label</button>
+            <input type="file" id="ai-file-input" accept="image/*" capture="environment" style="display: none;">
+            <button id="btn-close-scanner" class="btn-close" style="margin-top: 10px;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Food Journal Search Modal -->
+    <div id="journal-modal" class="modal">
+        <div class="modal-content form-body" style="max-width: 420px;">
+            <h3 style="text-align: center; color: var(--accent-glow); margin-bottom: 15px;">Food Library & Journal</h3>
+            <input type="text" id="journal-search" placeholder="Search foods or aliases..." style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
+            <div id="journal-results" class="log-list" style="max-height: 300px; overflow-y: auto;"></div>
+            <button id="btn-close-journal" class="btn-close" style="margin-top: 15px;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Action Hub Modal (Context Menu for Entries) -->
+    <div id="action-hub-modal" class="modal">
+        <div class="modal-content" style="max-width: 320px; text-align: center;">
+            <h3 id="action-hub-title" style="margin-bottom: 20px; color: var(--accent-glow);">Log Actions</h3>
+            <button id="hub-btn-edit" class="btn-primary" style="margin-bottom: 12px; width: 100%;">Edit Details</button>
+            <button id="hub-btn-duplicate" class="btn-primary" style="margin-bottom: 12px; width: 100%; background: #3b82f6;">Duplicate</button>
+            <button id="hub-btn-delete" class="btn-primary" style="margin-bottom: 25px; width: 100%; background: #ef4444; color: #fff;">Delete</button>
+            <button id="hub-btn-close" class="btn-close" style="width: 100%;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Edit Entry Modal -->
+    <div id="edit-modal" class="modal">
+        <div class="modal-content form-body settings-grid" style="max-width: 380px;">
+            <h3 style="margin-bottom: 20px; text-align: center; color: var(--accent-glow);">Edit Entry</h3>
+            <input type="hidden" id="edit-log-id">
+            <input type="hidden" id="base-cal">
+            <input type="hidden" id="base-pro">
+            <input type="hidden" id="base-carb">
+            <input type="hidden" id="base-fat">
+
+            <div class="input-row"><label>Name</label><input type="text" id="edit-name" style="text-align: right; width: 160px;"></div>
+            <div class="input-row"><label>Date</label><input type="date" id="edit-date" style="text-align: right; background: transparent; color: #fff; border: none; font-family: inherit;"></div>
+            
+            <div id="multiplier-section" style="border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 10px 0; margin-bottom: 10px;">
+                <div class="input-row"><label style="font-size: 12px; color: var(--pro);">Base Amount (g/ml)</label><input type="number" id="base-amount" value="100"></div>
+                <div class="input-row"><label style="font-size: 12px; color: var(--pro);">New Amount (g/ml)</label><input type="number" id="eaten-amount" placeholder="E.g. 250"></div>
+            </div>
+
+            <div class="input-row"><label>Calories</label><input type="number" id="edit-cal"></div>
+            <div class="input-row"><label>Protein (g)</label><input type="number" id="edit-pro"></div>
+            <div class="input-row"><label>Carbs (g)</label><input type="number" id="edit-carb"></div>
+            <div class="input-row"><label>Fat (g)</label><input type="number" id="edit-fat"></div>
+            <div class="input-row"><label>Note</label><input type="text" id="edit-note" placeholder="Optional log note..."></div>
+            
+            <button id="btn-save-edit" class="btn-primary" style="margin-top: 20px; width: 100%;">Save Changes</button>
+            <button id="btn-close-edit" class="btn-close" style="width: 100%; margin-top: 10px;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Manual Log Modal -->
+    <div id="manual-log-modal" class="modal">
+        <div class="modal-content form-body settings-grid" style="max-width: 380px;">
+            <h3 style="margin-bottom: 20px; text-align: center; color: var(--accent-glow);">Manual Food Entry</h3>
+            <div class="input-row"><label>Food Name</label><input type="text" id="manual-name" placeholder="e.g. Rice & Beans" style="width: 160px;"></div>
+            <div class="input-row"><label>Amount (g/ml)</label><input type="number" id="manual-amount" placeholder="100"></div>
+            <div class="input-row"><label>Calories</label><input type="number" id="manual-cal" placeholder="250"></div>
+            <div class="input-row"><label>Protein (g)</label><input type="number" id="manual-pro" placeholder="15"></div>
+            <div class="input-row"><label>Carbs (g)</label><input type="number" id="manual-carb" placeholder="40"></div>
+            <div class="input-row"><label>Fat (g)</label><input type="number" id="manual-fat" placeholder="5"></div>
+            <div class="input-row"><label>Note</label><input type="text" id="manual-note" placeholder="Optional note..."></div>
+
+            <button id="btn-save-manual" class="btn-primary" style="margin-top: 20px; width: 100%;">Log Item</button>
+            <button id="btn-close-manual" class="btn-close" style="width: 100%; margin-top: 10px;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Main View Container -->
+    <main id="main-container">
+        <!-- Dashboard View -->
+        <section id="today" class="view active-view">
+            <div class="grid-layout">
+                <div class="visual-col">
+                    <!-- Calorie Ring Card -->
+                    <div class="card ring-card">
+                        <div class="ring-container">
+                            <svg class="progress-ring" viewBox="0 0 120 120">
+                                <circle class="ring-bg" cx="60" cy="60" r="50" id="cal-ring-bg"></circle>
+                                <circle class="ring-fill" cx="60" cy="60" r="50" id="cal-ring"></circle>
+                            </svg>
+                            <div class="ring-text">
+                                <span id="ui-cal-current">0</span>
+                                <span class="label">/ <span id="ui-cal-target">2500</span> kcal</span>
+                                <span id="ui-cal-pct" class="ring-pct">0% <span id="ui-cal-delta" class="delta-indicator">✓</span></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Macronutrient Card -->
+                    <div class="card macros-card">
+                        <div class="macro-row">
+                            <div class="macro-labels">
+                                <span>PRO <span id="ui-pro-delta" class="delta-badge">✓</span></span>
+                                <span id="ui-pro-text">0 / 150g (0%)</span>
+                            </div>
+                            <div class="macro-bar-bg"><div id="bar-pro" class="macro-bar fill-pro"></div></div>
+                        </div>
+                        <div class="macro-row">
+                            <div class="macro-labels">
+                                <span>CARB <span id="ui-carb-delta" class="delta-badge">✓</span></span>
+                                <span id="ui-carb-text">0 / 250g (0%)</span>
+                            </div>
+                            <div class="macro-bar-bg"><div id="bar-carb" class="macro-bar fill-carb"></div></div>
+                        </div>
+                        <div class="macro-row">
+                            <div class="macro-labels">
+                                <span>FAT <span id="ui-fat-delta" class="delta-badge">✓</span></span>
+                                <span id="ui-fat-text">0 / 80g (0%)</span>
+                            </div>
+                            <div class="macro-bar-bg"><div id="bar-fat" class="macro-bar fill-fat"></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="action-col">
+                    <!-- Hydration Card with Gating Breakdown -->
+                    <div class="card water-card">
+                        <div class="water-header">
+                            <div>
+                                <h3>Hydration <span id="ui-water-delta" class="delta-badge">✓</span></h3>
+                                <div id="water-breakdown-badges" class="water-breakdown">
+                                    <span class="w-badge w-explicit">Explicit: <span id="w-exp-val">0</span>ml</span>
+                                    <span class="w-badge w-drink">Drink: <span id="w-drk-val">0</span>ml</span>
+                                    <span class="w-badge w-food">Food: <span id="w-fd-val">0</span>ml</span>
+                                </div>
+                            </div>
+                            <span id="ui-water-text" style="font-weight: 700;">0 / 4000 ml (0%)</span>
+                        </div>
+                        <div class="water-bar-bg"><div id="bar-water" class="water-bar"></div></div>
+                        <div class="quick-actions">
+                            <button id="btn-water-250">+250ml</button>
+                            <button id="btn-water-500">+500ml</button>
+                            <button id="btn-water-custom">Custom</button>
+                        </div>
+                    </div>
+
+                    <!-- 1-Tap Recents & Actions -->
+                    <div class="card recents-card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3 style="margin: 0;">1-Tap Recents</h3>
+                            <div style="display: flex; gap: 8px;">
+                                <button id="btn-open-journal" style="background: var(--accent-glow); color: #000; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-family: inherit; font-size: 12px; cursor: pointer;">+ JOURNAL</button>
+                                <button id="btn-open-manual" style="background: var(--pro); color: #fff; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-family: inherit; font-size: 12px; cursor: pointer;">+ MANUAL</button>
+                            </div>
+                        </div>
+                        <div id="recents-container" class="recents-list"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- History & Logs View -->
+        <section id="history" class="view scroller">
+            <div class="card tabs-card">
+                <div class="tabs">
+                    <button id="btn-view-week" class="active">7D</button>
+                    <button id="btn-view-month">1M</button>
+                    <button id="btn-view-year">1Y</button>
+                </div>
+            </div>
+            
+            <div class="card chart-card">
+                <h3>Calorie Trend</h3>
+                <div id="weekly-chart" class="chart-area"></div>
+            </div>
+
+            <div class="card heatmap-card">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3>Consistency Score</h3>
+                    <span id="heatmap-score-badge" class="score-badge">Score: 0</span>
+                </div>
+                <div id="calendar-container" class="heatmap"></div>
+            </div>
+
+            <!-- Selected Day Detail -->
+            <div id="day-view-container"></div>
+        </section>
+
+        <!-- System Targets & Settings View -->
+        <section id="view-goals" class="view scroller">
+            <header class="view-header"><h2>System Targets & Settings</h2></header>
+            
+            <div class="card form-body settings-grid">
+                <h3 style="color: var(--accent-glow); margin-bottom: 5px;">Active Goals Configuration</h3>
+                <div class="input-row">
+                    <label>Calories (kcal)</label><input type="number" id="goal-cal" value="2500">
+                </div>
+                <div class="input-row">
+                    <label>Protein (g)</label><input type="number" id="goal-pro" value="150">
+                </div>
+                <div class="input-row">
+                    <label>Carbs (g)</label><input type="number" id="goal-carb" value="250">
+                </div>
+                <div class="input-row">
+                    <label>Fat (g)</label><input type="number" id="goal-fat" value="80">
+                </div>
+                <div class="input-row">
+                    <label>Water (ml)</label><input type="number" id="goal-water" value="4000">
+                </div>
+                <button id="btn-save-goals" class="btn-primary">Save Goal Configuration</button>
+            </div>
+
+            <div class="card form-body settings-grid" style="margin-top: 16px;">
+                <h3 style="color: var(--accent-glow); margin-bottom: 5px;">Data & Backup Tools</h3>
+                <button id="btn-export-csv" class="btn-primary" style="background: #3b82f6; color: #fff;">Export Data to CSV</button>
+                <button id="btn-import-csv" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Import Tracker CSV</button>
+                <input type="file" id="csv-file-input" accept=".csv" style="display: none;">
+                <button id="btn-backup" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Encrypted Backup Archive</button>
+            </div>
+        </section>
+    </main>
+
+    <!-- Top Right Settings Trigger -->
+    <button id="sys-btn-top" class="sys-btn-top">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.06-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.73,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.06,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.49-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+    </button>
+
+    <!-- Bottom Navigation Dock -->
+    <nav class="dock">
+        <button id="nav-btn-dash" class="nav-btn active">DASH</button>
+        <div class="scan-wrapper">
+            <button id="scan-btn" class="scan-btn">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg>
+            </button>
+        </div>
+        <button id="nav-btn-logs" class="nav-btn">LOGS</button>
+    </nav>
+
+    <script type="module" src="./main.ts"></script>
+</body>
+</html>
