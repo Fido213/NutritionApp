@@ -86,4 +86,36 @@ describe('GemmaClient fallback label OCR parser', () => {
     expect(parsed.caloriesPer100g).toBe(152);
     expect(parsed.fatPer100g).toBe(2.5);
   });
+
+  it('parses values with a unit suffix like "Calories 250 kcal"', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel(
+      'Nutrition Facts\nCalories 250 kcal\nTotal Fat 8g\nCarbohydrate 30g\nProtein 10g'
+    );
+    expect(parsed.caloriesPer100g).toBe(250);
+    expect(parsed.fatPer100g).toBe(8);
+  });
+
+  it('ignores "of which" sub-lines when scanning for macros', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel(
+      'Nutrition Facts\nEnergy 1542 kJ / 368 kcal\nFat 8g\nof which saturates 2g\nCarbohydrate 30g\nof which sugars 12g\nProtein 10g'
+    );
+    expect(parsed.fatPer100g).toBe(8);
+    expect(parsed.carbsPer100g).toBe(30);
+    expect(parsed.proteinPer100g).toBe(10);
+  });
+
+  it('leaves macros that are missing from the label at zero', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel('Nutrition Facts\nCalories 150\nProtein 5g');
+    expect(parsed.caloriesPer100g).toBe(150);
+    expect(parsed.proteinPer100g).toBe(5);
+    expect(parsed.carbsPer100g).toBe(0);
+    expect(parsed.fatPer100g).toBe(0);
+  });
+
+  it('documents the preserved old-app behavior for kJ-first EU energy lines', async () => {
+    // The regex is preserved from old_app/api/index.py and captures the first
+    // number after the energy keyword — for EU labels that is the kJ value.
+    const parsed = await new GemmaClient().parseNutritionLabel('Energy 1542 kJ / 368 kcal\nFat 8g');
+    expect(parsed.caloriesPer100g).toBe(1542);
+  });
 });
