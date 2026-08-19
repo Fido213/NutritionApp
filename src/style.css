@@ -121,6 +121,18 @@ main { flex: 1; overflow-y: auto; position: relative; padding: 16px; padding-bot
     main { padding-left: 100px; padding-bottom: 16px; max-width: 1200px; margin: 0 auto; }
     .grid-layout { display: grid; grid-template-columns: 350px 1fr; gap: 24px; align-items: start; padding-bottom: 0; }
     .sys-btn-top { top: 30px; right: 30px; }
+
+    /* Laptop: History — tabs + trend chart span both columns, heatmap and day logs sit side by side */
+    #history.active-view { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    #history .tabs-card,
+    #history .chart-card { grid-column: 1 / -1; }
+    #history .chart-area { height: 140px; }
+    #day-view-container { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+
+    /* Laptop: Goals — header spans both columns, the two settings cards sit side by side */
+    #view-goals.active-view { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    #view-goals .view-header { grid-column: 1 / -1; margin-bottom: 0; }
+    #view-goals .card { margin-top: 0 !important; }
 }
 
 /* Ring & Visuals */

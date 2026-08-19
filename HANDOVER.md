@@ -1,8 +1,8 @@
 # EverydayFuel — Handover to Next Chat
 
-**Date:** 2026-08-19
-**From:** Laguna (DeepSeek V4 Flash), pass 8
-**Status:** Build + tests green; working tree NOT committed (see §6)
+**Date:** 2026-08-20
+**From:** Laguna (DeepSeek V4 Flash), pass 9
+**Status:** Build + tests green; pass-9 working tree NOT committed (see §6)
 
 ---
 
@@ -54,6 +54,9 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - `src/services/backup/backup.ts` — extracted **`collectAllTables(db)`** (all 12 tables → `Record<string, any[]>`); the file-backup handler now uses it, so file backup and P2P send share one archive path.
   - `src/index.html` + `src/main.ts` — Settings gains **Receive/Send Backup (P2P Transfer)** buttons + `#p2p-modal` (pairing code out/in textareas, Copy Code, Connect, status, Cancel). Two-step manual pairing: *Receive* shows its offer code → pastes the sender's answer → Connect → password prompt → `decryptBackup` → parse/validate → in-app confirm → existing `restoreBackupArchive`/fallback-store restore; *Send* pastes the receiver's code → Connect → shows its answer code → password prompt (set + confirm) → `collectAllTables` + `createBackupArchive` + `encryptBackup` → `sendBackup` with percentage progress. Reuses the exact backup/encryption/restore logic as file backup.
   - Tests: `src/services/transfer/transfer.test.ts` (new, 19 tests, stub transport: encrypted round trip byte-for-byte + decrypt/validate on receive, multi-chunk streaming, checksum mismatch, foreign hello, close-mid-transfer, error propagation to sender, empty/oversized guards both sides, pairing/message parse rejects, chunking edges, SHA-256 known vector, channel-open timeout via fake timers) + `collectAllTables` real-SQLite test. Suite now **163 tests, 12 files**.
+- **Pass 9 additions: Phase 10 — laptop view (spec §25) + Phase 11 static offline audit**:
+  - `src/style.css` — the existing `@media (min-width: 768px)` block previously only laid out the dashboard. Now the **History view** becomes a 2-column grid on laptop screens (tabs card + trend chart span full width; consistency heatmap and the selected-day log list sit side by side; `#day-view-container` renders as a proper card; trend chart gets a taller 140px reading area), and the **Goals view** becomes a 2-column grid (`.view-header` title spans both columns; Active Goals Configuration and Data & Backup Tools cards sit side by side — the second card's inline `margin-top: 16px` is neutralized on desktop only since the grid gap owns spacing). Mobile (<768px) CSS is byte-for-byte untouched; rules are scoped `#history.active-view` / `#view-goals.active-view` so the ID-level `display: grid` never overrides `.view { display: none }` on hidden views. No HTML/TS/data changes.
+  - **Offline audit (no code change):** grepped all of `src/` for network usage — the only touchpoint in the whole app is the Google Fonts `<link>` in `index.html` (pre-existing, same as old app, `display=swap` → graceful sans-serif fallback offline). No `fetch`/`XHR`/`WebSocket`/`axios` anywhere; SQLite, Web Crypto, and P2P WebRTC (host-candidate ICE) are all local. Kept deliberately; documented for the Phase 11 device pass.
 
 ## 3. Verification status
 
@@ -69,7 +72,9 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 | `collectAllTables` on a real SQLite database (sqlite-real.test.ts) | ✅ passes |
 | Backup/restore round trip + restore atomicity/rollback (backup.test.ts + sqlite-real.test.ts) | ✅ passes |
 | Gemma fallback text + label-OCR parsers (15 tests) | ✅ passes |
-| Manual click-through on device/browser | ❌ NOT run (no browser/device in environment) — **this now includes the P2P pairing flow and the WebRTC transport itself** (the transfer protocol layer IS unit-tested via a stub transport) |
+| Laptop-view CSS (Phase 10) — build output verified to contain the new `#history.active-view` / `#view-goals.active-view` / `#day-view-container` rules; mobile (<768px) rules untouched | ✅ passes (static); visual click-through ❌ NOT run (no browser) |
+| Offline audit (Phase 11 static) — `src/` contains zero network calls; only touchpoint is the Google Fonts `<link>` (graceful fallback) | ✅ passes (static); network-off click-through on a device ❌ NOT run |
+| Manual click-through on device/browser | ❌ NOT run (no browser/device in environment) — **this now includes the P2P pairing flow, the WebRTC transport itself** (the transfer protocol layer IS unit-tested via a stub transport), **and the laptop-layout + offline visual checks** |
 
 ## 4. Known limitations (unchanged, documented in pass-3/pass-8 logs)
 
@@ -83,13 +88,14 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 - History day view shows real food names now (`food_name` join added)
 - Scoring regression coverage has one blind spot, locked in by the test itself: `2026-05-03` in exportexample.csv is not replayable because the legacy CSV exports only pure water while the old app scored hydration against pure + drink/food water (the bridging water isn't in the file). The new hydration-gating rule (spec §16) also means the new app intentionally scores with `effectiveTotal` rather than the old raw sum — no legacy row contradicts this within the replayable set.
 - Zero-target semantics preserved as-is (pre-existing): a 0 target yields a 0 component (no penalty) and reasons "calories lower than goal" etc. The legacy app would have divided by zero (→ +Infinity → "higher than goal"); no legacy CSV row has a zero target, so this was never observed in real data.
+- Offline: the only network touchpoint in the app is the Google Fonts `<link>` in `index.html` (static audit, pass 9); it degrades to the system sans-serif offline. No service worker exists (the old app had `sw.js`) — adding one is an open decision for the Phase 11 device pass.
 
 ## 5. What's next (from PLAN.md §9 handoff)
 
 1. **Browser/device verification of the pass-8 P2P flow** — click through Receive → share code → Send → paste answer → transfer → restore on two devices (or two browser tabs on the same machine via `npm run dev`), and confirm the WebRTC transport behaves (channel open, progress, integrity). The protocol layer is tested; the adapter is not.
-2. **Full native ML Kit integration** — label OCR (image path now toasts + suggests the wired text fallback), real camera barcode decoding into `BarcodeRepository.lookupBarcode`, food-image analysis → observations. **Requires a Java + Android SDK environment** (none here — native changes were deliberately not attempted in passes 7–8 because they could not be verified). The label-OCR fallback parser is regression-locked (including its kJ quirk — fix it here if desired).
-3. **Laptop/desktop view** (Phase 10)
-4. **Offline validation pass** (Phase 11) — verify all core flows with network off
+2. **Full native ML Kit integration** — label OCR (image path now toasts + suggests the wired text fallback), real camera barcode decoding into `BarcodeRepository.lookupBarcode`, food-image analysis → observations. **Requires a Java + Android SDK environment** (none here — native changes were deliberately not attempted in passes 7–9 because they could not be verified). The label-OCR fallback parser is regression-locked (including its kJ quirk — fix it here if desired).
+3. **Phase 11 offline validation on a device** — static audit is done (pass 9: zero network calls in `src/`; only the Google Fonts `<link>`, which degrades gracefully). The remaining work is a manual pass with network toggled off: launch, text logging, known-food resolution, history, goals, water, scoring, export, backup/restore, existing local barcodes. Optionally revisit the font link (bundle locally or add a service worker like the old app's `sw.js`) if the visual fallback is unacceptable.
+4. ~~Laptop/desktop view~~ — done in pass 9 (Phase 10, spec §25): History + Goals views now present properly on ≥768px screens (pure CSS; mobile untouched). Visual click-through still outstanding on a real browser (listed under item 3's device pass).
 5. ~~More regression tests~~ — closed: real-SQLite migration + repository tests (pass 4), OCR parsing edge cases (pass 4), combo expansion round-trip (pass 4), scoring vs the old app's representative outputs (pass 6, spec §29 — 95/96 rows of exportexample.csv byte-identical), label-OCR service pipeline (pass 7), P2P protocol suite + collectAllTables (pass 8). Remaining possible coverage: repository tests on the degraded fallback shim, CSV export date-range/water-source rows.
 6. ~~Restore-from-backup UI~~ — done in pass 3 (Settings → Restore from Backup Archive)
 7. ~~Encrypted backup format~~ — done in pass 5 (spec §23; see §2/§4). ~~Replace `window.prompt` password entry with a proper in-app modal~~ — done in pass 7 (password + confirm modals wired).
@@ -97,10 +103,10 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 
 ## 6. Before you start
 
-- **The working tree is NOT committed.** Pass-8 changes: `src/services/transfer/` (new: `protocol.ts`, `transport.ts`, `transfer.ts`, `webrtc-transport.ts`, `transfer.test.ts`), `src/services/backup/backup.ts` (+`collectAllTables`), `src/services/backup/backup.test.ts` (untouched), `src/main.ts` (P2P wiring + backup handler uses `collectAllTables`), `src/index.html` (P2P modal + buttons), `src/data/repositories/sqlite-real.test.ts` (+1 test), `Ai Guidelines/ai logs/logs/[Laguna][pass 8][2026-08-19].md`. Commit this pass first.
+- **The working tree is NOT committed.** Pass-9 changes: `src/style.css` (+12 lines: laptop History/Goals layouts inside the existing desktop media query), `Ai Guidelines/ai logs/logs/[Laguna][pass 9][2026-08-20].md`. (Note: pass 8 was committed as `8a79963` after its handover was written.) Commit this pass first.
 - `vitest` is a devDependency; the "test" script runs `vitest run` (163 tests, 12 files).
 - The sql.js real-SQLite tests need no configuration: `initSqlJs()` loads `node_modules/sql.js/dist/sql-wasm.wasm` automatically in Node. Do not delete `src/types/sql-js.d.ts` — it is the type declaration for the untyped `sql.js` package (tsc strict would fail without it).
-- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-8 log: `[Laguna][pass 8][2026-08-19].md`.
+- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-9 log: `[Laguna][pass 9][2026-08-20].md`.
 - **No Java/Android SDK on the development machine** (rechecked pass 8) — native Android builds (`gradlew assembleDebug`) cannot run here; the Android project is untouched and unverified since pass 1. The next native pass must run on a machine with the Android toolchain.
 - Read `Ai Guidelines/NutritionOS — Agent Governance & Development Rules.md` (em-dash in filename) before editing; PLAN.md §7 lists what must NOT change (scoring, hydration gating, goal resolution, v001 schema, domain types, CSV export format).
 - Commands: `npm run dev` (web), `npm run build`, `npm test`, `npm run cap:sync` / `cap:run` (Android).
