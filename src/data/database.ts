@@ -111,160 +111,14 @@ export class DatabaseManager {
   }
 
   private createFallbackConnection(): SQLiteDBConnection {
-    const manager = this;
-
-    return {
-      query: async (statement: string, values?: any[]) => {
-        statement = statement.trim();
-        let tableName = 'foods';
-        if (statement.includes('FROM food_logs')) tableName = 'food_logs';
-        else if (statement.includes('FROM water_logs')) tableName = 'water_logs';
-        else if (statement.includes('FROM goals')) tableName = 'goals';
-        else if (statement.includes('FROM daily_records')) tableName = 'daily_records';
-        else if (statement.includes('FROM combos')) tableName = 'combos';
-        else if (statement.includes('FROM food_barcodes')) tableName = 'food_barcodes';
-        else if (statement.includes('JOIN food_aliases')) tableName = 'foods';
-        else if (statement.includes('FROM food_observations')) tableName = 'food_observations';
-        else if (statement.includes('FROM food_aliases')) tableName = 'food_aliases';
-        else if (statement.includes('FROM imports')) tableName = 'imports';
-        else if (statement.includes('FROM app_settings')) tableName = 'app_settings';
-
-        const rows = manager.fallbackStore.get(tableName) || [];
-        let filtered = [...rows];
-
-        if (values && values.length > 0) {
-          if (statement.includes('WHERE date = ?') || statement.includes('WHERE fl.date = ?')) {
-            filtered = filtered.filter(r => r.date === values[0]);
-          } else if (statement.includes('WHERE id = ?')) {
-            filtered = filtered.filter(r => r.id === values[0]);
-          } else if (statement.includes('WHERE normalized_name = ?')) {
-            filtered = filtered.filter(r => r.normalized_name === values[0]);
-          } else if (statement.includes('WHERE normalized_alias = ?')) {
-            filtered = filtered.filter(r => r.normalized_alias === values[0]);
-          } else if (statement.includes('WHERE fa.normalized_alias = ?')) {
-            const aliasRows = manager.fallbackStore.get('food_aliases') || [];
-            const aliasMatch = aliasRows.find(r => r.normalized_alias === values[0]);
-            filtered = aliasMatch ? filtered.filter(r => r.id === aliasMatch.food_id) : [];
-          } else if (statement.includes('WHERE end_date IS NULL')) {
-            filtered = filtered.filter(r => r.end_date === null);
-          }
-        }
-
-        if (statement.includes('SUM(calories)')) {
-          const sumCal = filtered.reduce((acc, curr) => acc + (curr.calories || 0), 0);
-          const sumPro = filtered.reduce((acc, curr) => acc + (curr.protein_g || 0), 0);
-          const sumCarb = filtered.reduce((acc, curr) => acc + (curr.carbs_g || 0), 0);
-          const sumFat = filtered.reduce((acc, curr) => acc + (curr.fat_g || 0), 0);
-          const sumWater = filtered.reduce((acc, curr) => acc + (curr.water_ml || 0), 0);
-
-          return { values: [{ calories: sumCal, protein_g: sumPro, carbs_g: sumCarb, fat_g: sumFat, water_ml: sumWater }] };
-        }
-
-        return { values: filtered };
+    return createFallbackConnection({
+      getTable: (name) => this.fallbackStore.get(name) || [],
+      setTable: (name, rows) => {
+        this.fallbackStore.set(name, rows);
+        this.saveFallbackStore();
       },
-
-      run: async (statement: string, values?: any[]) => {
-        statement = statement.trim();
-        let tableName = 'foods';
-        if (statement.includes('INTO food_logs') || statement.includes('UPDATE food_logs') || statement.includes('DELETE FROM food_logs')) tableName = 'food_logs';
-        else if (statement.includes('INTO water_logs') || statement.includes('UPDATE water_logs') || statement.includes('DELETE FROM water_logs')) tableName = 'water_logs';
-        else if (statement.includes('INTO goals') || statement.includes('UPDATE goals')) tableName = 'goals';
-        else if (statement.includes('INTO daily_records')) tableName = 'daily_records';
-        else if (statement.includes('INTO combos')) tableName = 'combos';
-        else if (statement.includes('INTO food_observations')) tableName = 'food_observations';
-        else if (statement.includes('INTO food_aliases')) tableName = 'food_aliases';
-        else if (statement.includes('INTO imports')) tableName = 'imports';
-
-        const rows = manager.fallbackStore.get(tableName) || [];
-
-        if (statement.startsWith('INSERT')) {
-          const newRow: any = {};
-          if (tableName === 'food_logs') {
-            newRow.id = values?.[0];
-            newRow.date = values?.[1];
-            newRow.food_id = values?.[2];
-            newRow.observation_id = values?.[3];
-            newRow.amount_g = values?.[4];
-            newRow.amount_ml = values?.[5];
-            newRow.calories = values?.[6];
-            newRow.protein_g = values?.[7];
-            newRow.carbs_g = values?.[8];
-            newRow.fat_g = values?.[9];
-            newRow.water_ml = values?.[10];
-            newRow.note = values?.[11];
-            newRow.created_at = values?.[12];
-          } else if (tableName === 'water_logs') {
-            newRow.id = values?.[0];
-            newRow.date = values?.[1];
-            newRow.amount_ml = values?.[2];
-            newRow.source = values?.[3];
-          } else if (tableName === 'goals') {
-            newRow.id = values?.[0];
-            newRow.name = values?.[1];
-            newRow.start_date = values?.[2];
-            newRow.end_date = values?.[3];
-            newRow.calories_target = values?.[4];
-            newRow.protein_target = values?.[5];
-            newRow.carbs_target = values?.[6];
-            newRow.fat_target = values?.[7];
-            newRow.water_target = values?.[8];
-          } else if (tableName === 'food_observations') {
-            newRow.id = values?.[0];
-            newRow.food_id = values?.[1];
-            newRow.source_type = values?.[2];
-            newRow.estimated_amount = values?.[3];
-            newRow.final_amount = values?.[4];
-            newRow.amount_unit = values?.[5];
-            newRow.confidence = values?.[6];
-            newRow.raw_input = values?.[7];
-            newRow.interpretation_json = values?.[8];
-            newRow.user_corrected = values?.[9];
-            newRow.created_at = values?.[10];
-          } else if (tableName === 'food_aliases') {
-            newRow.id = values?.[0];
-            newRow.food_id = values?.[1];
-            newRow.alias = values?.[2];
-            newRow.normalized_alias = values?.[3];
-            newRow.source = values?.[4];
-            newRow.confidence = values?.[5];
-            newRow.created_at = values?.[6];
-          } else if (tableName === 'imports') {
-            newRow.id = values?.[0];
-            newRow.source_type = values?.[1];
-            newRow.filename = values?.[2];
-            newRow.imported_at = values?.[3];
-            newRow.status = values?.[4];
-            newRow.row_count = values?.[5];
-            newRow.error_count = values?.[6];
-          } else if (tableName === 'foods') {
-            newRow.id = values?.[0];
-            newRow.canonical_name = values?.[1];
-            newRow.normalized_name = values?.[2];
-            newRow.calories_per_100g = values?.[3];
-            newRow.protein_per_100g = values?.[4];
-            newRow.carbs_per_100g = values?.[5];
-            newRow.fat_per_100g = values?.[6];
-            newRow.water_per_100g = values?.[7];
-          }
-          rows.push(newRow);
-          manager.fallbackStore.set(tableName, rows);
-          manager.saveFallbackStore();
-        } else if (statement.startsWith('DELETE')) {
-          if (values && values.length > 0) {
-            const filtered = rows.filter(r => r.id !== values[0]);
-            manager.fallbackStore.set(tableName, filtered);
-            manager.saveFallbackStore();
-          }
-        }
-
-        return { changes: { changes: 1, lastId: 1 } };
-      },
-
-      execute: async () => ({ changes: { changes: 0 } }),
-      open: async () => {},
-      close: async () => {},
-      isOpened: async () => ({ result: true })
-    } as unknown as SQLiteDBConnection;
+      save: () => this.saveFallbackStore()
+    });
   }
 
   private async runMigrations(): Promise<void> {
@@ -311,4 +165,319 @@ export class DatabaseManager {
   async rollbackTransaction(): Promise<void> {
     if (this.db && !this.isFallbackMode) await this.db.rollbackTransaction();
   }
+}
+
+/** Minimal table store contract used by the fallback SQL evaluator. */
+export interface FallbackTableStore {
+  getTable(name: string): any[];
+  setTable(name: string, rows: any[]): void;
+  save(): void;
+}
+
+/**
+ * Minimal in-memory SQL evaluator covering the exact statement shapes the
+ * repositories emit. It is a graceful-degradation path (used only when the
+ * real SQLite engine fails to initialize) and is deliberately kept simple:
+ * unknown statements degrade to no-ops rather than throwing.
+ *
+ * Exported as a factory so the evaluator itself is unit-testable without the
+ * Capacitor/jeep-sqlite environment (see database-shim.test.ts).
+ */
+export function createFallbackConnection(store: FallbackTableStore): SQLiteDBConnection {
+  const TABLE_PATTERNS: Array<[RegExp, string]> = [
+    [/FROM food_logs/, 'food_logs'],
+    [/FROM water_logs/, 'water_logs'],
+    [/FROM goals/, 'goals'],
+    [/FROM daily_records/, 'daily_records'],
+    [/FROM combos/, 'combos'],
+    [/FROM combo_items/, 'combo_items'],
+    [/FROM food_observations/, 'food_observations'],
+    [/FROM food_aliases/, 'food_aliases'],
+    [/FROM food_barcodes/, 'food_barcodes'],
+    [/FROM imports/, 'imports'],
+    [/FROM app_settings/, 'app_settings'],
+    [/FROM foods/, 'foods'],
+    [/JOIN food_barcodes/, 'food_barcodes'],
+    [/JOIN food_aliases/, 'food_aliases'],
+    [/JOIN foods/, 'foods']
+  ];
+
+  const detectTable = (statement: string): string => {
+    for (const [pattern, table] of TABLE_PATTERNS) {
+      if (pattern.test(statement)) return table;
+    }
+    const dmlMatch = statement.match(/\b(?:INTO|UPDATE|DELETE FROM)\s+(\w+)/i);
+    return dmlMatch ? dmlMatch[1] : 'foods';
+  };
+
+  /**
+   * Parse a comma-separated SET / ON CONFLICT clause into a column -> value
+   * map (every part carries an `=`). Literals (numbers, NULL, quoted strings)
+   * are taken from the SQL text; `?` placeholders consume the bound values.
+   */
+  const parseAssignments = (clause: string, values?: any[]): Map<string, any> => {
+    const rowValues = new Map<string, any>();
+    let vi = 0;
+    for (const part of clause.split(',')) {
+      const [colRaw, valRaw] = part.split('=').map(p => p.trim());
+      const col = colRaw.trim();
+      if (valRaw === undefined) {
+        rowValues.set(col, null);
+        continue;
+      }
+      const val = valRaw.trim();
+      if (val === '?') rowValues.set(col, values?.[vi++]);
+      else if (/^NULL$/i.test(val)) rowValues.set(col, null);
+      else if (/^-?\d+(\.\d+)?$/.test(val)) rowValues.set(col, Number(val));
+      else if (/^'.*'$/.test(val)) rowValues.set(col, val.slice(1, -1));
+      else rowValues.set(col, val);
+    }
+    return rowValues;
+  };
+
+  /** Parse a positional VALUES list (matches columns by index). */
+  const parsePositionalValues = (clause: string, values?: any[]): any[] => {
+    const out: any[] = [];
+    let vi = 0;
+    for (const part of clause.split(',')) {
+      const val = part.trim();
+      if (val === '?') out.push(values?.[vi++]);
+      else if (/^NULL$/i.test(val)) out.push(null);
+      else if (/^-?\d+(\.\d+)?$/.test(val)) out.push(Number(val));
+      else if (/^'.*'$/.test(val)) out.push(val.slice(1, -1));
+      else out.push(val);
+    }
+    return out;
+  };
+
+  const columnValue = (row: any, col: string): any => {
+    const bare = col.trim().replace(/^[a-z]+\./i, '');
+    return row[bare];
+  };
+
+  const applyOrderAndLimit = (rows: any[], statement: string, values?: any[]): any[] => {
+    let result = [...rows];
+    const orderMatch = statement.match(/ORDER BY\s+(.+?)(?:\s+LIMIT\s+(\d+|\?))?\s*$/i);
+    if (orderMatch) {
+      const clauses = orderMatch[1].split(',').map(p => {
+        const [col, dir] = p.trim().split(/\s+/);
+        return { col, desc: (dir || 'ASC').toUpperCase() === 'DESC' };
+      });
+      result.sort((a, b) => {
+        for (const { col, desc } of clauses) {
+          const av = columnValue(a, col);
+          const bv = columnValue(b, col);
+          if (av === bv) continue;
+          if (av === null || av === undefined) return 1;
+          if (bv === null || bv === undefined) return -1;
+          const cmp = av < bv ? -1 : 1;
+          return desc ? -cmp : cmp;
+        }
+        return 0;
+      });
+      if (orderMatch[2] !== undefined) {
+        const limit = orderMatch[2] === '?' ? Number(values?.[values.length - 1]) : Number(orderMatch[2]);
+        if (Number.isFinite(limit) && limit > 0) result = result.slice(0, limit);
+      }
+    } else {
+      const limitMatch = statement.match(/\bLIMIT\s+(\d+|\?)\s*$/i);
+      if (limitMatch) {
+        const limit = limitMatch[1] === '?' ? Number(values?.[values.length - 1]) : Number(limitMatch[1]);
+        if (Number.isFinite(limit) && limit > 0) result = result.slice(0, limit);
+      }
+    }
+    return result;
+  };
+
+  return {
+    query: async (statement: string, values?: any[]) => {
+      statement = statement.trim();
+      const table = detectTable(statement);
+
+      // Barcode lookup: JOIN food_barcodes ... WHERE fb.barcode = ?
+      if (statement.includes('JOIN food_barcodes') && statement.includes('WHERE fb.barcode = ?')) {
+        const barcode = values?.[0];
+        const match = store.getTable('food_barcodes').find(b => b.barcode === barcode);
+        const food = match ? store.getTable('foods').find(f => f.id === match.food_id) : null;
+        return { values: food ? [food] : [] };
+      }
+
+      // Alias lookup: JOIN food_aliases ... WHERE fa.normalized_alias = ?
+      if (statement.includes('JOIN food_aliases') && statement.includes('WHERE fa.normalized_alias = ?')) {
+        const alias = values?.[0];
+        const match = store.getTable('food_aliases').find(a => a.normalized_alias === alias);
+        const food = match ? store.getTable('foods').find(f => f.id === match.food_id) : null;
+        return { values: food ? [food] : [] };
+      }
+
+      let rows = [...store.getTable(table)];
+      let vi = 0;
+
+      // WHERE clauses in the order the repositories emit them
+      if (statement.includes('WHERE id = ?')) {
+        const id = values?.[vi++];
+        rows = rows.filter(r => r.id === id);
+      }
+      if (statement.includes('WHERE date = ?') || statement.includes('WHERE fl.date = ?')) {
+        const date = values?.[vi++];
+        rows = rows.filter(r => r.date === date);
+      }
+      if (statement.includes('WHERE date >= ? AND date <= ?')) {
+        const start = values?.[vi++];
+        const end = values?.[vi++];
+        rows = rows.filter(r => r.date >= start && r.date <= end);
+      }
+      if (statement.includes('WHERE barcode = ?')) {
+        const barcode = values?.[vi++];
+        rows = rows.filter(r => r.barcode === barcode);
+      }
+      if (statement.includes('WHERE normalized_name = ?')) {
+        const name = values?.[vi++];
+        rows = rows.filter(r => r.normalized_name === name);
+      }
+      if (statement.includes('WHERE normalized_alias = ?') && !statement.includes('fa.normalized_alias')) {
+        const alias = values?.[vi++];
+        rows = rows.filter(r => r.normalized_alias === alias);
+      }
+      if (statement.includes('WHERE food_id = ?')) {
+        const foodId = values?.[vi++];
+        rows = rows.filter(r => r.food_id === foodId);
+      }
+      if (statement.includes('WHERE combo_id = ?')) {
+        const comboId = values?.[vi++];
+        rows = rows.filter(r => r.combo_id === comboId);
+      }
+      if (statement.includes('WHERE end_date IS NULL')) {
+        rows = rows.filter(r => r.end_date === null || r.end_date === undefined);
+      }
+      if (statement.includes('start_date <= ?') && statement.includes('end_date >= ?')) {
+        const start = values?.[vi++];
+        const end = values?.[vi++];
+        rows = rows.filter(r => r.start_date <= start && (r.end_date === null || r.end_date === undefined || r.end_date >= end));
+      }
+      if (statement.includes('LIKE ?')) {
+        const term = String(values?.[vi++] || '').replace(/%/g, '').toLowerCase();
+        rows = rows.filter(r =>
+          String(r.canonical_name || '').toLowerCase().includes(term) ||
+          String(r.normalized_name || '').toLowerCase().includes(term)
+        );
+      }
+
+      // Aggregates
+      if (statement.includes('SUM(calories)')) {
+        const sumCal = rows.reduce((acc, curr) => acc + (curr.calories || 0), 0);
+        const sumPro = rows.reduce((acc, curr) => acc + (curr.protein_g || 0), 0);
+        const sumCarb = rows.reduce((acc, curr) => acc + (curr.carbs_g || 0), 0);
+        const sumFat = rows.reduce((acc, curr) => acc + (curr.fat_g || 0), 0);
+        const sumWater = rows.reduce((acc, curr) => acc + (curr.water_ml || 0), 0);
+        return { values: [{ calories: sumCal, protein_g: sumPro, carbs_g: sumCarb, fat_g: sumFat, water_ml: sumWater }] };
+      }
+      if (statement.includes('SUM(amount_ml)') && statement.includes('GROUP BY source')) {
+        const totals: Record<string, number> = {};
+        for (const row of rows) {
+          totals[row.source] = (totals[row.source] || 0) + (row.amount_ml || 0);
+        }
+        return { values: Object.entries(totals).map(([source, total]) => ({ source, total })) };
+      }
+      if (statement.includes('COUNT(*)')) {
+        return { values: [{ count: rows.length }] };
+      }
+
+      // JOIN foods enriches food_logs with the display name (history day view)
+      if (statement.includes('JOIN foods') && table === 'food_logs') {
+        const foods = store.getTable('foods');
+        rows = rows.map(r => {
+          const food = foods.find(f => f.id === r.food_id);
+          return food ? { ...r, canonical_name: food.canonical_name, food_name: food.canonical_name } : r;
+        });
+      }
+
+      rows = applyOrderAndLimit(rows, statement, values);
+      return { values: rows };
+    },
+
+    run: async (statement: string, values?: any[]) => {
+      statement = statement.trim();
+      if (/^(BEGIN|COMMIT|ROLLBACK|PRAGMA|CREATE|ALTER|DROP)/i.test(statement)) {
+        return { changes: { changes: 0, lastId: 0 } };
+      }
+
+      const table = detectTable(statement);
+
+      if (statement.startsWith('INSERT')) {
+        const colMatch = statement.match(/INSERT (?:OR REPLACE )?INTO \w+\s*\(([^)]+)\)/i);
+        const valMatch = statement.match(/VALUES\s*\(([^)]+)\)/i);
+        if (!colMatch || !valMatch) return { changes: { changes: 0, lastId: 0 } };
+        const cols = colMatch[1].split(',').map(c => c.trim());
+        const parsedValues = parsePositionalValues(valMatch[1], values);
+        const newRow: any = {};
+        cols.forEach((col, i) => { newRow[col] = parsedValues[i] ?? null; });
+
+        const rows = store.getTable(table);
+        const conflictMatch = statement.match(/ON CONFLICT\((\w+)\) DO UPDATE SET\s+(.+?)(?:\s*\)|\s*;|\s*$)/i);
+        if (conflictMatch) {
+          const key = conflictMatch[1];
+          const existing = rows.find(r => r[key] === newRow[key]);
+          if (existing) {
+            const conflictValues = parseAssignments(conflictMatch[2], []);
+            conflictValues.forEach((v, col) => {
+              existing[col] = typeof v === 'string' && v.startsWith('excluded.') ? newRow[v.slice('excluded.'.length)] : v;
+            });
+            store.setTable(table, rows);
+            store.save();
+            return { changes: { changes: 1, lastId: 0 } };
+          }
+        }
+        rows.push(newRow);
+        store.setTable(table, rows);
+        store.save();
+        return { changes: { changes: 1, lastId: rows.length } };
+      }
+
+      if (statement.startsWith('UPDATE')) {
+        const idMatch = statement.match(/WHERE id = \?/);
+        const dateMatch = statement.match(/WHERE date = \?/);
+        const setMatch = statement.match(/SET\s+(.+?)(?:\s+WHERE)/i);
+        if (!setMatch) return { changes: { changes: 0, lastId: 0 } };
+        const rowValues = parseAssignments(setMatch[1], values);
+        const rows = store.getTable(table);
+        const findRow = idMatch
+          ? (r: any) => r.id === values?.[values.length - 1]
+          : dateMatch
+            ? (r: any) => r.date === values?.[values.length - 1]
+            : () => false;
+        const row = rows.find(findRow);
+        if (row) {
+          rowValues.forEach((v, col) => { row[col] = v; });
+          store.setTable(table, rows);
+          store.save();
+        }
+        return { changes: { changes: row ? 1 : 0, lastId: 0 } };
+      }
+
+      if (statement.startsWith('DELETE')) {
+        const idMatch = statement.match(/WHERE id = \?/);
+        const comboMatch = statement.match(/WHERE combo_id = \?/);
+        const rows = store.getTable(table);
+        let filtered = rows;
+        if (idMatch) {
+          const id = values?.[0];
+          filtered = rows.filter(r => r.id !== id);
+        } else if (comboMatch) {
+          const comboId = values?.[0];
+          filtered = rows.filter(r => r.combo_id !== comboId);
+        }
+        store.setTable(table, filtered);
+        store.save();
+        return { changes: { changes: rows.length - filtered.length, lastId: 0 } };
+      }
+
+      return { changes: { changes: 0, lastId: 0 } };
+    },
+
+    execute: async () => ({ changes: { changes: 0 } }),
+    open: async () => {},
+    close: async () => {},
+    isOpened: async () => ({ result: true })
+  } as unknown as SQLiteDBConnection;
 }

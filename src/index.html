@@ -56,10 +56,21 @@
     <!-- Food Journal Search Modal -->
     <div id="journal-modal" class="modal">
         <div class="modal-content form-body" style="max-width: 420px;">
-            <h3 style="text-align: center; color: var(--accent-glow); margin-bottom: 15px;">Food Library & Journal</h3>
+            <h3 style="text-align: center; color: var(--accent-glow); margin-bottom: 15px;">Food Library</h3>
             <input type="text" id="journal-search" placeholder="Search foods or aliases..." style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
             <div id="journal-results" class="log-list" style="max-height: 300px; overflow-y: auto;"></div>
             <button id="btn-close-journal" class="btn-close" style="margin-top: 15px;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Text Log Modal (Gemma text interpretation -> food logging) -->
+    <div id="text-log-modal" class="modal">
+        <div class="modal-content form-body" style="max-width: 420px;">
+            <h3 style="text-align: center; color: var(--accent-glow); margin-bottom: 15px;">Log by Text</h3>
+            <input type="text" id="text-log-input" placeholder='E.g. "250g chicken breast, 100g rice, 200ml orange juice"' style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
+            <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 15px; text-align: center;">Described foods are matched against your library (or estimated when not found).</div>
+            <button id="btn-log-text" class="btn-primary" style="width: 100%;">Interpret & Log</button>
+            <button id="btn-close-text" class="btn-close" style="margin-top: 10px; width: 100%;">Cancel</button>
         </div>
     </div>
 
@@ -236,6 +247,7 @@
                             <h3 style="margin: 0;">1-Tap Recents</h3>
                             <div style="display: flex; gap: 8px;">
                                 <button id="btn-open-journal" style="background: var(--accent-glow); color: #000; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-family: inherit; font-size: 12px; cursor: pointer;">+ JOURNAL</button>
+                                <button id="btn-open-text" style="background: var(--accent-glow); color: #000; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-family: inherit; font-size: 12px; cursor: pointer;">+ TEXT</button>
                                 <button id="btn-open-manual" style="background: var(--pro); color: #fff; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-family: inherit; font-size: 12px; cursor: pointer;">+ MANUAL</button>
                             </div>
                         </div>

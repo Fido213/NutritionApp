@@ -12,14 +12,14 @@ import { Food } from '@data/types';
 
 import { store } from './ui/state';
 import { renderDashboard } from './ui/views/dashboard';
-import { renderHistory } from './ui/views/history';
+import { renderHistory, HistoryViewMode } from './ui/views/history';
 import { renderGoals, readGoalsForm } from './ui/views/goals';
 import { showToast } from './ui/components/toast';
 import { calculateEffectiveHydration, classifyWaterSource } from '@domain/hydration';
 import { calculateScore } from '@domain/scoring';
 import { calculateNutrition } from '@domain/nutrition';
 import { normalizeFoodName } from '@domain/logging';
-import { getTodayDateString, getDateRange, formatDateISO } from '@utils/dates';
+import { getTodayDateString, formatDateISO } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
 import { parseCSV } from '@services/import/csv-import';
 import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive, collectAllTables } from '@services/backup/backup';
@@ -30,6 +30,7 @@ import { P2PTransferService } from '@services/transfer/transfer';
 import { WebRTCTransport } from '@services/transfer/webrtc-transport';
 import { TransferPeer } from '@services/transfer/transport';
 import { GoalTargets } from '@domain/types';
+import { computeHistoryWindow, datesForRange, datesForMonth, datesForYear, mapGoalToTargets, HistoryDay } from '@services/history/history-window';
 
 let dbManager: DatabaseManager;
 let foodRepo: FoodRepository;
@@ -46,8 +47,10 @@ let foodService: FoodService;
 let p2pService: P2PTransferService;
 let p2pTransport: WebRTCTransport;
 
-let scoresByDate = new Map<string, number>();
-let lastComputedScoreDate = '';
+let historyWindow = new Map<string, HistoryDay>();
+let historyView: HistoryViewMode = 'week';
+let historyAnchor = getTodayDateString();
+let historyWindowKey = '';
 let numpadBuffer = '';
 
 async function initApp() {
@@ -106,6 +109,7 @@ async function initApp() {
     setupDialogModals();
     setupActionHandlers();
     setupJournalHandlers();
+    setupTextLogHandlers();
     setupNumpadHandlers();
     setupScannerHandlers();
     setupActionHubHandlers();
@@ -121,16 +125,6 @@ async function initApp() {
     console.error('App init failed:', err);
     showToast('Offline Mode: Web storage fallback');
   }
-}
-
-function mapGoalToTargets(g: any): GoalTargets {
-  return {
-    caloriesTarget: g.calories_target ?? g.caloriesTarget ?? 2500,
-    proteinTarget: g.protein_target ?? g.proteinTarget ?? 150,
-    carbsTarget: g.carbs_target ?? g.carbsTarget ?? 250,
-    fatTarget: g.fat_target ?? g.fatTarget ?? 80,
-    waterTarget: g.water_target ?? g.waterTarget ?? 4000
-  };
 }
 
 async function refreshStateForDate(dateStr: string) {
@@ -164,35 +158,54 @@ async function refreshStateForDate(dateStr: string) {
     currentScore: score
   });
 
-  await ensureScoresForDate(dateStr);
-  renderHistory(logs, scoresByDate);
+  const historyViewEl = document.getElementById('history');
+  if (historyViewEl?.classList.contains('active-view')) renderHistoryView();
 }
 
 /**
- * Compute the daily consistency score for every date in the range ending at endDate.
- * Scores are derived on demand from logs + goals and are never stored as a second dataset.
+ * History window (spec §20): scores/totals are derived on demand from logs +
+ * goals for the visible range and are never stored as a second dataset. The
+ * window is anchored to `historyAnchor` and only recomputed when the anchor
+ * or the view mode changes — selecting a day never re-anchors it.
  */
-async function computeScoresForRange(endDate: string, days: number = 28): Promise<Map<string, number>> {
-  const scores = new Map<string, number>();
-  const defaults: GoalTargets = { caloriesTarget: 2500, proteinTarget: 150, carbsTarget: 250, fatTarget: 80, waterTarget: 4000 };
-
-  for (const date of getDateRange(endDate, days)) {
-    const goalRecord = await goalRepo.getGoalForDate(date);
-    const targets = goalRecord ? mapGoalToTargets(goalRecord) : defaults;
-    const totals = await logRepo.getDailyTotals(date);
-    const water = await waterRepo.getWaterTotalsBySource(date);
-    const hydration = calculateEffectiveHydration(water.explicit, water.drink, water.food, targets.waterTarget);
-    scores.set(date, calculateScore(totals, targets, hydration).score);
-  }
-
-  return scores;
+async function ensureHistoryWindow() {
+  const key = `${historyView}|${historyAnchor}`;
+  if (historyWindowKey === key) return;
+  const dates = historyView === 'week'
+    ? datesForRange(historyAnchor, 7)
+    : historyView === 'month'
+      ? datesForMonth(historyAnchor)
+      : datesForYear(historyAnchor);
+  historyWindow = await computeHistoryWindow(dates, { goal: goalRepo, log: logRepo, water: waterRepo });
+  historyWindowKey = key;
 }
 
-async function ensureScoresForDate(dateStr: string) {
-  if (lastComputedScoreDate !== dateStr) {
-    scoresByDate = await computeScoresForRange(dateStr, 28);
-    lastComputedScoreDate = dateStr;
-  }
+function renderHistoryView() {
+  const state = store.getState();
+  renderHistory({
+    days: historyWindow,
+    view: historyView,
+    anchor: historyAnchor,
+    selectedDate: state.selectedDate,
+    logsForSelectedDate: state.todayLogs
+  });
+}
+
+function shiftHistoryAnchor(delta: number) {
+  const d = new Date(historyAnchor + 'T00:00:00');
+  if (historyView === 'week') d.setDate(d.getDate() + delta * 7);
+  else if (historyView === 'month') d.setMonth(d.getMonth() + delta);
+  else d.setFullYear(d.getFullYear() + delta);
+  historyAnchor = formatDateISO(d);
+}
+
+function setHistoryView(view: HistoryViewMode) {
+  historyView = view;
+  historyAnchor = getTodayDateString();
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+  const btn = view === 'week' ? 'btn-view-week' : view === 'month' ? 'btn-view-month' : 'btn-view-year';
+  document.getElementById(btn)?.classList.add('active');
+  ensureHistoryWindow().then(() => renderHistoryView());
 }
 
 function setupNavigation() {
@@ -214,9 +227,7 @@ function setupNavigation() {
     } else if (viewId === 'history') {
       historyView?.classList.add('active-view');
       logsBtn?.classList.add('active');
-      ensureScoresForDate(store.getState().selectedDate).then(() => {
-        renderHistory(store.getState().todayLogs, scoresByDate);
-      });
+      ensureHistoryWindow().then(() => renderHistoryView());
     } else if (viewId === 'view-goals') {
       goalsView?.classList.add('active-view');
     }
@@ -225,6 +236,15 @@ function setupNavigation() {
   dashBtn?.addEventListener('click', () => switchTab('today'));
   logsBtn?.addEventListener('click', () => switchTab('history'));
   sysBtn?.addEventListener('click', () => switchTab('view-goals'));
+
+  document.getElementById('btn-view-week')?.addEventListener('click', () => setHistoryView('week'));
+  document.getElementById('btn-view-month')?.addEventListener('click', () => setHistoryView('month'));
+  document.getElementById('btn-view-year')?.addEventListener('click', () => setHistoryView('year'));
+
+  window.addEventListener('history-nav', (e: any) => {
+    shiftHistoryAnchor(e.detail);
+    ensureHistoryWindow().then(() => renderHistoryView());
+  });
 }
 
 function setupModals() {
@@ -365,10 +385,6 @@ function setupActionHandlers() {
 
 // ---------- Text Logging (Gemma interpretation -> FoodService pipeline) ----------
 
-function isTextLogInput(text: string): boolean {
-  return /\d+\s*(g|ml|grams|milliliters)/i.test(text) || /[,+&]| and /i.test(text);
-}
-
 async function logTextInput(rawText: string) {
   const date = store.getState().selectedDate;
   const items = await gemmaClient.interpretTextLog(rawText);
@@ -381,9 +397,9 @@ async function logTextInput(rawText: string) {
   const results = await foodService.logTextInput(date, rawText, items);
   const totalCal = results.reduce((sum, r) => sum + r.nutrition.calories, 0);
 
-  document.getElementById('journal-modal')?.classList.remove('active');
-  const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
-  if (searchInput) searchInput.value = '';
+  document.getElementById('text-log-modal')?.classList.remove('active');
+  const textInput = document.getElementById('text-log-input') as HTMLInputElement | null;
+  if (textInput) textInput.value = '';
 
   await refreshStateForDate(date);
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal`);
@@ -402,7 +418,7 @@ function renderJournalResults(foods: Food[]) {
     empty.style.fontSize = '13px';
     empty.style.padding = '10px';
     empty.style.textAlign = 'center';
-    empty.innerText = 'No foods found. Press Enter to log text like "250g chicken, 100g rice".';
+    empty.innerText = 'No foods found in your library. Use the +TEXT button to log meals by description.';
     container.appendChild(empty);
     return;
   }
@@ -478,13 +494,8 @@ function setupJournalHandlers() {
     if (e.key !== 'Enter') return;
     const text = searchInput.value.trim();
     if (!text) return;
-
-    if (isTextLogInput(text)) {
-      await logTextInput(text);
-    } else {
-      const results = await foodRepo.fuzzySearch(text, 20);
-      renderJournalResults(results);
-    }
+    const results = await foodRepo.fuzzySearch(text, 20);
+    renderJournalResults(results);
   });
 
   document.getElementById('journal-results')?.addEventListener('click', (e) => {
@@ -494,6 +505,41 @@ function setupJournalHandlers() {
     const input = document.getElementById('journal-search') as HTMLInputElement | null;
     if (input) input.value = '';
     quickLogFood(target.dataset.foodId);
+  });
+}
+
+// ---------- Text Log Modal (dedicated, separate from journal/library) ----------
+
+function setupTextLogHandlers() {
+  const modal = document.getElementById('text-log-modal');
+  const input = document.getElementById('text-log-input') as HTMLInputElement | null;
+
+  document.getElementById('btn-open-text')?.addEventListener('click', () => {
+    if (input) input.value = '';
+    modal?.classList.add('active');
+    setTimeout(() => input?.focus(), 30);
+  });
+
+  modal?.querySelector('.close')?.addEventListener('click', () => modal.classList.remove('active'));
+  document.getElementById('btn-close-text')?.addEventListener('click', () => modal?.classList.remove('active'));
+  modal?.addEventListener('click', (e) => {
+    if (e.target === modal) modal.classList.remove('active');
+  });
+
+  input?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      (document.getElementById('btn-log-text') as HTMLButtonElement | null)?.click();
+    }
+  });
+
+  document.getElementById('btn-log-text')?.addEventListener('click', async () => {
+    const rawText = input?.value.trim();
+    if (!rawText) {
+      showToast('Type a meal description, e.g. "250g chicken breast, 100g rice"');
+      return;
+    }
+    await logTextInput(rawText);
   });
 }
 
@@ -1032,7 +1078,7 @@ function setupRestoreHandler() {
         }
       }
 
-      lastComputedScoreDate = '';
+      historyWindowKey = '';
       const date = store.getState().selectedDate;
       await refreshStateForDate(date);
       const rowCount = Object.values(archive.data).reduce((n, rows) => n + (Array.isArray(rows) ? rows.length : 0), 0);
@@ -1191,7 +1237,7 @@ async function onP2PConnect() {
         }
       }
 
-      lastComputedScoreDate = '';
+      historyWindowKey = '';
       const date = store.getState().selectedDate;
       await refreshStateForDate(date);
       const rowCount = Object.values(archive.data).reduce((n, rows) => n + (Array.isArray(rows) ? rows.length : 0), 0);

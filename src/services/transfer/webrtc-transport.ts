@@ -22,6 +22,18 @@ import { encodePairingCode, parsePairingCode } from './protocol';
 const CHANNEL_NAME = 'everydayfuel-p2p';
 const OPEN_TIMEOUT_MS = 60_000;
 
+/**
+ * Public STUN servers let the peer resolve its public IP/mapping and the
+ * mDNS (.local) candidates used by host candidates on some networks, which
+ * fixes "ICE failed" pairing failures between devices on shared Wi-Fi.
+ * No TURN is configured — payloads are never relayed through third parties;
+ * host candidates still connect directly on a plain LAN/hotspot.
+ */
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' }
+];
+
 function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs: number): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -157,9 +169,14 @@ class WebRTCPeer implements TransferPeer {
 export class WebRTCTransport implements TransferTransport {
   private pc: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
+  private readonly iceServers: RTCIceServer[];
+
+  constructor(iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS) {
+    this.iceServers = iceServers;
+  }
 
   async createPairingCode(): Promise<string> {
-    const pc = new RTCPeerConnection();
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     const channel = pc.createDataChannel(CHANNEL_NAME);
     this.pc = pc;
     this.channel = channel;
@@ -190,7 +207,7 @@ export class WebRTCTransport implements TransferTransport {
     const code = parsePairingCode(pairingCode);
     if (!code) throw new Error('Invalid pairing code');
 
-    const pc = new RTCPeerConnection();
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     this.pc = pc;
 
     await pc.setRemoteDescription({ type: 'offer', sdp: code.sdp });

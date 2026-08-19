@@ -204,8 +204,17 @@ main { flex: 1; overflow-y: auto; position: relative; padding: 16px; padding-bot
 
 /* Heatmap & Score */
 .score-badge { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 8px; background: var(--surface-light); border: 1px solid var(--border); color: var(--accent-glow); }
+.history-nav { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+.history-nav button { background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 4px 12px; border-radius: 8px; font-weight: 800; cursor: pointer; font-size: 14px; }
+.history-nav-title { font-size: 14px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
 .heatmap { margin-top: 12px; }
 .heatmap-week, .heatmap-month { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.heatmap-year { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 14px; }
+.month-block { background: var(--surface-light); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+.month-title { font-size: 10px; font-weight: 800; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; text-align: center; }
+.month-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.day-dot { aspect-ratio: 1; border-radius: 3px; background: var(--score-empty); cursor: pointer; transition: transform 0.1s ease, border-color 0.2s ease; }
+.day-dot.selected { border: 1px solid #fff; box-shadow: 0 0 6px rgba(255, 255, 255, 0.25); transform: scale(1.15); }
 .cal-block {
     position: relative;
     aspect-ratio: 1;
