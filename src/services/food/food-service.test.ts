@@ -183,11 +183,93 @@ describe('FoodService pipeline (smoke)', () => {
     expect(tables.foods).toHaveLength(2);
     expect(tables.water_logs).toHaveLength(1);
     expect(tables.water_logs[0].source).toBe('drink');
-    expect(tables.water_logs[0].food_log_id).toBe(results[0].log.id);
+expect(tables.water_logs[0].food_log_id).toBe(results[0].log.id);
   });
 
   it('throws for an item without a name', async () => {
     await expect(service.resolveFood({ canonicalName: '  ', amountG: 100, amountMl: null, confidence: 0.5, isComposite: false }))
       .rejects.toThrow('missing a name');
+  });
+});
+
+describe('FoodService label OCR pipeline', () => {
+  let service: FoodService;
+  let tables: any;
+
+  beforeAll(() => {
+    const { db, tables: t } = createFakeDb();
+    tables = t;
+    const foodRepo = new FoodRepository(db as any);
+    const logRepo = new LogRepository(db as any);
+    const obsRepo = new ObservationRepository(db as any);
+    const waterRepo = new WaterRepository(db as any);
+    service = new FoodService(foodRepo, logRepo, obsRepo, waterRepo);
+  });
+
+  const LABEL: any = {
+    rawText: 'Energy 165 kcal, Protein 31g, Carbs 0g, Fat 3.6g per 100g',
+    foodName: 'Chicken Breast Slices',
+    caloriesPer100g: 165,
+    proteinPer100g: 31,
+    carbsPer100g: 0,
+    fatPer100g: 3.6,
+    waterPer100g: 0,
+    confidence: 0.9
+  };
+
+  it('creates a nutrition_label food + observation + log with scaled macros', async () => {
+    const result = await service.logLabelOcr('2026-08-19', LABEL, 250);
+
+    expect(result.nutrition.calories).toBe(412.5); // 165 kcal/100g x 2.5
+    expect(result.nutrition.proteinG).toBe(77.5);
+
+    expect(tables.foods).toHaveLength(1);
+    expect(tables.foods[0].source_type).toBe('nutrition_label');
+    expect(tables.foods[0].calories_per_100g).toBe(165);
+    expect(tables.foods[0].confidence).toBe(0.9);
+
+    expect(tables.food_observations).toHaveLength(1);
+    expect(tables.food_observations[0].source_type).toBe('label_ocr');
+    expect(tables.food_observations[0].raw_input).toBe(LABEL.rawText);
+    expect(tables.food_observations[0].amount_unit).toBe('g');
+
+    expect(tables.food_logs).toHaveLength(1);
+    expect(tables.food_logs[0].amount_g).toBe(250);
+    expect(tables.food_logs[0].observation_id).toBe(tables.food_observations[0].id);
+
+    expect(tables.water_logs).toHaveLength(0); // label has no water content
+  });
+
+  it('logs food-derived water separately and reuses the library entry on re-scan', async () => {
+    const yogurtLabel = {
+      rawText: 'Per 100g: Energy 59 kcal, Protein 10g, Fat 0.4g',
+      foodName: 'Greek Yogurt',
+      caloriesPer100g: 59,
+      proteinPer100g: 10,
+      carbsPer100g: 3.6,
+      fatPer100g: 0.4,
+      waterPer100g: 65,
+      confidence: 0.85
+    };
+
+    const first = await service.logLabelOcr('2026-08-19', yogurtLabel, 200);
+    expect(first.nutrition.waterMl).toBe(130);
+    expect(tables.foods).toHaveLength(2);
+    expect(tables.water_logs).toHaveLength(1);
+    expect(tables.water_logs[0].source).toBe('food');
+    expect(tables.water_logs[0].food_log_id).toBe(first.log.id);
+
+    const second = await service.logLabelOcr('2026-08-19', yogurtLabel, 150);
+    expect(tables.foods).toHaveLength(2); // reused, no duplicate food
+    expect(tables.food_logs).toHaveLength(3); // 1 from the previous test + 2 yogurt logs
+    expect(tables.food_observations).toHaveLength(3);
+    expect(second.nutrition.calories).toBe(88.5); // 59 kcal/100g x 1.5
+  });
+
+  it('rejects a label without a food name and a non-positive amount', async () => {
+    await expect(service.logLabelOcr('2026-08-19', { ...LABEL, foodName: '  ' }, 100))
+      .rejects.toThrow('missing a food name');
+    await expect(service.logLabelOcr('2026-08-19', LABEL, 0))
+      .rejects.toThrow('positive');
   });
 });

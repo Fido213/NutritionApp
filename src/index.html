@@ -40,6 +40,15 @@
             <button id="btn-decode-barcode" class="btn-primary" style="margin-top: 10px; width: 100%; background: #3b82f6;">Lookup Barcode</button>
             <button id="btn-decode-label" class="btn-primary" style="margin-top: 10px; width: 100%; background: var(--pro);">Scan Nutrition Label</button>
             <input type="file" id="ai-file-input" accept="image/*" capture="environment" style="display: none;">
+            <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Label OCR fallback — paste the label text:</div>
+                <textarea id="label-ocr-text" rows="4" placeholder="e.g. Nutrition Facts: Energy 165 kcal, Protein 31g, Carbs 0g, Fat 3.6g per 100g" style="width: 100%; margin-bottom: 8px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; font-family: inherit; resize: vertical; box-sizing: border-box;"></textarea>
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                    <label for="label-amount" style="font-size: 13px; color: var(--text-dim); white-space: nowrap;">Amount (g)</label>
+                    <input type="number" id="label-amount" value="100" min="1" style="width: 90px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px; outline: none;">
+                </div>
+                <button id="btn-parse-label-text" class="btn-primary" style="width: 100%; background: var(--pro);">Parse Label Text & Log</button>
+            </div>
             <button id="btn-close-scanner" class="btn-close" style="margin-top: 10px;">Cancel</button>
         </div>
     </div>
@@ -91,6 +100,28 @@
             
             <button id="btn-save-edit" class="btn-primary" style="margin-top: 20px; width: 100%;">Save Changes</button>
             <button id="btn-close-edit" class="btn-close" style="width: 100%; margin-top: 10px;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Password Modal (Backup / Restore) -->
+    <div id="password-modal" class="modal">
+        <div class="modal-content" style="max-width: 320px; text-align: center;">
+            <h3 id="pw-title" style="margin-bottom: 15px; color: var(--accent-glow);">Set Backup Password</h3>
+            <input type="password" id="pw-input" placeholder="Password" style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; box-sizing: border-box;">
+            <input type="password" id="pw-confirm" placeholder="Confirm password" style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; box-sizing: border-box;">
+            <div id="pw-error" style="font-size: 12px; color: #ef4444; min-height: 16px; margin-bottom: 6px;"></div>
+            <button id="btn-pw-ok" class="btn-primary" style="width: 100%; margin-bottom: 10px;">Confirm</button>
+            <button id="btn-pw-cancel" class="btn-close" style="width: 100%;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Confirm Modal (Destructive Actions) -->
+    <div id="confirm-modal" class="modal">
+        <div class="modal-content" style="max-width: 320px; text-align: center;">
+            <h3 id="confirm-title" style="margin-bottom: 12px; color: var(--accent-glow);">Confirm</h3>
+            <p id="confirm-message" style="font-size: 14px; color: var(--text-dim); margin-bottom: 20px;"></p>
+            <button id="btn-confirm-ok" class="btn-primary" style="width: 100%; margin-bottom: 10px; background: #ef4444; color: #fff;">Yes, Continue</button>
+            <button id="btn-confirm-cancel" class="btn-close" style="width: 100%;">Cancel</button>
         </div>
     </div>
 

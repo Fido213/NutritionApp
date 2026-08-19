@@ -1,7 +1,7 @@
 # EverydayFuel — Handover to Next Chat
 
 **Date:** 2026-08-19
-**From:** Laguna (DeepSeek V4 Flash), pass 6
+**From:** Laguna (DeepSeek V4 Flash), pass 7
 **Status:** Build + tests green; working tree NOT committed (see §6)
 
 ---
@@ -41,26 +41,31 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - `src/domain/scoring-regression.test.ts` (new, 3 tests) — replays **95 of the 96 rows of the supplied legacy export `exportexample.csv`** (the regression reference from spec §21/§29) through the new `calculateScore` and asserts byte-for-byte equality of `score`, `scoreCode`, `scoreTier`, `result` and `reason` against the old app's actual output. The single non-replayable row (`2026-05-03`) is asserted and documented: the legacy CSV records only "Pure Water (ml)" but the old app scored hydration against pure + drink/food water, so rows where the reason says "hydration goal met" while pure water is < 80% of target cannot be reconstructed from the CSV alone.
   - `src/domain/domain.test.ts` — updated `scoreTier` expectation ('perfect' → 'score-pos-5') and extended two `calculateScore` tests with legacy `result`/`reason` assertions.
   - `src/data/repositories/sqlite-real.test.ts` — fixed a **pre-existing flaky test**: the import-history test inserted two rows in the same millisecond, making `ORDER BY imported_at DESC` ambiguous in real SQLite (occasionally failed with 'csv' before 'supabase'). Now uses `vi.useFakeTimers()` with distinct system times so the ordering assertion is deterministic.
+- **Pass 7 additions:** Phase 7 JS-side groundwork + WebView-safe dialogs (no Java/Android SDK in this environment, so native Kotlin/ML Kit work was NOT attempted):
+  - `src/services/food/food-service.ts` — new `FoodService.logLabelOcr(date, ocr, amountG=100)`: full label-OCR input path through the established pipeline. Resolves the product (normalized → stripped → alias → new `nutrition_label` library entry with per-100g values + OCR confidence), records a `food_observations` row (`source_type: 'label_ocr'`, raw text + interpretation JSON for provenance), calculates nutrition deterministically, inserts the food log, and stores food-derived water separately (`classifyWaterSource`). Validation: throws on missing food name or non-positive amount.
+  - `src/index.html` — scanner modal gains the label-text fallback UI (textarea `label-ocr-text`, amount `label-amount` default 100g, `btn-parse-label-text`); new `#password-modal` (title, password + confirm fields, inline error, Enter-key support) and `#confirm-modal` (message + destructive OK/Cancel).
+  - `src/main.ts` — wired `btn-parse-label-text` → `gemmaClient.parseNutritionLabel` (the regression-locked deterministic parser) → `foodService.logLabelOcr` → refresh + toast; the `ai-file-input` change handler now resets the input and toasts the paste-text fallback; **all four `window.prompt`/`window.confirm` call sites (backup ×2, restore ×2) replaced** with promise-based `requestPassword(title, requireConfirm)` / `requestConfirmation(title, message)` in-app modals — the pass-5 flagged follow-up for Android WebView. Backup: 'Set Backup Password' (confirm required, empty/mismatch validated in-modal); restore: 'Enter Backup Password' for encrypted archives + confirm modal before replacing data. Cancel aborts exactly like the old null path; plain JSON archives still restore without a password.
+  - `src/services/food/food-service.test.ts` — +3 tests (new `FoodService label OCR pipeline` block): unknown product → `nutrition_label` food + `label_ocr` observation + log with scaled macros (165 kcal/100g × 250g = 412.5); food-derived water logged separately with `food_log_id` link and library reuse on re-scan; validation errors. Suite now 143 tests.
 
 ## 3. Verification status
 
 | Check | Result |
 |---|---|
 | `npm run build` (tsc strict + Vite) | ✅ passes |
-| `npm test` (vitest 4.1.11, 140 tests, 11 files) | ✅ passes (run 3× to confirm no flakes) |
+| `npm test` (vitest 4.1.11, 143 tests, 11 files) | ✅ passes (run 3× to confirm no flakes) |
 | Scoring regression vs legacy export (scoring-regression.test.ts, spec §29) | ✅ passes — 95/96 rows of `exportexample.csv` reproduce `score`/`scoreCode`/`scoreTier`/`result`/`reason` byte-for-byte; the 1 non-replayable row (2026-05-03) is asserted + documented |
 | Real-SQLite migration + repository + backup/restore round-trips (sql.js in-memory engine, migration.test.ts + sqlite-real.test.ts) | ✅ passes — all repository SQL (JOINs, GROUP BY, LIKE, SUM, bound LIMIT, ON CONFLICT) now proven against a real SQL engine, including FK-safe restore ordering with `PRAGMA foreign_keys = ON` |
 | Encrypted backup (encryption.test.ts, 17 tests: PBKDF2→AES-GCM round-trip, tamper detection, wrong-password, envelope structure) | ✅ passes |
-| FoodService pipeline (service test w/ in-memory connection) | ✅ passes |
+| FoodService pipeline (service test w/ in-memory connection) | ✅ passes — now also covers the label-OCR path (`logLabelOcr`: food/observation/log/water creation, library reuse, validation) |
 | Backup/restore round trip + restore atomicity/rollback (backup.test.ts + sqlite-real.test.ts) | ✅ passes |
 | Gemma fallback text + label-OCR parsers (15 tests) | ✅ passes |
-| Manual click-through on device/browser | ❌ NOT run (no browser/device in environment) — the password prompt flow (window.prompt) and file download were not manually exercised |
+| Manual click-through on device/browser | ❌ NOT run (no browser/device in environment) — the new password/confirm modals and the label-text parse flow were not manually exercised |
 
 ## 4. Known limitations (unchanged, documented in pass-3 log)
 
 - Fallback connection is a degraded shim: UPDATE statements not applied (edit/rename won't persist in fallback mode), water GROUP BY and `combo_items` not simulated. Restore in fallback mode bypasses SQL and replaces the store wholesale (correct, but the other degraded behaviors still apply). Note: the real-SQLite suite proves all these queries work correctly on the real engine — the shim is the only degraded path.
-- Backup archives are **now encrypted by default** (PBKDF2 + AES-256-GCM, pass 5). One caveat: the password is prompted via `window.prompt` — this works in desktop browsers, but Android WebView support for `window.prompt` is unreliable, so the password prompt may need a custom modal when testing on-device (same pattern already used by the restore `window.confirm`).
-- Native ML Kit label OCR, camera barcode scanning, food-image analysis = **Phase 7, not done**
+- Backup archives are **now encrypted by default** (PBKDF2 + AES-256-GCM, pass 5). Password entry and the restore confirmation use **in-app modals** since pass 7 (the `window.prompt`/`window.confirm` WebView caveat is resolved).
+- Native ML Kit label OCR, camera barcode scanning, food-image analysis = **Phase 7, not done** (the JS-side label-text fallback path IS wired and tested since pass 7; the image-file button shows a toast pointing to it). **The next pass needs a machine with Java + Android SDK** to do the native work: label OCR (feed `GemmaClient.parseNutritionLabel` or the native parser), camera barcode decoding into `BarcodeRepository.lookupBarcode`, food-image analysis → observations.
 - On-device Gemma inference requires the native plugin + model file on the device
 - `btn-save-goals` still creates a new goal per save (pre-existing)
 - Label-OCR fallback parser preserves the old-app regex (old_app/api/index.py): for kJ-first EU energy lines it captures the kJ value as `caloriesPer100g` — locked in by a regression test (gemma-client.test.ts), documented, not "fixed" because that would change preserved old-app behavior; revisit when wiring Phase 7.
@@ -70,19 +75,20 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 
 ## 5. What's next (from PLAN.md §9 handoff)
 
-1. **Full native ML Kit integration** — label OCR (scanner modal `ai-file-input` already triggers a "Phase 7" toast), real camera barcode decoding into `BarcodeRepository.lookupBarcode`, food-image analysis → observations. The label-OCR fallback parser is now regression-locked (including its kJ quirk — fix it here if desired).
+1. **Full native ML Kit integration** — label OCR (image path now toasts + suggests the wired text fallback), real camera barcode decoding into `BarcodeRepository.lookupBarcode`, food-image analysis → observations. **Requires a Java + Android SDK environment** (none here — native changes were deliberately not attempted in pass 7 because they could not be verified). The label-OCR fallback parser is regression-locked (including its kJ quirk — fix it here if desired).
 2. **P2P transfer** (Phase 9) — encrypted device-to-device via existing import/export/restore logic
 3. **Laptop/desktop view** (Phase 10)
 4. **Offline validation pass** (Phase 11) — verify all core flows with network off
-5. ~~More regression tests~~ — closed: real-SQLite migration + repository tests (pass 4), OCR parsing edge cases (pass 4), combo expansion round-trip (pass 4), **scoring vs the old app's representative outputs (pass 6, spec §29 — 95/96 rows of exportexample.csv byte-identical)**. Remaining possible coverage: repository tests on the degraded fallback shim, CSV export date-range/water-source rows.
+5. ~~More regression tests~~ — closed: real-SQLite migration + repository tests (pass 4), OCR parsing edge cases (pass 4), combo expansion round-trip (pass 4), scoring vs the old app's representative outputs (pass 6, spec §29 — 95/96 rows of exportexample.csv byte-identical), label-OCR service pipeline (pass 7). Remaining possible coverage: repository tests on the degraded fallback shim, CSV export date-range/water-source rows.
 6. ~~Restore-from-backup UI~~ — done in pass 3 (Settings → Restore from Backup Archive)
-7. ~~Encrypted backup format~~ — done in pass 5 (spec §23; see §2/§4). Note for Phase 7/device work: replace `window.prompt` password entry with a proper in-app modal for Android WebView.
+7. ~~Encrypted backup format~~ — done in pass 5 (spec §23; see §2/§4). ~~Replace `window.prompt` password entry with a proper in-app modal~~ — done in pass 7 (password + confirm modals wired).
 
 ## 6. Before you start
 
-- **The working tree is NOT committed.** Pass-6 changes: `src/domain/scoring.ts` (legacy result/scoreTier/reason text, `getScoreTier` removed), `src/domain/scoring-regression.test.ts` (new), `src/domain/domain.test.ts` (updated expectations + legacy-text assertions), `src/data/repositories/sqlite-real.test.ts` (flake fix), `src/domain/types.ts` (comment only). Commit this pass first.
-- `vitest` is a devDependency; the "test" script runs `vitest run` (137 tests, 10 files).
+- **The working tree is NOT committed.** Pass-7 changes: `src/services/food/food-service.ts` (+`logLabelOcr`, `LoggedLabelEntry`), `src/services/food/food-service.test.ts` (+3 label-OCR tests), `src/index.html` (scanner label-text section + password/confirm modals), `src/main.ts` (label-OCR wiring + `requestPassword`/`requestConfirmation` dialog helpers, `window.prompt`/`confirm` removed). Commit this pass first.
+- `vitest` is a devDependency; the "test" script runs `vitest run` (143 tests, 11 files).
 - The sql.js real-SQLite tests need no configuration: `initSqlJs()` loads `node_modules/sql.js/dist/sql-wasm.wasm` automatically in Node. Do not delete `src/types/sql-js.d.ts` — it is the type declaration for the untyped `sql.js` package (tsc strict would fail without it).
-- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes).
+- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-7 log: `[Laguna][pass 7][2026-08-19].md`.
+- **No Java/Android SDK on the development machine** — native Android builds (`gradlew assembleDebug`) cannot run here; the Android project is untouched and unverified since pass 1. The next native pass must run on a machine with the Android toolchain.
 - Read `Ai Guidelines/NutritionOS — Agent Governance & Development Rules.md` (em-dash in filename) before editing; PLAN.md §7 lists what must NOT change (scoring, hydration gating, goal resolution, v001 schema, domain types, CSV export format).
 - Commands: `npm run dev` (web), `npm run build`, `npm test`, `npm run cap:sync` / `cap:run` (Android).

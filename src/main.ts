@@ -95,6 +95,7 @@ async function initApp() {
     // 5. Setup UI Event Listeners & Navigation
     setupNavigation();
     setupModals();
+    setupDialogModals();
     setupActionHandlers();
     setupJournalHandlers();
     setupNumpadHandlers();
@@ -526,6 +527,101 @@ function setupNumpadHandlers() {
   });
 }
 
+// ---------- In-App Dialogs (WebView-safe replacement for window.prompt/confirm) ----------
+
+let passwordPromptResolver: ((value: string | null) => void) | null = null;
+let confirmPromptResolver: ((value: boolean) => void) | null = null;
+let pwRequireConfirm = false;
+
+function setupDialogModals() {
+  document.getElementById('btn-pw-ok')?.addEventListener('click', () => {
+    const pwEl = document.getElementById('pw-input') as HTMLInputElement | null;
+    const confirmEl = document.getElementById('pw-confirm') as HTMLInputElement | null;
+    const errorEl = document.getElementById('pw-error');
+    const pw = pwEl?.value || '';
+
+    if (!pw) {
+      if (errorEl) errorEl.innerText = 'Password must not be empty';
+      return;
+    }
+    if (pwRequireConfirm && confirmEl && confirmEl.value !== pw) {
+      if (errorEl) errorEl.innerText = 'Passwords do not match';
+      return;
+    }
+
+    document.getElementById('password-modal')?.classList.remove('active');
+    const resolve = passwordPromptResolver;
+    passwordPromptResolver = null;
+    resolve?.(pw);
+  });
+
+  document.getElementById('btn-pw-cancel')?.addEventListener('click', () => {
+    document.getElementById('password-modal')?.classList.remove('active');
+    const resolve = passwordPromptResolver;
+    passwordPromptResolver = null;
+    resolve?.(null);
+  });
+
+  document.getElementById('pw-input')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (pwRequireConfirm) {
+      (document.getElementById('pw-confirm') as HTMLInputElement | null)?.focus();
+    } else {
+      (document.getElementById('btn-pw-ok') as HTMLButtonElement | null)?.click();
+    }
+  });
+
+  document.getElementById('pw-confirm')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') (document.getElementById('btn-pw-ok') as HTMLButtonElement | null)?.click();
+  });
+
+  document.getElementById('btn-confirm-ok')?.addEventListener('click', () => {
+    document.getElementById('confirm-modal')?.classList.remove('active');
+    const resolve = confirmPromptResolver;
+    confirmPromptResolver = null;
+    resolve?.(true);
+  });
+
+  document.getElementById('btn-confirm-cancel')?.addEventListener('click', () => {
+    document.getElementById('confirm-modal')?.classList.remove('active');
+    const resolve = confirmPromptResolver;
+    confirmPromptResolver = null;
+    resolve?.(false);
+  });
+}
+
+function requestPassword(title: string, requireConfirm: boolean): Promise<string | null> {
+  pwRequireConfirm = requireConfirm;
+
+  const titleEl = document.getElementById('pw-title');
+  const pwEl = document.getElementById('pw-input') as HTMLInputElement | null;
+  const confirmEl = document.getElementById('pw-confirm') as HTMLInputElement | null;
+  const errorEl = document.getElementById('pw-error');
+
+  if (titleEl) titleEl.innerText = title;
+  if (pwEl) pwEl.value = '';
+  if (confirmEl) {
+    confirmEl.value = '';
+    confirmEl.hidden = !requireConfirm;
+  }
+  if (errorEl) errorEl.innerText = '';
+
+  document.getElementById('password-modal')?.classList.add('active');
+  pwEl?.focus();
+
+  return new Promise(resolve => { passwordPromptResolver = resolve; });
+}
+
+function requestConfirmation(title: string, message: string): Promise<boolean> {
+  const titleEl = document.getElementById('confirm-title');
+  const msgEl = document.getElementById('confirm-message');
+  if (titleEl) titleEl.innerText = title;
+  if (msgEl) msgEl.innerText = message;
+
+  document.getElementById('confirm-modal')?.classList.add('active');
+  return new Promise(resolve => { confirmPromptResolver = resolve; });
+}
+
 // ---------- Scanner / Barcode ----------
 
 function setupScannerHandlers() {
@@ -585,8 +681,35 @@ function setupScannerHandlers() {
     document.getElementById('ai-file-input')?.click();
   });
 
-  document.getElementById('ai-file-input')?.addEventListener('change', () => {
-    showToast('Label OCR requires the native ML Kit integration (next phase)');
+  document.getElementById('ai-file-input')?.addEventListener('change', (e) => {
+    (e.target as HTMLInputElement).value = '';
+    showToast('Image label OCR needs the native ML Kit integration — paste the label text below instead');
+  });
+
+  document.getElementById('btn-parse-label-text')?.addEventListener('click', async () => {
+    const textEl = document.getElementById('label-ocr-text') as HTMLTextAreaElement | null;
+    const amountEl = document.getElementById('label-amount') as HTMLInputElement | null;
+    const text = (textEl?.value || '').trim();
+    const amount = parseFloat(amountEl?.value || '') || 100;
+
+    if (!text) {
+      showToast('Paste nutrition label text first');
+      return;
+    }
+
+    const ocr = await gemmaClient.parseNutritionLabel(text);
+    const date = store.getState().selectedDate;
+
+    try {
+      const result = await foodService.logLabelOcr(date, ocr, amount);
+      if (textEl) textEl.value = '';
+      document.getElementById('scanner-modal')?.classList.remove('active');
+      await refreshStateForDate(date);
+      showToast(`Logged "${ocr.foodName}" · ${Math.round(result.nutrition.calories)} kcal`);
+    } catch (err) {
+      console.error('Label OCR logging failed:', err);
+      showToast('Could not parse that label text');
+    }
   });
 }
 
@@ -828,18 +951,9 @@ function setupBackupHandler() {
 
     const archive = createBackupArchive(data);
 
-    const password = window.prompt('Set a password for the encrypted backup archive:');
+    const password = await requestPassword('Set Backup Password', true);
     if (password === null) {
       showToast('Backup cancelled');
-      return;
-    }
-    if (!password) {
-      showToast('Password must not be empty');
-      return;
-    }
-    const confirmed = window.prompt('Confirm the backup password:');
-    if (confirmed !== password) {
-      showToast('Passwords do not match');
       return;
     }
 
@@ -870,7 +984,7 @@ function setupRestoreHandler() {
 
     let backupText = text;
     if (isEncryptedBackup(text)) {
-      const password = window.prompt('Enter the backup password:');
+      const password = await requestPassword('Enter Backup Password', false);
       if (password === null) {
         input.value = '';
         return;
@@ -898,7 +1012,11 @@ function setupRestoreHandler() {
       return;
     }
 
-    if (!window.confirm('Restore this backup? All current local data will be replaced.')) {
+    const confirmed = await requestConfirmation(
+      'Restore Backup',
+      'Restore this backup? All current local data will be replaced.'
+    );
+    if (!confirmed) {
       input.value = '';
       return;
     }

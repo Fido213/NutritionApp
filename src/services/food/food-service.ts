@@ -3,12 +3,12 @@ import { LogRepository } from '@data/repositories/log.repo';
 import { ObservationRepository } from '@data/repositories/observation.repo';
 import { WaterRepository } from '@data/repositories/water.repo';
 import { InsertFood } from '@data/types';
-import { FoodObservation, FoodLog } from '@data/types';
+import { Food, FoodObservation, FoodLog } from '@data/types';
 import { FoodReference, NutritionResult } from '@domain/types';
 import { calculateNutrition } from '@domain/nutrition';
 import { normalizeFoodName } from '@domain/logging';
 import { classifyWaterSource } from '@domain/hydration';
-import { InterpretedFoodItem } from '@services/ai/prompts';
+import { InterpretedFoodItem, InterpretedLabelOCR } from '@services/ai/prompts';
 
 /**
  * Deterministic per-100g estimate used when an unknown food is resolved
@@ -30,6 +30,13 @@ export interface ResolvedFoodEntry {
 
 export interface LoggedTextEntry {
   item: InterpretedFoodItem;
+  food: FoodReference;
+  observation: FoodObservation;
+  log: FoodLog;
+  nutrition: NutritionResult;
+}
+
+export interface LoggedLabelEntry {
   food: FoodReference;
   observation: FoodObservation;
   log: FoodLog;
@@ -135,5 +142,81 @@ export class FoodService {
       results.push(await this.logTextEntry(date, rawInput, item));
     }
     return results;
+  }
+
+  /**
+   * Log a scanned/pasted nutrition label for a date:
+   * resolve the food (library lookup or new nutrition_label entry), record the observation,
+   * calculate nutrition deterministically from the per-100g label values, insert the food log,
+   * and store any food-derived water separately.
+   */
+  async logLabelOcr(date: string, ocr: InterpretedLabelOCR, amountG: number = 100): Promise<LoggedLabelEntry> {
+    const name = ocr.foodName?.trim();
+    if (!name) throw new Error('Label OCR result is missing a food name');
+    if (!(amountG > 0)) throw new Error('Label log amount must be positive');
+
+    const normalized = normalizeFoodName(name);
+    const stripped = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const found = await this.foodRepo.findByNormalizedName(normalized)
+      ?? await this.foodRepo.findByNormalizedName(stripped)
+      ?? await this.foodRepo.findByAlias(normalized);
+
+    let food: Food;
+    if (found) {
+      food = found;
+    } else {
+      food = await this.foodRepo.insert({
+        canonical_name: name,
+        normalized_name: normalized,
+        calories_per_100g: ocr.caloriesPer100g ?? null,
+        protein_per_100g: ocr.proteinPer100g ?? null,
+        carbs_per_100g: ocr.carbsPer100g ?? null,
+        fat_per_100g: ocr.fatPer100g ?? null,
+        water_per_100g: ocr.waterPer100g ?? null,
+        nutrition_basis: 'per_100g',
+        source_type: 'nutrition_label',
+        confidence: ocr.confidence ?? 0.85
+      });
+    }
+
+    const ref = this.foodRepo.toFoodReference(food);
+
+    const observation = await this.observationRepo.insert({
+      food_id: food.id,
+      source_type: 'label_ocr',
+      estimated_amount: amountG,
+      final_amount: amountG,
+      amount_unit: 'g',
+      confidence: ocr.confidence ?? null,
+      raw_input: ocr.rawText,
+      interpretation_json: JSON.stringify(ocr),
+      user_corrected: 0
+    });
+
+    const nutrition = calculateNutrition(ref, amountG);
+
+    const log = await this.logRepo.insertFoodLog({
+      date,
+      food_id: food.id,
+      observation_id: observation.id,
+      amount_g: amountG,
+      calories: nutrition.calories,
+      protein_g: nutrition.proteinG,
+      carbs_g: nutrition.carbsG,
+      fat_g: nutrition.fatG,
+      water_ml: nutrition.waterMl
+    });
+
+    if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
+      await this.waterRepo.insertWaterLog({
+        date,
+        amount_ml: nutrition.waterMl,
+        source: classifyWaterSource(ref),
+        food_log_id: log.id
+      });
+    }
+
+    return { food: ref, observation, log, nutrition };
   }
 }
