@@ -22,10 +22,13 @@ import { normalizeFoodName } from '@domain/logging';
 import { getTodayDateString, getDateRange, formatDateISO } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
 import { parseCSV } from '@services/import/csv-import';
-import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive } from '@services/backup/backup';
+import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive, collectAllTables } from '@services/backup/backup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from '@services/backup/encryption';
 import { GemmaClient } from '@services/ai/gemma-client';
 import { FoodService } from '@services/food/food-service';
+import { P2PTransferService } from '@services/transfer/transfer';
+import { WebRTCTransport } from '@services/transfer/webrtc-transport';
+import { TransferPeer } from '@services/transfer/transport';
 import { GoalTargets } from '@domain/types';
 
 let dbManager: DatabaseManager;
@@ -40,6 +43,8 @@ let observationRepo: ObservationRepository;
 let importRepo: ImportRepository;
 let gemmaClient: GemmaClient;
 let foodService: FoodService;
+let p2pService: P2PTransferService;
+let p2pTransport: WebRTCTransport;
 
 let scoresByDate = new Map<string, number>();
 let lastComputedScoreDate = '';
@@ -47,6 +52,9 @@ let numpadBuffer = '';
 
 async function initApp() {
   console.log('Initializing EverydayFuel...');
+
+  p2pTransport = new WebRTCTransport();
+  p2pService = new P2PTransferService(p2pTransport);
 
   try {
     // 1. Initialize SQLite Database
@@ -105,6 +113,7 @@ async function initApp() {
     setupImportHandlers();
     setupBackupHandler();
     setupRestoreHandler();
+    setupP2PHandlers();
 
     showToast('EverydayFuel loaded (Local SQLite)', 2500);
 
@@ -936,19 +945,8 @@ function setupImportHandlers() {
 
 function setupBackupHandler() {
   document.getElementById('btn-backup')?.addEventListener('click', async () => {
-    const tables = [
-      'foods', 'food_aliases', 'food_barcodes', 'food_observations', 'food_logs',
-      'water_logs', 'combos', 'combo_items', 'daily_records', 'goals', 'app_settings', 'imports'
-    ];
-
     const db = await dbManager.getConnection();
-    const data: Record<string, any[]> = {};
-
-    for (const table of tables) {
-      const res = await db.query(`SELECT * FROM ${table}`);
-      data[table] = res.values || [];
-    }
-
+    const data = await collectAllTables(db);
     const archive = createBackupArchive(data);
 
     const password = await requestPassword('Set Backup Password', true);
@@ -1045,6 +1043,214 @@ function setupRestoreHandler() {
     } finally {
       input.value = '';
     }
+  });
+}
+
+// ---------- P2P Transfer (Phase 9) ----------
+
+let p2pRole: 'send' | 'receive' | null = null;
+let p2pPeer: TransferPeer | null = null;
+let p2pBusy = false;
+
+function setP2PStatus(text: string) {
+  const el = document.getElementById('p2p-status');
+  if (el) el.innerText = text;
+}
+
+function setP2PSection(showOut: boolean, showIn: boolean) {
+  const out = document.getElementById('p2p-out-section');
+  const inn = document.getElementById('p2p-in-section');
+  if (out) out.style.display = showOut ? '' : 'none';
+  if (inn) inn.style.display = showIn ? '' : 'none';
+}
+
+function resetP2PModal() {
+  const codeOut = document.getElementById('p2p-code-out') as HTMLTextAreaElement | null;
+  const codeIn = document.getElementById('p2p-code-in') as HTMLTextAreaElement | null;
+  if (codeOut) codeOut.value = '';
+  if (codeIn) codeIn.value = '';
+  setP2PStatus('');
+  p2pBusy = false;
+}
+
+function closeP2PModal() {
+  if (p2pPeer) {
+    try {
+      p2pPeer.close();
+    } catch {
+      /* ignore */
+    }
+    p2pPeer = null;
+  }
+  p2pTransport.dispose();
+  p2pRole = null;
+  resetP2PModal();
+  document.getElementById('p2p-modal')?.classList.remove('active');
+}
+
+async function openP2PModal(role: 'send' | 'receive') {
+  if (p2pBusy || p2pRole !== null) return;
+  p2pRole = role;
+  resetP2PModal();
+
+  const title = document.getElementById('p2p-title');
+  const outLabel = document.getElementById('p2p-out-label');
+  const inLabel = document.getElementById('p2p-in-label');
+
+  document.getElementById('p2p-modal')?.classList.add('active');
+
+  if (role === 'receive') {
+    if (title) title.innerText = 'Receive Backup (P2P)';
+    if (outLabel) outLabel.innerText = 'Step 1 — Send this code to the sending device:';
+    if (inLabel) inLabel.innerText = 'Step 2 — Paste the sending device\'s response code:';
+    setP2PSection(true, false);
+    setP2PStatus('Generating pairing code…');
+
+    try {
+      const code = await p2pService.createPairingCode();
+      const codeOut = document.getElementById('p2p-code-out') as HTMLTextAreaElement | null;
+      if (codeOut) codeOut.value = code;
+      setP2PStatus('Send Step 1 to the other device, then paste its response in Step 2.');
+    } catch (err) {
+      console.error('P2P pairing code failed:', err);
+      setP2PStatus('Could not generate a pairing code.');
+    }
+  } else {
+    if (title) title.innerText = 'Send Backup (P2P)';
+    if (outLabel) outLabel.innerText = 'Step 2 — Send this response code back to the receiving device:';
+    if (inLabel) inLabel.innerText = 'Step 1 — Paste the receiving device\'s pairing code:';
+    setP2PSection(false, true);
+    setP2PStatus('Paste the receiving device\'s pairing code to start.');
+  }
+}
+
+async function onP2PConnect() {
+  if (p2pBusy) return;
+  const codeIn = (document.getElementById('p2p-code-in') as HTMLTextAreaElement | null)?.value.trim();
+  if (!codeIn) {
+    setP2PStatus('Paste the other device\'s code first.');
+    return;
+  }
+
+  p2pBusy = true;
+  setP2PStatus('Connecting…');
+
+  try {
+    if (p2pRole === 'receive') {
+      const peer = await p2pService.acceptConnection(codeIn);
+      p2pPeer = peer;
+      setP2PSection(false, false);
+      setP2PStatus('Connected — waiting for the backup…');
+
+      const transfer = await p2pService.receiveBackup(peer, (p) => {
+        const pct = p.totalBytes > 0 ? Math.round((p.receivedBytes / p.totalBytes) * 100) : 0;
+        setP2PStatus(`Receiving… ${pct}%`);
+      });
+
+      const password = await requestPassword('Enter Backup Password', false);
+      if (password === null) {
+        setP2PStatus('Transfer received but not restored — no password entered.');
+        return;
+      }
+
+      const decrypted = await decryptBackup(transfer.payload, password);
+      if (decrypted === null) {
+        setP2PStatus('Wrong password or corrupted transfer.');
+        return;
+      }
+
+      const archive = parseBackupArchive(decrypted);
+      if (!archive) {
+        setP2PStatus('Received data is not a valid EverydayFuel backup.');
+        return;
+      }
+
+      const validationErrors = validateBackupArchive(archive);
+      if (validationErrors.length > 0) {
+        setP2PStatus(validationErrors[0]);
+        return;
+      }
+
+      const confirmed = await requestConfirmation(
+        'Receive Backup',
+        'Receive this backup? All current local data will be replaced.'
+      );
+      if (!confirmed) {
+        setP2PStatus('Transfer cancelled — nothing was changed.');
+        return;
+      }
+
+      if (dbManager.isFallback()) {
+        dbManager.replaceFallbackStore(archive.data);
+      } else {
+        const db = await dbManager.getConnection();
+        const result = await restoreBackupArchive(db, archive);
+        if (!result.ok) {
+          setP2PStatus(result.errors[0] || 'Restore failed');
+          return;
+        }
+      }
+
+      lastComputedScoreDate = '';
+      const date = store.getState().selectedDate;
+      await refreshStateForDate(date);
+      const rowCount = Object.values(archive.data).reduce((n, rows) => n + (Array.isArray(rows) ? rows.length : 0), 0);
+      showToast(`Backup received and restored · ${rowCount} rows`);
+      closeP2PModal();
+    } else {
+      const { peer, answerCode } = await p2pService.connect(codeIn);
+      p2pPeer = peer;
+      const codeOut = document.getElementById('p2p-code-out') as HTMLTextAreaElement | null;
+      if (codeOut) codeOut.value = answerCode;
+      setP2PSection(true, false);
+      setP2PStatus('Send Step 2 back to the receiving device — waiting for connection…');
+
+      const password = await requestPassword('Set Backup Password', true);
+      if (password === null) {
+        setP2PStatus('Send cancelled.');
+        return;
+      }
+
+      setP2PStatus('Building backup archive…');
+      const db = await dbManager.getConnection();
+      const archive = createBackupArchive(await collectAllTables(db));
+
+      setP2PStatus('Encrypting backup…');
+      const encrypted = await encryptBackup(archive, password);
+
+      setP2PStatus('Sending encrypted backup…');
+      await p2pService.sendBackup(peer, encrypted, `EverydayFuel_Backup_${getTodayDateString()}.json`, (p) => {
+        const pct = p.totalBytes > 0 ? Math.round((p.receivedBytes / p.totalBytes) * 100) : 0;
+        setP2PStatus(`Sending… ${pct}%`);
+      });
+
+      showToast('Backup sent to the other device');
+      closeP2PModal();
+    }
+  } catch (err) {
+    console.error('P2P transfer failed:', err);
+    setP2PStatus(err instanceof Error ? err.message : 'Transfer failed.');
+  } finally {
+    p2pBusy = false;
+  }
+}
+
+function setupP2PHandlers() {
+  document.getElementById('btn-p2p-receive')?.addEventListener('click', () => openP2PModal('receive'));
+  document.getElementById('btn-p2p-send')?.addEventListener('click', () => openP2PModal('send'));
+  document.getElementById('btn-p2p-connect')?.addEventListener('click', onP2PConnect);
+  document.getElementById('btn-p2p-close')?.addEventListener('click', closeP2PModal);
+
+  document.getElementById('btn-p2p-copy')?.addEventListener('click', async () => {
+    const el = document.getElementById('p2p-code-out') as HTMLTextAreaElement | null;
+    if (!el || !el.value) return;
+    try {
+      await navigator.clipboard.writeText(el.value);
+    } catch {
+      el.select();
+      document.execCommand('copy');
+    }
+    showToast('Pairing code copied');
   });
 }
 

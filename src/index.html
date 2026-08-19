@@ -125,6 +125,25 @@
         </div>
     </div>
 
+    <!-- Peer Transfer Modal (P2P backup transfer) -->
+    <div id="p2p-modal" class="modal">
+        <div class="modal-content" style="max-width: 380px;">
+            <h3 id="p2p-title" style="margin-bottom: 12px; color: var(--accent-glow);">Peer Transfer</h3>
+            <div id="p2p-out-section">
+                <div id="p2p-out-label" style="font-size: 13px; color: var(--text-dim); margin-bottom: 6px;">Step 1 — Send this code to the other device:</div>
+                <textarea id="p2p-code-out" readonly rows="6" style="width: 100%; margin-bottom: 8px; background: var(--surface-light); border: 1px solid var(--border); color: var(--text-dim); padding: 10px; border-radius: 8px; outline: none; font-family: inherit; font-size: 11px; resize: vertical; box-sizing: border-box;"></textarea>
+                <button id="btn-p2p-copy" class="btn-primary" style="width: 100%; margin-bottom: 10px;">Copy Code</button>
+            </div>
+            <div id="p2p-in-section">
+                <div id="p2p-in-label" style="font-size: 13px; color: var(--text-dim); margin-bottom: 6px;">Step 2 — Paste the other device's code:</div>
+                <textarea id="p2p-code-in" rows="6" style="width: 100%; margin-bottom: 8px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; font-family: inherit; font-size: 11px; resize: vertical; box-sizing: border-box;"></textarea>
+                <button id="btn-p2p-connect" class="btn-primary" style="width: 100%; margin-bottom: 10px; background: #3b82f6;">Connect</button>
+            </div>
+            <div id="p2p-status" style="font-size: 13px; color: var(--text-dim); min-height: 40px; margin-bottom: 10px; text-align: center;"></div>
+            <button id="btn-p2p-close" class="btn-close" style="width: 100%;">Cancel</button>
+        </div>
+    </div>
+
     <!-- Manual Log Modal -->
     <div id="manual-log-modal" class="modal">
         <div class="modal-content form-body settings-grid" style="max-width: 380px;">
@@ -286,6 +305,10 @@
                 <button id="btn-restore" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Restore from Backup Archive</button>
                 <input type="file" id="restore-file-input" accept=".json,application/json" style="display: none;">
                 <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">Restore replaces all local data with the backup contents.</div>
+                <div style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 6px; font-size: 12px; color: var(--text-dim);">Peer transfer (same Wi-Fi / hotspot, no cloud):</div>
+                <button id="btn-p2p-receive" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Receive Backup (P2P Transfer)</button>
+                <button id="btn-p2p-send" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Send Backup (P2P Transfer)</button>
+                <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">Pair the two devices by exchanging the pairing codes shown in the dialog.</div>
             </div>
         </section>
     </main>

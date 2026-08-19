@@ -1,7 +1,7 @@
 # EverydayFuel — Handover to Next Chat
 
 **Date:** 2026-08-19
-**From:** Laguna (DeepSeek V4 Flash), pass 7
+**From:** Laguna (DeepSeek V4 Flash), pass 8
 **Status:** Build + tests green; working tree NOT committed (see §6)
 
 ---
@@ -11,7 +11,7 @@
 Local-first nutrition tracker (Android APK via Capacitor + web preview). Source of truth: **`Ai Guidelines/`** (master spec, governance rules, AI logs) + **`PLAN.md`** + the actual code.
 
 ```
-UI events → services (food/ai/import/export/backup) → domain logic → repositories → SQLite
+UI events → services (food/ai/import/export/backup/transfer) → domain logic → repositories → SQLite
 ```
 
 Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
@@ -46,26 +46,37 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - `src/index.html` — scanner modal gains the label-text fallback UI (textarea `label-ocr-text`, amount `label-amount` default 100g, `btn-parse-label-text`); new `#password-modal` (title, password + confirm fields, inline error, Enter-key support) and `#confirm-modal` (message + destructive OK/Cancel).
   - `src/main.ts` — wired `btn-parse-label-text` → `gemmaClient.parseNutritionLabel` (the regression-locked deterministic parser) → `foodService.logLabelOcr` → refresh + toast; the `ai-file-input` change handler now resets the input and toasts the paste-text fallback; **all four `window.prompt`/`window.confirm` call sites (backup ×2, restore ×2) replaced** with promise-based `requestPassword(title, requireConfirm)` / `requestConfirmation(title, message)` in-app modals — the pass-5 flagged follow-up for Android WebView. Backup: 'Set Backup Password' (confirm required, empty/mismatch validated in-modal); restore: 'Enter Backup Password' for encrypted archives + confirm modal before replacing data. Cancel aborts exactly like the old null path; plain JSON archives still restore without a password.
   - `src/services/food/food-service.test.ts` — +3 tests (new `FoodService label OCR pipeline` block): unknown product → `nutrition_label` food + `label_ocr` observation + log with scaled macros (165 kcal/100g × 250g = 412.5); food-derived water logged separately with `food_log_id` link and library reuse on re-scan; validation errors. Suite now 143 tests.
+- **Pass 8 additions: P2P transfer, Phase 9 (spec §23) — JS-side verifiable slice + full Settings UI flow** (no Java/Android SDK needed; the only untestable-here part is the WebRTC adapter itself, explicitly flagged):
+  - `src/services/transfer/protocol.ts` (new) — pure protocol logic, no WebRTC/DOM deps: pairing codes (`encodePairingCode`/`parsePairingCode` — compact self-describing JSON, foreign apps/wrong versions/empty SDP → null), `TransferMessage` union + strict `parseTransferMessage` (garbage/unknown/malformed → null, untrusted-peer discipline), `chunkPayload`/`reassembleChunks` (16 KiB chunks), `sha256Hex` (Web Crypto), app tag/protocol version/256 MB payload guard constants.
+  - `src/services/transfer/transport.ts` (new) — `TransferPeer` (send/onMessage/onOpen/onClose/close) + `TransferTransport` (receiver `createPairingCode()` → sender `connect(code)` → receiver `acceptConnection(answer)`) — the seam that makes the whole protocol testable in Node.
+  - `src/services/transfer/transfer.ts` (new) — `P2PTransferService.sendBackup` (waits for open, streams `hello → meta → data chunks → done`, resolves on `ok`) and `receiveBackup` (validates hello/meta/chunk order, reassembles, verifies size + SHA-256, sends `ok`/`error`, rejects on close/violation/timeout). Timeouts + chunk size configurable for tests.
+  - `src/services/transfer/webrtc-transport.ts` (new) — `WebRTCTransport`: thin `RTCPeerConnection`/`RTCDataChannel` adapter, no ICE servers (LAN/hotspot host candidates, no cloud), sends queue until the channel opens, `dispose()` releases. **Not exercised in Node (no `RTCPeerConnection`) — needs a browser/device pass.**
+  - `src/services/backup/backup.ts` — extracted **`collectAllTables(db)`** (all 12 tables → `Record<string, any[]>`); the file-backup handler now uses it, so file backup and P2P send share one archive path.
+  - `src/index.html` + `src/main.ts` — Settings gains **Receive/Send Backup (P2P Transfer)** buttons + `#p2p-modal` (pairing code out/in textareas, Copy Code, Connect, status, Cancel). Two-step manual pairing: *Receive* shows its offer code → pastes the sender's answer → Connect → password prompt → `decryptBackup` → parse/validate → in-app confirm → existing `restoreBackupArchive`/fallback-store restore; *Send* pastes the receiver's code → Connect → shows its answer code → password prompt (set + confirm) → `collectAllTables` + `createBackupArchive` + `encryptBackup` → `sendBackup` with percentage progress. Reuses the exact backup/encryption/restore logic as file backup.
+  - Tests: `src/services/transfer/transfer.test.ts` (new, 19 tests, stub transport: encrypted round trip byte-for-byte + decrypt/validate on receive, multi-chunk streaming, checksum mismatch, foreign hello, close-mid-transfer, error propagation to sender, empty/oversized guards both sides, pairing/message parse rejects, chunking edges, SHA-256 known vector, channel-open timeout via fake timers) + `collectAllTables` real-SQLite test. Suite now **163 tests, 12 files**.
 
 ## 3. Verification status
 
 | Check | Result |
 |---|---|
 | `npm run build` (tsc strict + Vite) | ✅ passes |
-| `npm test` (vitest 4.1.11, 143 tests, 11 files) | ✅ passes (run 3× to confirm no flakes) |
+| `npm test` (vitest 4.1.11, 163 tests, 12 files) | ✅ passes (run 3× to confirm no flakes) |
 | Scoring regression vs legacy export (scoring-regression.test.ts, spec §29) | ✅ passes — 95/96 rows of `exportexample.csv` reproduce `score`/`scoreCode`/`scoreTier`/`result`/`reason` byte-for-byte; the 1 non-replayable row (2026-05-03) is asserted + documented |
-| Real-SQLite migration + repository + backup/restore round-trips (sql.js in-memory engine, migration.test.ts + sqlite-real.test.ts) | ✅ passes — all repository SQL (JOINs, GROUP BY, LIKE, SUM, bound LIMIT, ON CONFLICT) now proven against a real SQL engine, including FK-safe restore ordering with `PRAGMA foreign_keys = ON` |
+| Real-SQLite migration + repository + backup/restore round-trips (sql.js in-memory engine, migration.test.ts + sqlite-real.test.ts) | ✅ passes — all repository SQL (JOINs, GROUP BY, LIKE, SUM, bound LIMIT, ON CONFLICT) proven against a real SQL engine, including FK-safe restore ordering with `PRAGMA foreign_keys = ON` |
 | Encrypted backup (encryption.test.ts, 17 tests: PBKDF2→AES-GCM round-trip, tamper detection, wrong-password, envelope structure) | ✅ passes |
-| FoodService pipeline (service test w/ in-memory connection) | ✅ passes — now also covers the label-OCR path (`logLabelOcr`: food/observation/log/water creation, library reuse, validation) |
+| FoodService pipeline (service test w/ in-memory connection) | ✅ passes — text + label-OCR paths (food/observation/log/water creation, library reuse, validation) |
+| P2P transfer protocol (transfer.test.ts, 19 tests: encrypted round trip over stub transport, integrity/checksum, protocol rejects, timeouts, chunking) | ✅ passes |
+| `collectAllTables` on a real SQLite database (sqlite-real.test.ts) | ✅ passes |
 | Backup/restore round trip + restore atomicity/rollback (backup.test.ts + sqlite-real.test.ts) | ✅ passes |
 | Gemma fallback text + label-OCR parsers (15 tests) | ✅ passes |
-| Manual click-through on device/browser | ❌ NOT run (no browser/device in environment) — the new password/confirm modals and the label-text parse flow were not manually exercised |
+| Manual click-through on device/browser | ❌ NOT run (no browser/device in environment) — **this now includes the P2P pairing flow and the WebRTC transport itself** (the transfer protocol layer IS unit-tested via a stub transport) |
 
-## 4. Known limitations (unchanged, documented in pass-3 log)
+## 4. Known limitations (unchanged, documented in pass-3/pass-8 logs)
 
-- Fallback connection is a degraded shim: UPDATE statements not applied (edit/rename won't persist in fallback mode), water GROUP BY and `combo_items` not simulated. Restore in fallback mode bypasses SQL and replaces the store wholesale (correct, but the other degraded behaviors still apply). Note: the real-SQLite suite proves all these queries work correctly on the real engine — the shim is the only degraded path.
-- Backup archives are **now encrypted by default** (PBKDF2 + AES-256-GCM, pass 5). Password entry and the restore confirmation use **in-app modals** since pass 7 (the `window.prompt`/`window.confirm` WebView caveat is resolved).
-- Native ML Kit label OCR, camera barcode scanning, food-image analysis = **Phase 7, not done** (the JS-side label-text fallback path IS wired and tested since pass 7; the image-file button shows a toast pointing to it). **The next pass needs a machine with Java + Android SDK** to do the native work: label OCR (feed `GemmaClient.parseNutritionLabel` or the native parser), camera barcode decoding into `BarcodeRepository.lookupBarcode`, food-image analysis → observations.
+- **`webrtc-transport.ts` (P2P) is unverified** — no browser/device/`RTCPeerConnection` in this environment. The next browser/device pass must click through the full pairing → transfer → restore flow. Host-candidate ICE only (works on a shared LAN/hotspot; no TURN by design — no cloud).
+- Fallback connection is a degraded shim: UPDATE statements not applied (edit/rename won't persist in fallback mode), water GROUP BY and `combo_items` not simulated. Restore (file or P2P) in fallback mode bypasses SQL and replaces the store wholesale (correct, but the other degraded behaviors still apply). Note: the real-SQLite suite proves all these queries work correctly on the real engine — the shim is the only degraded path.
+- Backup archives are **encrypted by default** (PBKDF2 + AES-256-GCM, pass 5). Password entry, restore confirmation, and P2P pairing use **in-app modals** since pass 7.
+- Native ML Kit label OCR, camera barcode scanning, food-image analysis = **Phase 7, not done** (the JS-side label-text fallback path IS wired and tested since pass 7; the image-file button shows a toast pointing to it). **The next native pass needs a machine with Java + Android SDK** (rechecked in pass 8: `java`/`ANDROID_HOME`/`gradle` all absent).
 - On-device Gemma inference requires the native plugin + model file on the device
 - `btn-save-goals` still creates a new goal per save (pre-existing)
 - Label-OCR fallback parser preserves the old-app regex (old_app/api/index.py): for kJ-first EU energy lines it captures the kJ value as `caloriesPer100g` — locked in by a regression test (gemma-client.test.ts), documented, not "fixed" because that would change preserved old-app behavior; revisit when wiring Phase 7.
@@ -75,20 +86,23 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 
 ## 5. What's next (from PLAN.md §9 handoff)
 
-1. **Full native ML Kit integration** — label OCR (image path now toasts + suggests the wired text fallback), real camera barcode decoding into `BarcodeRepository.lookupBarcode`, food-image analysis → observations. **Requires a Java + Android SDK environment** (none here — native changes were deliberately not attempted in pass 7 because they could not be verified). The label-OCR fallback parser is regression-locked (including its kJ quirk — fix it here if desired).
-2. **P2P transfer** (Phase 9) — encrypted device-to-device via existing import/export/restore logic
+1. **Browser/device verification of the pass-8 P2P flow** — click through Receive → share code → Send → paste answer → transfer → restore on two devices (or two browser tabs on the same machine via `npm run dev`), and confirm the WebRTC transport behaves (channel open, progress, integrity). The protocol layer is tested; the adapter is not.
+2. **Full native ML Kit integration** — label OCR (image path now toasts + suggests the wired text fallback), real camera barcode decoding into `BarcodeRepository.lookupBarcode`, food-image analysis → observations. **Requires a Java + Android SDK environment** (none here — native changes were deliberately not attempted in passes 7–8 because they could not be verified). The label-OCR fallback parser is regression-locked (including its kJ quirk — fix it here if desired).
 3. **Laptop/desktop view** (Phase 10)
 4. **Offline validation pass** (Phase 11) — verify all core flows with network off
-5. ~~More regression tests~~ — closed: real-SQLite migration + repository tests (pass 4), OCR parsing edge cases (pass 4), combo expansion round-trip (pass 4), scoring vs the old app's representative outputs (pass 6, spec §29 — 95/96 rows of exportexample.csv byte-identical), label-OCR service pipeline (pass 7). Remaining possible coverage: repository tests on the degraded fallback shim, CSV export date-range/water-source rows.
+5. ~~More regression tests~~ — closed: real-SQLite migration + repository tests (pass 4), OCR parsing edge cases (pass 4), combo expansion round-trip (pass 4), scoring vs the old app's representative outputs (pass 6, spec §29 — 95/96 rows of exportexample.csv byte-identical), label-OCR service pipeline (pass 7), P2P protocol suite + collectAllTables (pass 8). Remaining possible coverage: repository tests on the degraded fallback shim, CSV export date-range/water-source rows.
 6. ~~Restore-from-backup UI~~ — done in pass 3 (Settings → Restore from Backup Archive)
 7. ~~Encrypted backup format~~ — done in pass 5 (spec §23; see §2/§4). ~~Replace `window.prompt` password entry with a proper in-app modal~~ — done in pass 7 (password + confirm modals wired).
+8. ~~P2P transfer~~ — JS/service/UI done in pass 8 (spec §23; see §2/§4) — **manual device verification outstanding (see item 1)**.
 
 ## 6. Before you start
 
-- **The working tree is NOT committed.** Pass-7 changes: `src/services/food/food-service.ts` (+`logLabelOcr`, `LoggedLabelEntry`), `src/services/food/food-service.test.ts` (+3 label-OCR tests), `src/index.html` (scanner label-text section + password/confirm modals), `src/main.ts` (label-OCR wiring + `requestPassword`/`requestConfirmation` dialog helpers, `window.prompt`/`confirm` removed). Commit this pass first.
-- `vitest` is a devDependency; the "test" script runs `vitest run` (143 tests, 11 files).
+- **The working tree is NOT committed.** Pass-8 changes: `src/services/transfer/` (new: `protocol.ts`, `transport.ts`, `transfer.ts`, `webrtc-transport.ts`, `transfer.test.ts`), `src/services/backup/backup.ts` (+`collectAllTables`), `src/services/backup/backup.test.ts` (untouched), `src/main.ts` (P2P wiring + backup handler uses `collectAllTables`), `src/index.html` (P2P modal + buttons), `src/data/repositories/sqlite-real.test.ts` (+1 test), `Ai Guidelines/ai logs/logs/[Laguna][pass 8][2026-08-19].md`. Commit this pass first.
+- `vitest` is a devDependency; the "test" script runs `vitest run` (163 tests, 12 files).
 - The sql.js real-SQLite tests need no configuration: `initSqlJs()` loads `node_modules/sql.js/dist/sql-wasm.wasm` automatically in Node. Do not delete `src/types/sql-js.d.ts` — it is the type declaration for the untyped `sql.js` package (tsc strict would fail without it).
-- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-7 log: `[Laguna][pass 7][2026-08-19].md`.
-- **No Java/Android SDK on the development machine** — native Android builds (`gradlew assembleDebug`) cannot run here; the Android project is untouched and unverified since pass 1. The next native pass must run on a machine with the Android toolchain.
+- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-8 log: `[Laguna][pass 8][2026-08-19].md`.
+- **No Java/Android SDK on the development machine** (rechecked pass 8) — native Android builds (`gradlew assembleDebug`) cannot run here; the Android project is untouched and unverified since pass 1. The next native pass must run on a machine with the Android toolchain.
 - Read `Ai Guidelines/NutritionOS — Agent Governance & Development Rules.md` (em-dash in filename) before editing; PLAN.md §7 lists what must NOT change (scoring, hydration gating, goal resolution, v001 schema, domain types, CSV export format).
 - Commands: `npm run dev` (web), `npm run build`, `npm test`, `npm run cap:sync` / `cap:run` (Android).
+
+(End of file - total 94 lines)

@@ -75,6 +75,20 @@ const INSERT_ORDER = [
   'food_aliases', 'food_barcodes', 'food_observations', 'combo_items', 'food_logs', 'water_logs'
 ];
 
+/**
+ * Read every backup table from the database into a plain object of row arrays.
+ * Shared by the file-backup handler and the P2P send flow so both produce
+ * identical archives.
+ */
+export async function collectAllTables(db: SQLiteDBConnection): Promise<Record<string, any[]>> {
+  const data: Record<string, any[]> = {};
+  for (const table of BACKUP_TABLES) {
+    const res = await db.query(`SELECT * FROM ${table}`);
+    data[table] = res.values || [];
+  }
+  return data;
+}
+
 export function createBackupArchive(tablesData: Record<string, any[]>): string {
   const archive: BackupArchive = {
     app: 'EverydayFuel',

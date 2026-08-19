@@ -15,7 +15,7 @@ import { ComboRepository } from './combo.repo';
 import { InsertFood } from '../types';
 import { ComboTemplate, expandCombo } from '../../domain/logging';
 import { calculateNutrition } from '../../domain/nutrition';
-import { createBackupArchive, parseBackupArchive, restoreBackupArchive } from '../../services/backup/backup';
+import { createBackupArchive, parseBackupArchive, restoreBackupArchive, collectAllTables, BACKUP_TABLES } from '../../services/backup/backup';
 
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>;
 type SqlDatabase = InstanceType<SqlJsStatic['Database']>;
@@ -784,5 +784,23 @@ describe('Backup/restore round trip on a real SQLite database', () => {
     const result = await restoreBackupArchive(conn, empty);
     expect(result.ok).toBe(true);
     expect(result.totalRows).toBe(0);
+  });
+
+  it('collectAllTables gathers every backup table from a real database', async () => {
+    const { conn } = createRealDb();
+    const foodId = await seedChicken(conn);
+    await new LogRepository(conn).insertFoodLog({
+      date: '2026-08-19', food_id: foodId, amount_g: 100,
+      calories: 165, protein_g: 31, carbs_g: 0, fat_g: 9
+    });
+
+    const data = await collectAllTables(conn);
+    expect(Object.keys(data).sort()).toEqual([...BACKUP_TABLES].sort());
+    expect(data.foods).toHaveLength(1);
+    expect(data.foods[0].id).toBe(foodId);
+    expect(data.food_logs).toHaveLength(1);
+    expect(data.food_logs[0].calories).toBe(165);
+    expect(data.water_logs).toEqual([]);
+    expect(data.combo_items).toEqual([]);
   });
 });
