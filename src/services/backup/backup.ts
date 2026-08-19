@@ -11,6 +11,7 @@ export interface BackupArchive {
     foods: any[];
     food_aliases: any[];
     food_barcodes: any[];
+    food_observations: any[];
     food_logs: any[];
     water_logs: any[];
     combos: any[];
@@ -18,6 +19,7 @@ export interface BackupArchive {
     daily_records: any[];
     goals: any[];
     app_settings: any[];
+    imports: any[];
   };
 }
 
@@ -31,13 +33,15 @@ export function createBackupArchive(tablesData: Record<string, any[]>): string {
       foods: tablesData.foods || [],
       food_aliases: tablesData.food_aliases || [],
       food_barcodes: tablesData.food_barcodes || [],
+      food_observations: tablesData.food_observations || [],
       food_logs: tablesData.food_logs || [],
       water_logs: tablesData.water_logs || [],
       combos: tablesData.combos || [],
       combo_items: tablesData.combo_items || [],
       daily_records: tablesData.daily_records || [],
       goals: tablesData.goals || [],
-      app_settings: tablesData.app_settings || []
+      app_settings: tablesData.app_settings || [],
+      imports: tablesData.imports || []
     }
   };
 

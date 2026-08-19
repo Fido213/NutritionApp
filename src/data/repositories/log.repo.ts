@@ -39,8 +39,16 @@ export class LogRepository {
     return res.values![0] as FoodLog;
   }
 
+  async findById(id: string): Promise<FoodLog | null> {
+    const res = await this.db.query(`SELECT * FROM food_logs WHERE id = ?`, [id]);
+    return res.values && res.values.length > 0 ? (res.values[0] as FoodLog) : null;
+  }
+
   async getLogsForDate(date: string): Promise<FoodLog[]> {
-    const res = await this.db.query(`SELECT * FROM food_logs WHERE date = ? ORDER BY created_at ASC`, [date]);
+    const res = await this.db.query(
+      `SELECT fl.*, f.canonical_name AS food_name FROM food_logs fl JOIN foods f ON f.id = fl.food_id WHERE fl.date = ? ORDER BY fl.created_at ASC`,
+      [date]
+    );
     return (res.values as FoodLog[]) || [];
   }
 

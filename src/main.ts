@@ -6,16 +6,25 @@ import { WaterRepository } from '@data/repositories/water.repo';
 import { DailyRecordRepository } from '@data/repositories/daily-record.repo';
 import { ComboRepository } from '@data/repositories/combo.repo';
 import { BarcodeRepository } from '@data/repositories/barcode.repo';
+import { ObservationRepository } from '@data/repositories/observation.repo';
+import { ImportRepository } from '@data/repositories/import.repo';
+import { Food } from '@data/types';
 
 import { store } from './ui/state';
 import { renderDashboard } from './ui/views/dashboard';
 import { renderHistory } from './ui/views/history';
 import { renderGoals, readGoalsForm } from './ui/views/goals';
 import { showToast } from './ui/components/toast';
-import { calculateEffectiveHydration } from '@domain/hydration';
+import { calculateEffectiveHydration, classifyWaterSource } from '@domain/hydration';
 import { calculateScore } from '@domain/scoring';
-import { getTodayDateString } from '@utils/dates';
+import { calculateNutrition } from '@domain/nutrition';
+import { normalizeFoodName } from '@domain/logging';
+import { getTodayDateString, getDateRange, formatDateISO } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
+import { parseCSV } from '@services/import/csv-import';
+import { createBackupArchive, downloadBackup } from '@services/backup/backup';
+import { GemmaClient } from '@services/ai/gemma-client';
+import { FoodService } from '@services/food/food-service';
 import { GoalTargets } from '@domain/types';
 
 let dbManager: DatabaseManager;
@@ -26,6 +35,14 @@ let waterRepo: WaterRepository;
 let dailyRecordRepo: DailyRecordRepository;
 let comboRepo: ComboRepository;
 let barcodeRepo: BarcodeRepository;
+let observationRepo: ObservationRepository;
+let importRepo: ImportRepository;
+let gemmaClient: GemmaClient;
+let foodService: FoodService;
+
+let scoresByDate = new Map<string, number>();
+let lastComputedScoreDate = '';
+let numpadBuffer = '';
 
 async function initApp() {
   console.log('Initializing EverydayFuel...');
@@ -43,6 +60,10 @@ async function initApp() {
     dailyRecordRepo = new DailyRecordRepository(db);
     comboRepo = new ComboRepository(db);
     barcodeRepo = new BarcodeRepository(db);
+    observationRepo = new ObservationRepository(db);
+    importRepo = new ImportRepository(db);
+    gemmaClient = new GemmaClient();
+    foodService = new FoodService(foodRepo, logRepo, observationRepo, waterRepo);
 
     console.log('SQLite database ready', { dailyRecordRepo, comboRepo, barcodeRepo });
 
@@ -74,6 +95,13 @@ async function initApp() {
     setupNavigation();
     setupModals();
     setupActionHandlers();
+    setupJournalHandlers();
+    setupNumpadHandlers();
+    setupScannerHandlers();
+    setupActionHubHandlers();
+    setupEditModalHandlers();
+    setupImportHandlers();
+    setupBackupHandler();
 
     showToast('EverydayFuel loaded (Local SQLite)', 2500);
 
@@ -124,9 +152,35 @@ async function refreshStateForDate(dateStr: string) {
     currentScore: score
   });
 
-  const scoresMap = new Map<string, number>();
-  scoresMap.set(dateStr, score.score);
-  renderHistory(logs, scoresMap);
+  await ensureScoresForDate(dateStr);
+  renderHistory(logs, scoresByDate);
+}
+
+/**
+ * Compute the daily consistency score for every date in the range ending at endDate.
+ * Scores are derived on demand from logs + goals and are never stored as a second dataset.
+ */
+async function computeScoresForRange(endDate: string, days: number = 28): Promise<Map<string, number>> {
+  const scores = new Map<string, number>();
+  const defaults: GoalTargets = { caloriesTarget: 2500, proteinTarget: 150, carbsTarget: 250, fatTarget: 80, waterTarget: 4000 };
+
+  for (const date of getDateRange(endDate, days)) {
+    const goalRecord = await goalRepo.getGoalForDate(date);
+    const targets = goalRecord ? mapGoalToTargets(goalRecord) : defaults;
+    const totals = await logRepo.getDailyTotals(date);
+    const water = await waterRepo.getWaterTotalsBySource(date);
+    const hydration = calculateEffectiveHydration(water.explicit, water.drink, water.food, targets.waterTarget);
+    scores.set(date, calculateScore(totals, targets, hydration).score);
+  }
+
+  return scores;
+}
+
+async function ensureScoresForDate(dateStr: string) {
+  if (lastComputedScoreDate !== dateStr) {
+    scoresByDate = await computeScoresForRange(dateStr, 28);
+    lastComputedScoreDate = dateStr;
+  }
 }
 
 function setupNavigation() {
@@ -148,6 +202,9 @@ function setupNavigation() {
     } else if (viewId === 'history') {
       historyView?.classList.add('active-view');
       logsBtn?.classList.add('active');
+      ensureScoresForDate(store.getState().selectedDate).then(() => {
+        renderHistory(store.getState().todayLogs, scoresByDate);
+      });
     } else if (viewId === 'view-goals') {
       goalsView?.classList.add('active-view');
     }
@@ -286,6 +343,490 @@ function setupActionHandlers() {
   window.addEventListener('select-history-date', (e: any) => {
     const dateStr = e.detail;
     refreshStateForDate(dateStr);
+  });
+
+  window.addEventListener('quick-log-recent', (e: any) => {
+    const item = e.detail;
+    if (item?.id) quickLogFood(item.id);
+  });
+}
+
+// ---------- Text Logging (Gemma interpretation -> FoodService pipeline) ----------
+
+function isTextLogInput(text: string): boolean {
+  return /\d+\s*(g|ml|grams|milliliters)/i.test(text) || /[,+&]| and /i.test(text);
+}
+
+async function logTextInput(rawText: string) {
+  const date = store.getState().selectedDate;
+  const items = await gemmaClient.interpretTextLog(rawText);
+
+  if (!items || items.length === 0) {
+    showToast('Could not interpret that text');
+    return;
+  }
+
+  const results = await foodService.logTextInput(date, rawText, items);
+  const totalCal = results.reduce((sum, r) => sum + r.nutrition.calories, 0);
+
+  document.getElementById('journal-modal')?.classList.remove('active');
+  const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
+  if (searchInput) searchInput.value = '';
+
+  await refreshStateForDate(date);
+  showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal`);
+}
+
+// ---------- Journal Search & Quick-Log ----------
+
+function renderJournalResults(foods: Food[]) {
+  const container = document.getElementById('journal-results');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (!foods || foods.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.color = 'var(--text-dim)';
+    empty.style.fontSize = '13px';
+    empty.style.padding = '10px';
+    empty.style.textAlign = 'center';
+    empty.innerText = 'No foods found. Press Enter to log text like "250g chicken, 100g rice".';
+    container.appendChild(empty);
+    return;
+  }
+
+  foods.forEach(food => {
+    const item = document.createElement('div');
+    item.className = 'log-item';
+    item.dataset.foodId = food.id;
+
+    const main = document.createElement('div');
+    main.className = 'log-main';
+
+    const name = document.createElement('span');
+    name.className = 'log-name';
+    name.innerText = food.canonical_name;
+
+    const cal = document.createElement('span');
+    cal.className = 'log-cal';
+    cal.innerText = food.calories_per_100g ? `${Math.round(food.calories_per_100g)} kcal/100g` : 'no data';
+
+    main.appendChild(name);
+    main.appendChild(cal);
+    item.appendChild(main);
+    container.appendChild(item);
+  });
+}
+
+async function quickLogFood(foodId: string) {
+  const food = await foodRepo.findById(foodId);
+  if (!food) {
+    showToast('Food not found in library');
+    return;
+  }
+
+  const ref = foodRepo.toFoodReference(food);
+  const nutrition = calculateNutrition(ref, 100);
+  const date = store.getState().selectedDate;
+
+  const log = await logRepo.insertFoodLog({
+    date,
+    food_id: food.id,
+    amount_g: 100,
+    calories: nutrition.calories,
+    protein_g: nutrition.proteinG,
+    carbs_g: nutrition.carbsG,
+    fat_g: nutrition.fatG,
+    water_ml: nutrition.waterMl
+  });
+
+  if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
+    await waterRepo.insertWaterLog({
+      date,
+      amount_ml: nutrition.waterMl,
+      source: classifyWaterSource(ref),
+      food_log_id: log.id
+    });
+  }
+
+  await refreshStateForDate(date);
+  showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
+}
+
+function setupJournalHandlers() {
+  const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
+
+  searchInput?.addEventListener('input', async () => {
+    const query = searchInput.value.trim();
+    const results = await foodRepo.fuzzySearch(query, 20);
+    renderJournalResults(results);
+  });
+
+  searchInput?.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    const text = searchInput.value.trim();
+    if (!text) return;
+
+    if (isTextLogInput(text)) {
+      await logTextInput(text);
+    } else {
+      const results = await foodRepo.fuzzySearch(text, 20);
+      renderJournalResults(results);
+    }
+  });
+
+  document.getElementById('journal-results')?.addEventListener('click', (e) => {
+    const target = (e.target as HTMLElement).closest('.log-item') as HTMLElement | null;
+    if (!target?.dataset.foodId) return;
+    document.getElementById('journal-modal')?.classList.remove('active');
+    const input = document.getElementById('journal-search') as HTMLInputElement | null;
+    if (input) input.value = '';
+    quickLogFood(target.dataset.foodId);
+  });
+}
+
+// ---------- Numpad Custom Water ----------
+
+function setupNumpadHandlers() {
+  const display = document.getElementById('numpad-display');
+  const updateDisplay = () => {
+    if (display) display.innerText = numpadBuffer || '0';
+  };
+
+  document.querySelectorAll('.numpad-grid button[data-val]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = (btn as HTMLElement).dataset.val;
+      if (val !== undefined && numpadBuffer.length < 6) numpadBuffer += val;
+      updateDisplay();
+    });
+  });
+
+  document.getElementById('numpad-del')?.addEventListener('click', () => {
+    numpadBuffer = numpadBuffer.slice(0, -1);
+    updateDisplay();
+  });
+
+  document.getElementById('numpad-enter')?.addEventListener('click', async () => {
+    const amount = parseInt(numpadBuffer, 10);
+    numpadBuffer = '';
+    updateDisplay();
+
+    if (!amount || amount <= 0) {
+      showToast('Enter a valid water amount');
+      return;
+    }
+
+    const date = store.getState().selectedDate;
+    await waterRepo.insertWaterLog({ date, amount_ml: amount, source: 'explicit' });
+    document.getElementById('numpad-modal')?.classList.remove('active');
+    await refreshStateForDate(date);
+    showToast(`Logged +${amount}ml Water`);
+  });
+}
+
+// ---------- Scanner / Barcode ----------
+
+function setupScannerHandlers() {
+  const barcodeInput = document.getElementById('barcode-input') as HTMLInputElement | null;
+
+  const doBarcodeLookup = async () => {
+    const code = (barcodeInput?.value || '').trim();
+    if (!code) {
+      showToast('Enter a barcode number first');
+      return;
+    }
+
+    const food = await barcodeRepo.lookupBarcode(code);
+    if (!food) {
+      showToast('Barcode not found in local library');
+      document.getElementById('scanner-modal')?.classList.remove('active');
+      document.getElementById('manual-log-modal')?.classList.add('active');
+      return;
+    }
+
+    const ref = foodRepo.toFoodReference(food);
+    const nutrition = calculateNutrition(ref, 100);
+    const date = store.getState().selectedDate;
+
+    const log = await logRepo.insertFoodLog({
+      date,
+      food_id: food.id,
+      amount_g: 100,
+      calories: nutrition.calories,
+      protein_g: nutrition.proteinG,
+      carbs_g: nutrition.carbsG,
+      fat_g: nutrition.fatG,
+      water_ml: nutrition.waterMl
+    });
+
+    if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
+      await waterRepo.insertWaterLog({
+        date,
+        amount_ml: nutrition.waterMl,
+        source: classifyWaterSource(ref),
+        food_log_id: log.id
+      });
+    }
+
+    if (barcodeInput) barcodeInput.value = '';
+    document.getElementById('scanner-modal')?.classList.remove('active');
+    await refreshStateForDate(date);
+    showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
+  };
+
+  document.getElementById('btn-decode-barcode')?.addEventListener('click', doBarcodeLookup);
+  barcodeInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doBarcodeLookup();
+  });
+
+  document.getElementById('btn-decode-label')?.addEventListener('click', () => {
+    document.getElementById('ai-file-input')?.click();
+  });
+
+  document.getElementById('ai-file-input')?.addEventListener('change', () => {
+    showToast('Label OCR requires the native ML Kit integration (next phase)');
+  });
+}
+
+// ---------- Action Hub (Edit / Duplicate / Delete) ----------
+
+function setupActionHubHandlers() {
+  window.addEventListener('open-log-actions', (e: any) => {
+    const log = e.detail;
+    if (!log?.id) return;
+    store.setState({ selectedLogForAction: log });
+    document.getElementById('action-hub-modal')?.classList.add('active');
+  });
+
+  document.getElementById('hub-btn-edit')?.addEventListener('click', openEditModal);
+
+  document.getElementById('hub-btn-duplicate')?.addEventListener('click', async () => {
+    const log = store.getState().selectedLogForAction;
+    if (!log) return;
+    const date = store.getState().selectedDate;
+    await logRepo.duplicateLog(log.id, date);
+    document.getElementById('action-hub-modal')?.classList.remove('active');
+    await refreshStateForDate(date);
+    showToast('Log duplicated');
+  });
+
+  document.getElementById('hub-btn-delete')?.addEventListener('click', async () => {
+    const log = store.getState().selectedLogForAction;
+    if (!log) return;
+    await logRepo.deleteLog(log.id);
+    store.setState({ selectedLogForAction: null });
+    document.getElementById('action-hub-modal')?.classList.remove('active');
+    await refreshStateForDate(store.getState().selectedDate);
+    showToast('Log deleted');
+  });
+}
+
+// ---------- Edit Modal ----------
+
+async function openEditModal() {
+  const log = store.getState().selectedLogForAction;
+  if (!log) return;
+
+  const food = log.food_id ? await foodRepo.findById(log.food_id) : null;
+  const baseAmount = log.amount_g ?? log.amount_ml ?? 100;
+
+  const setValue = (id: string, value: string) => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (el) el.value = value;
+  };
+
+  setValue('edit-log-id', log.id);
+  setValue('edit-name', food?.canonical_name || log.food_name || 'Logged Item');
+  setValue('edit-date', log.date);
+  setValue('base-cal', String(log.calories || 0));
+  setValue('base-pro', String(log.protein_g || 0));
+  setValue('base-carb', String(log.carbs_g || 0));
+  setValue('base-fat', String(log.fat_g || 0));
+  setValue('base-amount', String(baseAmount));
+  setValue('eaten-amount', String(baseAmount));
+  setValue('edit-cal', String(Math.round(log.calories || 0)));
+  setValue('edit-pro', String(Math.round(log.protein_g || 0)));
+  setValue('edit-carb', String(Math.round(log.carbs_g || 0)));
+  setValue('edit-fat', String(Math.round(log.fat_g || 0)));
+  setValue('edit-note', log.note || '');
+
+  document.getElementById('action-hub-modal')?.classList.remove('active');
+  document.getElementById('edit-modal')?.classList.add('active');
+}
+
+function setupEditModalHandlers() {
+  document.getElementById('btn-save-edit')?.addEventListener('click', async () => {
+    const idEl = document.getElementById('edit-log-id') as HTMLInputElement | null;
+    const logId = idEl?.value;
+    if (!logId) return;
+
+    const read = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value || '';
+    const name = read('edit-name').trim() || 'Logged Item';
+    const date = read('edit-date') || store.getState().selectedDate;
+    const note = read('edit-note').trim() || null;
+
+    const baseAmount = parseFloat(read('base-amount')) || 100;
+    const eatenAmount = parseFloat(read('eaten-amount')) || 0;
+    const baseCal = parseFloat(read('base-cal')) || 0;
+    const basePro = parseFloat(read('base-pro')) || 0;
+    const baseCarb = parseFloat(read('base-carb')) || 0;
+    const baseFat = parseFloat(read('base-fat')) || 0;
+
+    // Amount multiplier: scale the stored base macros to the new eaten amount
+    const multiplier = baseAmount > 0 && eatenAmount > 0 ? eatenAmount / baseAmount : 1;
+    const calories = Math.round(baseCal * multiplier);
+    const proteinG = Math.round(basePro * multiplier);
+    const carbsG = Math.round(baseCarb * multiplier);
+    const fatG = Math.round(baseFat * multiplier);
+
+    const current = await logRepo.findById(logId);
+    if (!current) {
+      showToast('Log not found');
+      return;
+    }
+
+    let foodId = current.food_id;
+    const currentFood = current.food_id ? await foodRepo.findById(current.food_id) : null;
+    if (currentFood && name !== currentFood.canonical_name) {
+      let renamed = await foodRepo.findByNormalizedName(normalizeFoodName(name));
+      if (!renamed) {
+        const refAmount = current.amount_g || current.amount_ml || 100;
+        renamed = await foodRepo.insert({
+          canonical_name: name,
+          normalized_name: normalizeFoodName(name),
+          calories_per_100g: refAmount > 0 ? (current.calories / refAmount) * 100 : null,
+          protein_per_100g: refAmount > 0 ? (current.protein_g / refAmount) * 100 : null,
+          carbs_per_100g: refAmount > 0 ? (current.carbs_g / refAmount) * 100 : null,
+          fat_per_100g: refAmount > 0 ? (current.fat_g / refAmount) * 100 : null,
+          water_per_100g: 0,
+          nutrition_basis: 'per_100g',
+          source_type: 'user_entered',
+          confidence: 1.0
+        });
+      }
+      foodId = renamed.id;
+    }
+
+    const updates: any = {
+      date,
+      food_id: foodId,
+      calories,
+      protein_g: proteinG,
+      carbs_g: carbsG,
+      fat_g: fatG,
+      note
+    };
+    if (eatenAmount > 0) {
+      if (current.amount_ml != null) updates.amount_ml = eatenAmount;
+      else updates.amount_g = eatenAmount;
+    }
+
+    await logRepo.updateLog(logId, updates);
+    document.getElementById('edit-modal')?.classList.remove('active');
+    await refreshStateForDate(date);
+    showToast('Log updated');
+  });
+}
+
+// ---------- CSV Import ----------
+
+function setupImportHandlers() {
+  document.getElementById('btn-import-csv')?.addEventListener('click', () => {
+    document.getElementById('csv-file-input')?.click();
+  });
+
+  document.getElementById('csv-file-input')?.addEventListener('change', async (e) => {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const text = await file.text();
+    const { rows, errors } = parseCSV(text);
+
+    if (rows.length === 0) {
+      showToast(errors[0] || 'CSV import failed');
+      return;
+    }
+
+    let inserted = 0;
+    for (const row of rows) {
+      const date = formatDateISO(row.date);
+      const normalized = normalizeFoodName(row.foodName);
+      let food = await foodRepo.findByNormalizedName(normalized);
+
+      if (!food) {
+        const refAmount = row.amountG || 100;
+        food = await foodRepo.insert({
+          canonical_name: row.foodName,
+          normalized_name: normalized,
+          calories_per_100g: refAmount > 0 ? (row.calories / refAmount) * 100 : 0,
+          protein_per_100g: refAmount > 0 ? (row.proteinG / refAmount) * 100 : 0,
+          carbs_per_100g: refAmount > 0 ? (row.carbsG / refAmount) * 100 : 0,
+          fat_per_100g: refAmount > 0 ? (row.fatG / refAmount) * 100 : 0,
+          water_per_100g: 0,
+          nutrition_basis: 'per_100g',
+          source_type: 'imported',
+          confidence: 1.0
+        });
+      }
+
+      const log = await logRepo.insertFoodLog({
+        date,
+        food_id: food.id,
+        amount_g: row.amountG || 100,
+        calories: row.calories,
+        protein_g: row.proteinG,
+        carbs_g: row.carbsG,
+        fat_g: row.fatG,
+        water_ml: row.waterMl ?? null
+      });
+
+      if (row.waterMl) {
+        await waterRepo.insertWaterLog({
+          date,
+          amount_ml: row.waterMl,
+          source: 'explicit',
+          food_log_id: log.id
+        });
+      }
+
+      inserted++;
+    }
+
+    await importRepo.recordImport({
+      source_type: 'csv',
+      filename: file.name,
+      status: errors.length > 0 ? 'partial' : 'completed',
+      row_count: rows.length,
+      error_count: errors.length
+    });
+
+    input.value = '';
+    await refreshStateForDate(store.getState().selectedDate);
+    showToast(`Imported ${inserted} rows${errors.length > 0 ? ` (${errors.length} skipped)` : ''}`);
+  });
+}
+
+// ---------- Backup ----------
+
+function setupBackupHandler() {
+  document.getElementById('btn-backup')?.addEventListener('click', async () => {
+    const tables = [
+      'foods', 'food_aliases', 'food_barcodes', 'food_observations', 'food_logs',
+      'water_logs', 'combos', 'combo_items', 'daily_records', 'goals', 'app_settings', 'imports'
+    ];
+
+    const db = await dbManager.getConnection();
+    const data: Record<string, any[]> = {};
+
+    for (const table of tables) {
+      const res = await db.query(`SELECT * FROM ${table}`);
+      data[table] = res.values || [];
+    }
+
+    const archive = createBackupArchive(data);
+    downloadBackup(`EverydayFuel_Backup_${getTodayDateString()}.json`, archive);
+    showToast('Backup archive exported');
   });
 }
 

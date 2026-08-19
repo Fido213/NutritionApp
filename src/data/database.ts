@@ -107,18 +107,28 @@ export class DatabaseManager {
         else if (statement.includes('FROM daily_records')) tableName = 'daily_records';
         else if (statement.includes('FROM combos')) tableName = 'combos';
         else if (statement.includes('FROM food_barcodes')) tableName = 'food_barcodes';
+        else if (statement.includes('JOIN food_aliases')) tableName = 'foods';
+        else if (statement.includes('FROM food_observations')) tableName = 'food_observations';
+        else if (statement.includes('FROM food_aliases')) tableName = 'food_aliases';
+        else if (statement.includes('FROM imports')) tableName = 'imports';
         else if (statement.includes('FROM app_settings')) tableName = 'app_settings';
 
         const rows = manager.fallbackStore.get(tableName) || [];
         let filtered = [...rows];
 
         if (values && values.length > 0) {
-          if (statement.includes('WHERE date = ?')) {
+          if (statement.includes('WHERE date = ?') || statement.includes('WHERE fl.date = ?')) {
             filtered = filtered.filter(r => r.date === values[0]);
           } else if (statement.includes('WHERE id = ?')) {
             filtered = filtered.filter(r => r.id === values[0]);
           } else if (statement.includes('WHERE normalized_name = ?')) {
             filtered = filtered.filter(r => r.normalized_name === values[0]);
+          } else if (statement.includes('WHERE normalized_alias = ?')) {
+            filtered = filtered.filter(r => r.normalized_alias === values[0]);
+          } else if (statement.includes('WHERE fa.normalized_alias = ?')) {
+            const aliasRows = manager.fallbackStore.get('food_aliases') || [];
+            const aliasMatch = aliasRows.find(r => r.normalized_alias === values[0]);
+            filtered = aliasMatch ? filtered.filter(r => r.id === aliasMatch.food_id) : [];
           } else if (statement.includes('WHERE end_date IS NULL')) {
             filtered = filtered.filter(r => r.end_date === null);
           }
@@ -145,6 +155,9 @@ export class DatabaseManager {
         else if (statement.includes('INTO goals') || statement.includes('UPDATE goals')) tableName = 'goals';
         else if (statement.includes('INTO daily_records')) tableName = 'daily_records';
         else if (statement.includes('INTO combos')) tableName = 'combos';
+        else if (statement.includes('INTO food_observations')) tableName = 'food_observations';
+        else if (statement.includes('INTO food_aliases')) tableName = 'food_aliases';
+        else if (statement.includes('INTO imports')) tableName = 'imports';
 
         const rows = manager.fallbackStore.get(tableName) || [];
 
@@ -154,6 +167,7 @@ export class DatabaseManager {
             newRow.id = values?.[0];
             newRow.date = values?.[1];
             newRow.food_id = values?.[2];
+            newRow.observation_id = values?.[3];
             newRow.amount_g = values?.[4];
             newRow.amount_ml = values?.[5];
             newRow.calories = values?.[6];
@@ -162,6 +176,7 @@ export class DatabaseManager {
             newRow.fat_g = values?.[9];
             newRow.water_ml = values?.[10];
             newRow.note = values?.[11];
+            newRow.created_at = values?.[12];
           } else if (tableName === 'water_logs') {
             newRow.id = values?.[0];
             newRow.date = values?.[1];
@@ -177,6 +192,34 @@ export class DatabaseManager {
             newRow.carbs_target = values?.[6];
             newRow.fat_target = values?.[7];
             newRow.water_target = values?.[8];
+          } else if (tableName === 'food_observations') {
+            newRow.id = values?.[0];
+            newRow.food_id = values?.[1];
+            newRow.source_type = values?.[2];
+            newRow.estimated_amount = values?.[3];
+            newRow.final_amount = values?.[4];
+            newRow.amount_unit = values?.[5];
+            newRow.confidence = values?.[6];
+            newRow.raw_input = values?.[7];
+            newRow.interpretation_json = values?.[8];
+            newRow.user_corrected = values?.[9];
+            newRow.created_at = values?.[10];
+          } else if (tableName === 'food_aliases') {
+            newRow.id = values?.[0];
+            newRow.food_id = values?.[1];
+            newRow.alias = values?.[2];
+            newRow.normalized_alias = values?.[3];
+            newRow.source = values?.[4];
+            newRow.confidence = values?.[5];
+            newRow.created_at = values?.[6];
+          } else if (tableName === 'imports') {
+            newRow.id = values?.[0];
+            newRow.source_type = values?.[1];
+            newRow.filename = values?.[2];
+            newRow.imported_at = values?.[3];
+            newRow.status = values?.[4];
+            newRow.row_count = values?.[5];
+            newRow.error_count = values?.[6];
           } else if (tableName === 'foods') {
             newRow.id = values?.[0];
             newRow.canonical_name = values?.[1];

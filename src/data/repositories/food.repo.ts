@@ -1,5 +1,6 @@
 import { SQLiteDBConnection } from '@capacitor-community/sqlite';
 import { Food, InsertFood, UpdateFood } from '../types';
+import { FoodReference } from '@domain/types';
 
 export class FoodRepository {
   constructor(private db: SQLiteDBConnection) {}
@@ -8,6 +9,21 @@ export class FoodRepository {
     return typeof crypto !== 'undefined' && crypto.randomUUID 
       ? crypto.randomUUID() 
       : Math.random().toString(36).substring(2) + Date.now().toString(36);
+  }
+
+  toFoodReference(food: Food): FoodReference {
+    return {
+      id: food.id,
+      canonicalName: food.canonical_name,
+      caloriesPer100g: food.calories_per_100g,
+      proteinPer100g: food.protein_per_100g,
+      carbsPer100g: food.carbs_per_100g,
+      fatPer100g: food.fat_per_100g,
+      waterPer100g: food.water_per_100g,
+      nutritionBasis: food.nutrition_basis,
+      confidence: food.confidence,
+      sourceType: food.source_type
+    };
   }
 
   async findById(id: string): Promise<Food | null> {
