@@ -1,7 +1,7 @@
 # EverydayFuel — Handover to Next Chat
 
 **Date:** 2026-08-19
-**From:** Laguna (DeepSeek V4 Flash), pass 5
+**From:** Laguna (DeepSeek V4 Flash), pass 6
 **Status:** Build + tests green; working tree NOT committed (see §6)
 
 ---
@@ -36,13 +36,19 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - `src/services/backup/encryption.ts` (new) — password-based encryption envelope via the built-in **Web Crypto API** (zero new dependencies, fully local/offline): PBKDF2-HMAC-SHA256 (200,000 iterations, 16-byte random salt) → AES-256-GCM (12-byte random IV). Envelope is JSON carrying base64 salt/iv/ciphertext + KDF params, so the file is self-contained and portable. `encryptBackup(jsonText, password)` → envelope string (throws on empty/whitespace-only password); `decryptBackup(payload, password)` → original JSON or `null` (wrong password, tampering, or non-envelope); `isEncryptedBackup(text)` → cheap format sniff.
   - `src/main.ts` — backup handler now prompts for a password (set + confirm), encrypts, then downloads; restore handler detects an encrypted file, prompts for the password, decrypts, then runs the existing parse/validate/restore flow. **Plain JSON archives from previous passes remain fully restorable without a password** (backward compatible).
   - `src/services/backup/encryption.test.ts` (new, 17 tests) — envelope structure (fields, base64 lengths, iteration count), no plaintext leakage inside the envelope, fresh salt/IV per run (two runs differ), empty/whitespace password rejection, byte-for-byte round-trip (also at the real default 200k KDF cost), decrypted output validates as an EverydayFuel archive, wrong password → null, missing envelope fields → null, plain JSON/garbage → null, AES-GCM authentication failure on tampered ciphertext → null, tampered salt → null, foreign format → null, and `isEncryptedBackup` true/false cases.
+- **Pass 6 additions:** **scoring now reproduces the old app's full output contract (spec §18 + §29)**:
+  - `src/domain/scoring.ts` — the numeric algorithm is untouched (score, scoreCode, components, clamping all identical), but `result`, `scoreTier` and `reason` now reproduce `old_app/app.js` `exportDataToCSV` byte-for-byte: `result` is the visual state (`Green`/`Grey`/`Red`), `scoreTier` is the legacy CSS class (`score-pos-5` … `score-0` … `score-neg-3` — replaces the invented word labels 'perfect'/'excellent'/…), and `reason` uses the legacy templated sentences ("Flawless day. Nailed everything: …", "Off target across the board (…)", etc.). `getScoreTier` (the invented word labels) was removed — nothing referenced it except `calculateScore` itself; the UI uses `getScoreColorClass`, which is unchanged.
+  - `src/domain/scoring-regression.test.ts` (new, 3 tests) — replays **95 of the 96 rows of the supplied legacy export `exportexample.csv`** (the regression reference from spec §21/§29) through the new `calculateScore` and asserts byte-for-byte equality of `score`, `scoreCode`, `scoreTier`, `result` and `reason` against the old app's actual output. The single non-replayable row (`2026-05-03`) is asserted and documented: the legacy CSV records only "Pure Water (ml)" but the old app scored hydration against pure + drink/food water, so rows where the reason says "hydration goal met" while pure water is < 80% of target cannot be reconstructed from the CSV alone.
+  - `src/domain/domain.test.ts` — updated `scoreTier` expectation ('perfect' → 'score-pos-5') and extended two `calculateScore` tests with legacy `result`/`reason` assertions.
+  - `src/data/repositories/sqlite-real.test.ts` — fixed a **pre-existing flaky test**: the import-history test inserted two rows in the same millisecond, making `ORDER BY imported_at DESC` ambiguous in real SQLite (occasionally failed with 'csv' before 'supabase'). Now uses `vi.useFakeTimers()` with distinct system times so the ordering assertion is deterministic.
 
 ## 3. Verification status
 
 | Check | Result |
 |---|---|
 | `npm run build` (tsc strict + Vite) | ✅ passes |
-| `npm test` (vitest 4.1.11, 137 tests, 10 files) | ✅ passes |
+| `npm test` (vitest 4.1.11, 140 tests, 11 files) | ✅ passes (run 3× to confirm no flakes) |
+| Scoring regression vs legacy export (scoring-regression.test.ts, spec §29) | ✅ passes — 95/96 rows of `exportexample.csv` reproduce `score`/`scoreCode`/`scoreTier`/`result`/`reason` byte-for-byte; the 1 non-replayable row (2026-05-03) is asserted + documented |
 | Real-SQLite migration + repository + backup/restore round-trips (sql.js in-memory engine, migration.test.ts + sqlite-real.test.ts) | ✅ passes — all repository SQL (JOINs, GROUP BY, LIKE, SUM, bound LIMIT, ON CONFLICT) now proven against a real SQL engine, including FK-safe restore ordering with `PRAGMA foreign_keys = ON` |
 | Encrypted backup (encryption.test.ts, 17 tests: PBKDF2→AES-GCM round-trip, tamper detection, wrong-password, envelope structure) | ✅ passes |
 | FoodService pipeline (service test w/ in-memory connection) | ✅ passes |
@@ -59,6 +65,8 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 - `btn-save-goals` still creates a new goal per save (pre-existing)
 - Label-OCR fallback parser preserves the old-app regex (old_app/api/index.py): for kJ-first EU energy lines it captures the kJ value as `caloriesPer100g` — locked in by a regression test (gemma-client.test.ts), documented, not "fixed" because that would change preserved old-app behavior; revisit when wiring Phase 7.
 - History day view shows real food names now (`food_name` join added)
+- Scoring regression coverage has one blind spot, locked in by the test itself: `2026-05-03` in exportexample.csv is not replayable because the legacy CSV exports only pure water while the old app scored hydration against pure + drink/food water (the bridging water isn't in the file). The new hydration-gating rule (spec §16) also means the new app intentionally scores with `effectiveTotal` rather than the old raw sum — no legacy row contradicts this within the replayable set.
+- Zero-target semantics preserved as-is (pre-existing): a 0 target yields a 0 component (no penalty) and reasons "calories lower than goal" etc. The legacy app would have divided by zero (→ +Infinity → "higher than goal"); no legacy CSV row has a zero target, so this was never observed in real data.
 
 ## 5. What's next (from PLAN.md §9 handoff)
 
@@ -66,13 +74,13 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 2. **P2P transfer** (Phase 9) — encrypted device-to-device via existing import/export/restore logic
 3. **Laptop/desktop view** (Phase 10)
 4. **Offline validation pass** (Phase 11) — verify all core flows with network off
-5. ~~More regression tests~~ — the pass-3 open gaps are closed: real-SQLite migration test via sql.js, OCR parsing edge cases, combo expansion round-trip through repos (pass 4). Remaining possible coverage: repository tests on the degraded fallback shim, CSV export date-range/water-source rows, scoring against the old app's representative outputs (spec §29 regression comparison)
+5. ~~More regression tests~~ — closed: real-SQLite migration + repository tests (pass 4), OCR parsing edge cases (pass 4), combo expansion round-trip (pass 4), **scoring vs the old app's representative outputs (pass 6, spec §29 — 95/96 rows of exportexample.csv byte-identical)**. Remaining possible coverage: repository tests on the degraded fallback shim, CSV export date-range/water-source rows.
 6. ~~Restore-from-backup UI~~ — done in pass 3 (Settings → Restore from Backup Archive)
 7. ~~Encrypted backup format~~ — done in pass 5 (spec §23; see §2/§4). Note for Phase 7/device work: replace `window.prompt` password entry with a proper in-app modal for Android WebView.
 
 ## 6. Before you start
 
-- **The working tree is NOT committed.** Pass-5 changes: `src/services/backup/encryption.ts` (new), `src/services/backup/encryption.test.ts` (new), `src/main.ts` (backup/restore handlers wired to encrypt/decrypt). Commit this pass first.
+- **The working tree is NOT committed.** Pass-6 changes: `src/domain/scoring.ts` (legacy result/scoreTier/reason text, `getScoreTier` removed), `src/domain/scoring-regression.test.ts` (new), `src/domain/domain.test.ts` (updated expectations + legacy-text assertions), `src/data/repositories/sqlite-real.test.ts` (flake fix), `src/domain/types.ts` (comment only). Commit this pass first.
 - `vitest` is a devDependency; the "test" script runs `vitest run` (137 tests, 10 files).
 - The sql.js real-SQLite tests need no configuration: `initSqlJs()` loads `node_modules/sql.js/dist/sql-wasm.wasm` automatically in Node. Do not delete `src/types/sql-js.d.ts` — it is the type declaration for the untyped `sql.js` package (tsc strict would fail without it).
 - AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes).

@@ -2,26 +2,22 @@ import { DailyTotals, GoalTargets, HydrationBreakdown, ScoreResult, ScoreCompone
 
 /**
  * Calculate daily consistency score.
- * 
- * Algorithm (preserved from legacy):
+ *
+ * Numeric algorithm (preserved from legacy, old_app/app.js):
  * - Calories: if 85% <= actual/target <= 115% → +1; if > 115% → -1
  * - Protein: if actual >= 90% of target → +1
  * - Carbs: if 85% <= actual/target <= 115% → +1; if > 115% → -1
  * - Fat: if 85% <= actual/target <= 115% → +1; if > 115% → -1
  * - Hydration: if water >= 80% of target → +1
- * 
- * Total score clamped to [-3, +5]
- * 
- * Score tiers:
- *   +5: 'perfect' (all targets met precisely)
- *   +4: 'excellent'
- *   +3: 'great'
- *   +2: 'good'
- *   +1: 'fair'
- *    0: 'neutral'
- *   -1: 'below'
- *   -2: 'poor'
- *   -3: 'critical'
+ *
+ * Total score clamped to [-3, +5].
+ *
+ * The output contract reproduces the legacy app (old_app/app.js
+ * exportDataToCSV): `result` is the visual state ('Green'/'Grey'/'Red'),
+ * `scoreTier` is the legacy CSS class ('score-pos-5' … 'score-0' …
+ * 'score-neg-3'), and `reason` follows the legacy templated sentences.
+ * Verified against the supplied legacy export (exportexample.csv) by
+ * scoring-regression.test.ts.
  */
 export function calculateScore(totals: DailyTotals, goals: GoalTargets, hydration: HydrationBreakdown): ScoreResult {
   const components: ScoreComponents = {
@@ -58,32 +54,70 @@ export function calculateScore(totals: DailyTotals, goals: GoalTargets, hydratio
   const scoreSign = rawScore > 0 ? '+' : '';
   const scoreCode = `${scoreSign}${rawScore}`;
 
+  const { result, scoreTier, reason } = buildLegacyScoreText(rawScore, components);
+
   return {
     score: rawScore,
-    scoreTier: getScoreTier(rawScore),
+    scoreTier,
     scoreCode,
-    result: `Scored ${scoreCode}`,
-    reason: `Calculated from macro and hydration targets.`,
+    result,
+    reason,
     components
   };
 }
 
 /**
- * Get the score tier label.
+ * Reproduce the legacy score output contract from old_app/app.js
+ * (exportDataToCSV): visual state, score tier (legacy CSS class names)
+ * and the templated reason sentences, byte-for-byte.
  */
-export function getScoreTier(score: number): string {
-  switch (score) {
-    case 5: return 'perfect';
-    case 4: return 'excellent';
-    case 3: return 'great';
-    case 2: return 'good';
-    case 1: return 'fair';
-    case 0: return 'neutral';
-    case -1: return 'below';
-    case -2: return 'poor';
-    case -3: return 'critical';
-    default: return 'neutral';
+function buildLegacyScoreText(score: number, components: ScoreComponents): { result: string; scoreTier: string; reason: string } {
+  const positives: string[] = [];
+  const negatives: string[] = [];
+
+  if (components.calories === 1) positives.push('calories on target');
+  else if (components.calories === -1) negatives.push('calories higher than goal');
+  else negatives.push('calories lower than goal');
+
+  if (components.protein === 1) positives.push('protein goal met');
+  else negatives.push('low protein');
+
+  if (components.carbs === 1) positives.push('carbs on target');
+  else if (components.carbs === -1) negatives.push('carbs higher than goal');
+  else negatives.push('carbs lower than goal');
+
+  if (components.fat === 1) positives.push('fats on target');
+  else if (components.fat === -1) negatives.push('fats higher than goal');
+  else negatives.push('fats lower than goal');
+
+  if (components.hydration === 1) positives.push('hydration goal met');
+  else negatives.push('low hydration');
+
+  const posText = positives.length > 0 ? positives.join(', ') : 'nothing';
+  const negText = negatives.length > 0 ? negatives.join(', ') : 'nothing';
+
+  if (score === 5) {
+    return { result: 'Green', scoreTier: 'score-pos-5', reason: `Flawless day. Nailed everything: ${posText}.` };
   }
+  if (score >= 3 && score <= 4) {
+    return { result: 'Green', scoreTier: `score-pos-${score}`, reason: `Great day. Hit ${posText}, but had issues with ${negText}.` };
+  }
+  if (score >= 1 && score <= 2) {
+    return { result: 'Green', scoreTier: `score-pos-${score}`, reason: `Good outweighed the bad. Managed ${posText}, but had issues with ${negText}.` };
+  }
+  if (score === 0) {
+    if (positives.length === 0) {
+      return { result: 'Grey', scoreTier: 'score-0', reason: `Off target across the board (${negText}).` };
+    }
+    return { result: 'Grey', scoreTier: 'score-0', reason: `Even split. Achieved ${posText}, but offset by ${negText}.` };
+  }
+  if (score === -1) {
+    return { result: 'Red', scoreTier: 'score-neg-1', reason: `Slightly off. Struggled with ${negText}, only managing ${posText}.` };
+  }
+
+  const baseReason = `Rough day. Issues with ${negText}.`;
+  const reason = positives.length > 0 ? `${baseReason} The only hit was ${posText}.` : baseReason;
+  return { result: 'Red', scoreTier: `score-neg-${Math.abs(score)}`, reason };
 }
 
 /**

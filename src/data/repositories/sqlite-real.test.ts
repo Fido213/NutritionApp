@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import initSqlJs from 'sql.js';
 // @ts-ignore — Vite ?raw import (same pattern as src/data/database.ts)
 import v001InitSql from '../migrations/v001__init.sql?raw';
@@ -473,8 +473,17 @@ describe('DailyRecord / Observation / Import repositories on a real SQLite datab
     const { conn } = createRealDb();
     const repo = new ImportRepository(conn);
 
-    await repo.recordImport({ source_type: 'csv', filename: 'old-app.csv', status: 'completed', row_count: 42, error_count: 0 });
-    await repo.recordImport({ source_type: 'supabase', filename: null, status: 'completed', row_count: 100, error_count: 3 });
+    // Deterministic imported_at values: two inserts in the same millisecond
+    // make ORDER BY imported_at DESC ambiguous in real SQLite.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-19T10:00:00.000Z'));
+      await repo.recordImport({ source_type: 'csv', filename: 'old-app.csv', status: 'completed', row_count: 42, error_count: 0 });
+      vi.setSystemTime(new Date('2026-08-19T11:00:00.000Z'));
+      await repo.recordImport({ source_type: 'supabase', filename: null, status: 'completed', row_count: 100, error_count: 3 });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const history = await repo.getImportHistory();
     expect(history).toHaveLength(2);

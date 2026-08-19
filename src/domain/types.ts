@@ -46,7 +46,7 @@ export interface HydrationBreakdown {
 
 export interface ScoreResult {
   score: number;       // -3 to +5
-  scoreTier: string;   // e.g. 'excellent', 'good', 'fair', 'poor'
+  scoreTier: string;   // legacy CSS class: 'score-pos-5' … 'score-0' … 'score-neg-3'
   scoreCode: string;   // e.g. '+5', '+3', '0', '-2'
   result: string;      // Human-readable result
   reason: string;      // Detailed breakdown

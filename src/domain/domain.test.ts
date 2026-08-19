@@ -124,8 +124,12 @@ describe('calculateScore', () => {
   it('scores +5 perfect when every target is met', () => {
     const result = calculateScore(totals, goals, hydration);
     expect(result.score).toBe(5);
-    expect(result.scoreTier).toBe('perfect');
+    expect(result.scoreTier).toBe('score-pos-5');
     expect(result.scoreCode).toBe('+5');
+    expect(result.result).toBe('Green');
+    expect(result.reason).toBe(
+      'Flawless day. Nailed everything: calories on target, protein goal met, carbs on target, fats on target, hydration goal met.'
+    );
   });
 
   it('scores -1 for calories above 115% of target', () => {
@@ -146,6 +150,11 @@ describe('calculateScore', () => {
     expect(result.components.calories).toBe(1);
     expect(result.components.protein).toBe(0);
     expect(result.score).toBe(1);
+    expect(result.scoreTier).toBe('score-pos-1');
+    expect(result.result).toBe('Green');
+    expect(result.reason).toBe(
+      'Good outweighed the bad. Managed calories on target, but had issues with low protein, carbs lower than goal, fats lower than goal, low hydration.'
+    );
   });
 
   it('gives hydration +1 only at 80% of target or above', () => {
