@@ -22,7 +22,7 @@ import { normalizeFoodName } from '@domain/logging';
 import { getTodayDateString, getDateRange, formatDateISO } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
 import { parseCSV } from '@services/import/csv-import';
-import { createBackupArchive, downloadBackup } from '@services/backup/backup';
+import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive } from '@services/backup/backup';
 import { GemmaClient } from '@services/ai/gemma-client';
 import { FoodService } from '@services/food/food-service';
 import { GoalTargets } from '@domain/types';
@@ -102,6 +102,7 @@ async function initApp() {
     setupEditModalHandlers();
     setupImportHandlers();
     setupBackupHandler();
+    setupRestoreHandler();
 
     showToast('EverydayFuel loaded (Local SQLite)', 2500);
 
@@ -827,6 +828,65 @@ function setupBackupHandler() {
     const archive = createBackupArchive(data);
     downloadBackup(`EverydayFuel_Backup_${getTodayDateString()}.json`, archive);
     showToast('Backup archive exported');
+  });
+}
+
+// ---------- Restore from Backup ----------
+
+function setupRestoreHandler() {
+  document.getElementById('btn-restore')?.addEventListener('click', () => {
+    document.getElementById('restore-file-input')?.click();
+  });
+
+  document.getElementById('restore-file-input')?.addEventListener('change', async (e) => {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const text = await file.text();
+    const archive = parseBackupArchive(text);
+    if (!archive) {
+      showToast('Invalid backup archive');
+      input.value = '';
+      return;
+    }
+
+    const validationErrors = validateBackupArchive(archive);
+    if (validationErrors.length > 0) {
+      showToast(validationErrors[0]);
+      input.value = '';
+      return;
+    }
+
+    if (!window.confirm('Restore this backup? All current local data will be replaced.')) {
+      input.value = '';
+      return;
+    }
+
+    try {
+      if (dbManager.isFallback()) {
+        dbManager.replaceFallbackStore(archive.data);
+      } else {
+        const db = await dbManager.getConnection();
+        const result = await restoreBackupArchive(db, archive);
+        if (!result.ok) {
+          showToast(result.errors[0] || 'Restore failed');
+          input.value = '';
+          return;
+        }
+      }
+
+      lastComputedScoreDate = '';
+      const date = store.getState().selectedDate;
+      await refreshStateForDate(date);
+      const rowCount = Object.values(archive.data).reduce((n, rows) => n + (Array.isArray(rows) ? rows.length : 0), 0);
+      showToast(`Restored backup · ${rowCount} rows`);
+    } catch (err) {
+      console.error('Restore failed:', err);
+      showToast('Restore failed — check the backup file');
+    } finally {
+      input.value = '';
+    }
   });
 }
 

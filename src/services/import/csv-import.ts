@@ -17,7 +17,7 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
   const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
   if (lines.length < 2) return { rows: [], errors: ['CSV file is empty or missing headers'] };
 
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
+  const headers = splitCSVLine(lines[0]).map(h => h.trim().toLowerCase().replace(/"/g, ''));
   
   const dateIdx = headers.findIndex(h => h.includes('date'));
   const nameIdx = headers.findIndex(h => h.includes('food') || h.includes('name') || h.includes('item'));
@@ -35,7 +35,7 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
   const errors: string[] = [];
 
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+    const cols = splitCSVLine(lines[i]).map(c => c.trim().replace(/^"|"$/g, ''));
     if (cols.length <= dateIdx) continue;
 
     const dateStr = cols[dateIdx];
@@ -63,4 +63,41 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
   }
 
   return { rows, errors };
+}
+
+/**
+ * Split a single CSV line into fields, honoring double-quoted fields
+ * (so "Chicken, Grilled" stays one field). Adjacent quotes inside a
+ * quoted field are unescaped per the CSV convention.
+ */
+function splitCSVLine(line: string): string[] {
+  const cols: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      cols.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+
+  cols.push(current);
+  return cols;
 }

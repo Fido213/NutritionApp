@@ -71,6 +71,22 @@ export class DatabaseManager {
     return this.db || this.createFallbackConnection();
   }
 
+  isFallback(): boolean {
+    return this.isFallbackMode;
+  }
+
+  /**
+   * Replace the entire fallback store with the given table data.
+   * Used by restore in fallback mode, where the in-memory store is the whole database.
+   */
+  replaceFallbackStore(data: Record<string, any[]>): void {
+    this.fallbackStore.clear();
+    Object.entries(data).forEach(([table, rows]) => {
+      this.fallbackStore.set(table, Array.isArray(rows) ? rows : []);
+    });
+    this.saveFallbackStore();
+  }
+
   private initFallbackStore() {
     // Load from localStorage if present
     const saved = localStorage.getItem('everydayfuel_fallback_db');
