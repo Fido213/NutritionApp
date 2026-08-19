@@ -23,6 +23,7 @@ import { getTodayDateString, getDateRange, formatDateISO } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
 import { parseCSV } from '@services/import/csv-import';
 import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive } from '@services/backup/backup';
+import { encryptBackup, decryptBackup, isEncryptedBackup } from '@services/backup/encryption';
 import { GemmaClient } from '@services/ai/gemma-client';
 import { FoodService } from '@services/food/food-service';
 import { GoalTargets } from '@domain/types';
@@ -826,8 +827,30 @@ function setupBackupHandler() {
     }
 
     const archive = createBackupArchive(data);
-    downloadBackup(`EverydayFuel_Backup_${getTodayDateString()}.json`, archive);
-    showToast('Backup archive exported');
+
+    const password = window.prompt('Set a password for the encrypted backup archive:');
+    if (password === null) {
+      showToast('Backup cancelled');
+      return;
+    }
+    if (!password) {
+      showToast('Password must not be empty');
+      return;
+    }
+    const confirmed = window.prompt('Confirm the backup password:');
+    if (confirmed !== password) {
+      showToast('Passwords do not match');
+      return;
+    }
+
+    try {
+      const encrypted = await encryptBackup(archive, password);
+      downloadBackup(`EverydayFuel_Backup_${getTodayDateString()}.json`, encrypted);
+      showToast('Encrypted backup archive exported');
+    } catch (err) {
+      console.error('Encryption failed:', err);
+      showToast('Backup failed — could not encrypt');
+    }
   });
 }
 
@@ -844,7 +867,24 @@ function setupRestoreHandler() {
     if (!file) return;
 
     const text = await file.text();
-    const archive = parseBackupArchive(text);
+
+    let backupText = text;
+    if (isEncryptedBackup(text)) {
+      const password = window.prompt('Enter the backup password:');
+      if (password === null) {
+        input.value = '';
+        return;
+      }
+      const decrypted = await decryptBackup(text, password);
+      if (decrypted === null) {
+        showToast('Wrong password or corrupted backup');
+        input.value = '';
+        return;
+      }
+      backupText = decrypted;
+    }
+
+    const archive = parseBackupArchive(backupText);
     if (!archive) {
       showToast('Invalid backup archive');
       input.value = '';

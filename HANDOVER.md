@@ -1,7 +1,7 @@
 # EverydayFuel — Handover to Next Chat
 
 **Date:** 2026-08-19
-**From:** Laguna (DeepSeek V4 Flash), pass 4
+**From:** Laguna (DeepSeek V4 Flash), pass 5
 **Status:** Build + tests green; working tree NOT committed (see §6)
 
 ---
@@ -32,23 +32,28 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - `src/data/repositories/sqlite-real.test.ts` (27 tests) — a thin adapter wraps sql.js in the Capacitor `SQLiteDBConnection` surface, then exercises every repository against a REAL SQL engine: food insert/update/upsert/alias-JOIN/fuzzy-LIKE-with-bound-LIMIT, log insert/JOIN food_name/SUM totals/duplicate/update/delete, water GROUP BY by source, goal end-date closing + boundary resolution + overlap validation, daily records, observations, imports, barcode ON CONFLICT re-map + verified flag, combos (create/get/list/update/cascade delete, FK rejection), FK cascades (foods → aliases/barcodes) and the no-silent-history-loss rule (foods with logs can't be deleted), combo expansion round-trip (repo combo → domain `expandCombo` → logs → daily totals match), and backup/restore round-trip on real SQLite (full-table equality, complete replacement, transaction rollback on constraint failure leaves DB untouched, empty-archive restore)
   - `src/services/ai/gemma-client.test.ts` (+4 tests, 11 → 15) — label OCR edge cases: unit-suffixed values, "of which" sub-lines, missing macros stay 0, and a documented test locking the preserved old-app behavior for kJ-first EU energy lines
   - `src/types/sql-js.d.ts` — minimal ambient declarations for the untyped `sql.js` package (test-only)
+- **Pass 5 additions:** **encrypted backup format (spec §23)** — the Backup button now really encrypts:
+  - `src/services/backup/encryption.ts` (new) — password-based encryption envelope via the built-in **Web Crypto API** (zero new dependencies, fully local/offline): PBKDF2-HMAC-SHA256 (200,000 iterations, 16-byte random salt) → AES-256-GCM (12-byte random IV). Envelope is JSON carrying base64 salt/iv/ciphertext + KDF params, so the file is self-contained and portable. `encryptBackup(jsonText, password)` → envelope string (throws on empty/whitespace-only password); `decryptBackup(payload, password)` → original JSON or `null` (wrong password, tampering, or non-envelope); `isEncryptedBackup(text)` → cheap format sniff.
+  - `src/main.ts` — backup handler now prompts for a password (set + confirm), encrypts, then downloads; restore handler detects an encrypted file, prompts for the password, decrypts, then runs the existing parse/validate/restore flow. **Plain JSON archives from previous passes remain fully restorable without a password** (backward compatible).
+  - `src/services/backup/encryption.test.ts` (new, 17 tests) — envelope structure (fields, base64 lengths, iteration count), no plaintext leakage inside the envelope, fresh salt/IV per run (two runs differ), empty/whitespace password rejection, byte-for-byte round-trip (also at the real default 200k KDF cost), decrypted output validates as an EverydayFuel archive, wrong password → null, missing envelope fields → null, plain JSON/garbage → null, AES-GCM authentication failure on tampered ciphertext → null, tampered salt → null, foreign format → null, and `isEncryptedBackup` true/false cases.
 
 ## 3. Verification status
 
 | Check | Result |
 |---|---|
 | `npm run build` (tsc strict + Vite) | ✅ passes |
-| `npm test` (vitest 4.1.11, 120 tests, 9 files) | ✅ passes |
+| `npm test` (vitest 4.1.11, 137 tests, 10 files) | ✅ passes |
 | Real-SQLite migration + repository + backup/restore round-trips (sql.js in-memory engine, migration.test.ts + sqlite-real.test.ts) | ✅ passes — all repository SQL (JOINs, GROUP BY, LIKE, SUM, bound LIMIT, ON CONFLICT) now proven against a real SQL engine, including FK-safe restore ordering with `PRAGMA foreign_keys = ON` |
+| Encrypted backup (encryption.test.ts, 17 tests: PBKDF2→AES-GCM round-trip, tamper detection, wrong-password, envelope structure) | ✅ passes |
 | FoodService pipeline (service test w/ in-memory connection) | ✅ passes |
 | Backup/restore round trip + restore atomicity/rollback (backup.test.ts + sqlite-real.test.ts) | ✅ passes |
 | Gemma fallback text + label-OCR parsers (15 tests) | ✅ passes |
-| Manual click-through on device/browser | ❌ NOT run (no browser/device in environment) |
+| Manual click-through on device/browser | ❌ NOT run (no browser/device in environment) — the password prompt flow (window.prompt) and file download were not manually exercised |
 
 ## 4. Known limitations (unchanged, documented in pass-3 log)
 
 - Fallback connection is a degraded shim: UPDATE statements not applied (edit/rename won't persist in fallback mode), water GROUP BY and `combo_items` not simulated. Restore in fallback mode bypasses SQL and replaces the store wholesale (correct, but the other degraded behaviors still apply). Note: the real-SQLite suite proves all these queries work correctly on the real engine — the shim is the only degraded path.
-- Backup archives are plain JSON, **not actually encrypted** despite the button label (spec §23 asks for encrypted backup — pending).
+- Backup archives are **now encrypted by default** (PBKDF2 + AES-256-GCM, pass 5). One caveat: the password is prompted via `window.prompt` — this works in desktop browsers, but Android WebView support for `window.prompt` is unreliable, so the password prompt may need a custom modal when testing on-device (same pattern already used by the restore `window.confirm`).
 - Native ML Kit label OCR, camera barcode scanning, food-image analysis = **Phase 7, not done**
 - On-device Gemma inference requires the native plugin + model file on the device
 - `btn-save-goals` still creates a new goal per save (pre-existing)
@@ -63,12 +68,12 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 4. **Offline validation pass** (Phase 11) — verify all core flows with network off
 5. ~~More regression tests~~ — the pass-3 open gaps are closed: real-SQLite migration test via sql.js, OCR parsing edge cases, combo expansion round-trip through repos (pass 4). Remaining possible coverage: repository tests on the degraded fallback shim, CSV export date-range/water-source rows, scoring against the old app's representative outputs (spec §29 regression comparison)
 6. ~~Restore-from-backup UI~~ — done in pass 3 (Settings → Restore from Backup Archive)
-7. Encrypted backup format (spec §23) — current archives are plain JSON
+7. ~~Encrypted backup format~~ — done in pass 5 (spec §23; see §2/§4). Note for Phase 7/device work: replace `window.prompt` password entry with a proper in-app modal for Android WebView.
 
 ## 6. Before you start
 
-- **The working tree is NOT committed.** Pass-4 changes: `src/data/migrations/migration.test.ts` (new), `src/data/repositories/sqlite-real.test.ts` (new), `src/types/sql-js.d.ts` (new), `src/services/ai/gemma-client.test.ts` (+4 OCR tests). Commit this pass first.
-- `vitest` is a devDependency; the "test" script runs `vitest run` (120 tests, 9 files).
+- **The working tree is NOT committed.** Pass-5 changes: `src/services/backup/encryption.ts` (new), `src/services/backup/encryption.test.ts` (new), `src/main.ts` (backup/restore handlers wired to encrypt/decrypt). Commit this pass first.
+- `vitest` is a devDependency; the "test" script runs `vitest run` (137 tests, 10 files).
 - The sql.js real-SQLite tests need no configuration: `initSqlJs()` loads `node_modules/sql.js/dist/sql-wasm.wasm` automatically in Node. Do not delete `src/types/sql-js.d.ts` — it is the type declaration for the untyped `sql.js` package (tsc strict would fail without it).
 - AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes).
 - Read `Ai Guidelines/NutritionOS — Agent Governance & Development Rules.md` (em-dash in filename) before editing; PLAN.md §7 lists what must NOT change (scoring, hydration gating, goal resolution, v001 schema, domain types, CSV export format).
