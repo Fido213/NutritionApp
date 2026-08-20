@@ -29,22 +29,39 @@ const OPEN_TIMEOUT_MS = 60_000;
  * No TURN is configured — payloads are never relayed through third parties;
  * host candidates still connect directly on a plain LAN/hotspot.
  */
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' }
 ];
 
+/**
+ * Resolve once gathering is complete — but never block pairing on slow or
+ * unreachable STUN servers: as soon as the first candidate is in and a short
+ * grace period passes (or the absolute cap is hit), resolve with the SDP we
+ * have so far. Unreachable STUN can otherwise keep the gathering phase open
+ * indefinitely (the pre-pass-10 "Timed out gathering connection candidates"
+ * failure), even though host candidates arrived in the first few hundred ms.
+ */
 function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs: number): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error('Timed out gathering connection candidates'));
-    }, timeoutMs);
+  return new Promise((resolve) => {
+    const GRACE_AFTER_FIRST_CANDIDATE_MS = 2000;
+    const ABSOLUTE_CAP_MS = Math.min(timeoutMs, 15_000);
+    let firstCandidateAt = 0;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, ABSOLUTE_CAP_MS);
+    pc.addEventListener('icecandidate', () => {
+      if (!firstCandidateAt) firstCandidateAt = Date.now();
+      else if (Date.now() - firstCandidateAt >= GRACE_AFTER_FIRST_CANDIDATE_MS) finish();
+    });
     pc.addEventListener('icegatheringstatechange', () => {
-      if (pc.iceGatheringState === 'complete') {
-        clearTimeout(timer);
-        resolve();
-      }
+      if (pc.iceGatheringState === 'complete') finish();
     });
   });
 }

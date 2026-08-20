@@ -141,17 +141,47 @@
         <div class="modal-content" style="max-width: 380px;">
             <h3 id="p2p-title" style="margin-bottom: 12px; color: var(--accent-glow);">Peer Transfer</h3>
             <div id="p2p-out-section">
-                <div id="p2p-out-label" style="font-size: 13px; color: var(--text-dim); margin-bottom: 6px;">Step 1 — Send this code to the other device:</div>
-                <textarea id="p2p-code-out" readonly rows="6" style="width: 100%; margin-bottom: 8px; background: var(--surface-light); border: 1px solid var(--border); color: var(--text-dim); padding: 10px; border-radius: 8px; outline: none; font-family: inherit; font-size: 11px; resize: vertical; box-sizing: border-box;"></textarea>
+                <div id="p2p-out-label" style="font-size: 13px; color: var(--text-dim); margin-bottom: 6px;">Step 1 — Show this code to the other device:</div>
+                <div style="text-align: center; margin-bottom: 8px; background: #fff; border-radius: 12px; padding: 8px;"><img id="p2p-qr-code" alt="Pairing QR code" style="width: 200px; height: 200px; image-rendering: pixelated;"></div>
+                <details style="margin-bottom: 10px; text-align: center;">
+                    <summary style="font-size: 11px; color: var(--text-dim); cursor: pointer;">Copy code as text instead</summary>
+                    <textarea id="p2p-code-out" readonly rows="5" style="width: 100%; margin-top: 6px; background: var(--surface-light); border: 1px solid var(--border); color: var(--text-dim); padding: 10px; border-radius: 8px; outline: none; font-family: inherit; font-size: 11px; resize: vertical; box-sizing: border-box;"></textarea>
+                </details>
                 <button id="btn-p2p-copy" class="btn-primary" style="width: 100%; margin-bottom: 10px;">Copy Code</button>
             </div>
             <div id="p2p-in-section">
-                <div id="p2p-in-label" style="font-size: 13px; color: var(--text-dim); margin-bottom: 6px;">Step 2 — Paste the other device's code:</div>
-                <textarea id="p2p-code-in" rows="6" style="width: 100%; margin-bottom: 8px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; font-family: inherit; font-size: 11px; resize: vertical; box-sizing: border-box;"></textarea>
+                <div id="p2p-in-label" style="font-size: 13px; color: var(--text-dim); margin-bottom: 6px;">Step 1 — Scan the other device's code:</div>
+                <button id="btn-p2p-scan" class="btn-primary" style="width: 100%; margin-bottom: 10px; background: var(--accent-glow); color: #000;">Scan QR Code</button>
+                <details style="margin-bottom: 10px; text-align: center;">
+                    <summary style="font-size: 11px; color: var(--text-dim); cursor: pointer;">Paste the code manually instead</summary>
+                    <textarea id="p2p-code-in" rows="5" style="width: 100%; margin-top: 6px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; font-family: inherit; font-size: 11px; resize: vertical; box-sizing: border-box;"></textarea>
+                </details>
                 <button id="btn-p2p-connect" class="btn-primary" style="width: 100%; margin-bottom: 10px; background: #3b82f6;">Connect</button>
             </div>
             <div id="p2p-status" style="font-size: 13px; color: var(--text-dim); min-height: 40px; margin-bottom: 10px; text-align: center;"></div>
+
+            <details id="p2p-turn-section" style="margin-bottom: 12px; border-top: 1px solid var(--border); padding-top: 10px;">
+                <summary style="font-size: 12px; color: var(--text-dim); font-weight: 700; cursor: pointer;">Optional: TURN server (for pairing across different networks)</summary>
+                <div style="margin-top: 8px; font-size: 11px; color: var(--text-dim); line-height: 1.5;">Only needed when the two devices are on different networks (host + STUN candidates can't connect). Leave empty for same-LAN/hotspot pairing.</div>
+                <input type="text" id="p2p-turn-url" placeholder="turn:host:3478" style="width: 100%; margin-top: 8px; margin-bottom: 6px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px; outline: none; box-sizing: border-box; font-family: inherit; font-size: 12px;">
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="p2p-turn-user" placeholder="Username (optional)" style="flex: 1; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px; outline: none; box-sizing: border-box; font-family: inherit; font-size: 12px;">
+                    <input type="password" id="p2p-turn-pass" placeholder="Password (optional)" style="flex: 1; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px; outline: none; box-sizing: border-box; font-family: inherit; font-size: 12px;">
+                </div>
+                <button id="btn-p2p-save-turn" class="btn-primary" style="width: 100%; margin-top: 8px; background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Save TURN Settings</button>
+            </details>
+
             <button id="btn-p2p-close" class="btn-close" style="width: 100%;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- QR Scan Modal -->
+    <div id="qr-scan-modal" class="modal">
+        <div class="modal-content" style="max-width: 360px; text-align: center;">
+            <h3 style="margin-bottom: 10px; color: var(--accent-glow);">Scan Pairing Code</h3>
+            <div id="qr-scan-container" style="width: 100%;"></div>
+            <div style="font-size: 12px; color: var(--text-dim); margin-top: 8px;">Point the camera at the other device's QR code.</div>
+            <button id="btn-qr-scan-close" class="btn-close" style="width: 100%; margin-top: 12px;">Cancel</button>
         </div>
     </div>
 

@@ -27,10 +27,12 @@ import { encryptBackup, decryptBackup, isEncryptedBackup } from '@services/backu
 import { GemmaClient } from '@services/ai/gemma-client';
 import { FoodService } from '@services/food/food-service';
 import { P2PTransferService } from '@services/transfer/transfer';
-import { WebRTCTransport } from '@services/transfer/webrtc-transport';
+import { WebRTCTransport, DEFAULT_ICE_SERVERS } from '@services/transfer/webrtc-transport';
 import { TransferPeer } from '@services/transfer/transport';
 import { GoalTargets } from '@domain/types';
 import { computeHistoryWindow, datesForRange, datesForMonth, datesForYear, mapGoalToTargets, HistoryDay } from '@services/history/history-window';
+import { renderPairingCodeAsQR, supportsQrScanning, startQrScan } from '@services/transfer/qr-code';
+import type { QrScanHandle } from '@services/transfer/qr-code';
 
 let dbManager: DatabaseManager;
 let foodRepo: FoodRepository;
@@ -53,10 +55,39 @@ let historyAnchor = getTodayDateString();
 let historyWindowKey = '';
 let numpadBuffer = '';
 
+function loadP2PIceServers(): RTCIceServer[] {
+  const servers = [...DEFAULT_ICE_SERVERS];
+  try {
+    const saved = localStorage.getItem('everydayfuel_p2p_turn');
+    if (saved) {
+      const cfg = JSON.parse(saved);
+      const url = String(cfg.url || '').trim();
+      if (/^turn(s)?:/i.test(url)) {
+        servers.push({
+          urls: url,
+          username: String(cfg.username || '') || undefined,
+          credential: String(cfg.password || '') || undefined
+        });
+      }
+    }
+  } catch {
+    /* invalid saved config -> defaults only */
+  }
+  return servers;
+}
+
+function saveP2PTurnConfig(url: string, username: string, password: string) {
+  if (!url.trim()) {
+    localStorage.removeItem('everydayfuel_p2p_turn');
+    return;
+  }
+  localStorage.setItem('everydayfuel_p2p_turn', JSON.stringify({ url: url.trim(), username: username.trim(), password }));
+}
+
 async function initApp() {
   console.log('Initializing EverydayFuel...');
 
-  p2pTransport = new WebRTCTransport();
+  p2pTransport = new WebRTCTransport(loadP2PIceServers());
   p2pService = new P2PTransferService(p2pTransport);
 
   try {
@@ -1097,6 +1128,7 @@ function setupRestoreHandler() {
 let p2pRole: 'send' | 'receive' | null = null;
 let p2pPeer: TransferPeer | null = null;
 let p2pBusy = false;
+let qrScanHandle: QrScanHandle | null = null;
 
 function setP2PStatus(text: string) {
   const el = document.getElementById('p2p-status');
@@ -1110,16 +1142,27 @@ function setP2PSection(showOut: boolean, showIn: boolean) {
   if (inn) inn.style.display = showIn ? '' : 'none';
 }
 
+function stopQrScan() {
+  qrScanHandle?.stop();
+  qrScanHandle = null;
+  const container = document.getElementById('qr-scan-container');
+  if (container) container.innerHTML = '';
+}
+
 function resetP2PModal() {
   const codeOut = document.getElementById('p2p-code-out') as HTMLTextAreaElement | null;
   const codeIn = document.getElementById('p2p-code-in') as HTMLTextAreaElement | null;
+  const qrImg = document.getElementById('p2p-qr-code') as HTMLImageElement | null;
   if (codeOut) codeOut.value = '';
   if (codeIn) codeIn.value = '';
+  if (qrImg) qrImg.removeAttribute('src');
   setP2PStatus('');
   p2pBusy = false;
 }
 
 function closeP2PModal() {
+  stopQrScan();
+  document.getElementById('qr-scan-modal')?.classList.remove('active');
   if (p2pPeer) {
     try {
       p2pPeer.close();
@@ -1134,10 +1177,46 @@ function closeP2PModal() {
   document.getElementById('p2p-modal')?.classList.remove('active');
 }
 
+async function onP2PScan() {
+  if (p2pBusy || qrScanHandle) return;
+  document.getElementById('qr-scan-modal')?.classList.add('active');
+  const container = document.getElementById('qr-scan-container');
+  if (!container) return;
+
+  try {
+    qrScanHandle = await startQrScan(container, (code) => {
+      const input = document.getElementById('p2p-code-in') as HTMLTextAreaElement | null;
+      if (input) input.value = code;
+      stopQrScan();
+      document.getElementById('qr-scan-modal')?.classList.remove('active');
+      onP2PConnect();
+    });
+  } catch (err) {
+    console.error('QR scan failed:', err);
+    document.getElementById('qr-scan-modal')?.classList.remove('active');
+    setP2PStatus(err instanceof Error ? err.message : 'Could not start the camera.');
+  }
+}
+
 async function openP2PModal(role: 'send' | 'receive') {
   if (p2pBusy || p2pRole !== null) return;
   p2pRole = role;
   resetP2PModal();
+
+  try {
+    const saved = localStorage.getItem('everydayfuel_p2p_turn');
+    if (saved) {
+      const cfg = JSON.parse(saved);
+      const urlInput = document.getElementById('p2p-turn-url') as HTMLInputElement | null;
+      const userInput = document.getElementById('p2p-turn-user') as HTMLInputElement | null;
+      const passInput = document.getElementById('p2p-turn-pass') as HTMLInputElement | null;
+      if (urlInput) urlInput.value = cfg.url || '';
+      if (userInput) userInput.value = cfg.username || '';
+      if (passInput) passInput.value = cfg.password || '';
+    }
+  } catch {
+    /* ignore malformed saved config */
+  }
 
   const title = document.getElementById('p2p-title');
   const outLabel = document.getElementById('p2p-out-label');
@@ -1156,7 +1235,16 @@ async function openP2PModal(role: 'send' | 'receive') {
       const code = await p2pService.createPairingCode();
       const codeOut = document.getElementById('p2p-code-out') as HTMLTextAreaElement | null;
       if (codeOut) codeOut.value = code;
-      setP2PStatus('Send Step 1 to the other device, then paste its response in Step 2.');
+      renderPairingCodeAsQR(code)
+        .then(dataUrl => {
+          const qrImg = document.getElementById('p2p-qr-code') as HTMLImageElement | null;
+          if (qrImg) qrImg.src = dataUrl;
+        })
+        .catch(err => {
+          console.error('QR render failed (text fallback remains):', err);
+          setP2PStatus('QR rendering failed — use "Copy code as text instead".');
+        });
+      setP2PStatus('Show the QR code to the other device (or copy it as text).');
     } catch (err) {
       console.error('P2P pairing code failed:', err);
       setP2PStatus('Could not generate a pairing code.');
@@ -1164,9 +1252,11 @@ async function openP2PModal(role: 'send' | 'receive') {
   } else {
     if (title) title.innerText = 'Send Backup (P2P)';
     if (outLabel) outLabel.innerText = 'Step 2 — Send this response code back to the receiving device:';
-    if (inLabel) inLabel.innerText = 'Step 1 — Paste the receiving device\'s pairing code:';
+    if (inLabel) inLabel.innerText = 'Step 1 — Scan (or paste) the receiving device\'s pairing code:';
     setP2PSection(false, true);
-    setP2PStatus('Paste the receiving device\'s pairing code to start.');
+    const scanBtn = document.getElementById('btn-p2p-scan');
+    if (scanBtn) scanBtn.style.display = supportsQrScanning() ? '' : 'none';
+    setP2PStatus(supportsQrScanning() ? 'Tap "Scan QR Code" and point the camera at the other device.' : 'QR scanning is not supported here — paste the pairing code manually.');
   }
 }
 
@@ -1285,7 +1375,29 @@ function setupP2PHandlers() {
   document.getElementById('btn-p2p-receive')?.addEventListener('click', () => openP2PModal('receive'));
   document.getElementById('btn-p2p-send')?.addEventListener('click', () => openP2PModal('send'));
   document.getElementById('btn-p2p-connect')?.addEventListener('click', onP2PConnect);
+  document.getElementById('btn-p2p-scan')?.addEventListener('click', onP2PScan);
+  document.getElementById('btn-qr-scan-close')?.addEventListener('click', () => {
+    stopQrScan();
+    document.getElementById('qr-scan-modal')?.classList.remove('active');
+  });
   document.getElementById('btn-p2p-close')?.addEventListener('click', closeP2PModal);
+
+  document.getElementById('btn-p2p-save-turn')?.addEventListener('click', () => {
+    const url = (document.getElementById('p2p-turn-url') as HTMLInputElement | null)?.value ?? '';
+    const user = (document.getElementById('p2p-turn-user') as HTMLInputElement | null)?.value ?? '';
+    const pass = (document.getElementById('p2p-turn-pass') as HTMLInputElement | null)?.value ?? '';
+
+    if (url.trim() && !/^turn(s)?:/i.test(url.trim())) {
+      setP2PStatus('TURN URL must start with "turn:" or "turns:".');
+      return;
+    }
+
+    saveP2PTurnConfig(url, user, pass);
+    p2pTransport.dispose();
+    p2pTransport = new WebRTCTransport(loadP2PIceServers());
+    p2pService = new P2PTransferService(p2pTransport);
+    setP2PStatus(url.trim() ? 'TURN settings saved — generate a fresh pairing code.' : 'TURN settings cleared — default STUN only.');
+  });
 
   document.getElementById('btn-p2p-copy')?.addEventListener('click', async () => {
     const el = document.getElementById('p2p-code-out') as HTMLTextAreaElement | null;
