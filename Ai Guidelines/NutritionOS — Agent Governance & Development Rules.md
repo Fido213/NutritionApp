@@ -469,6 +469,17 @@ Do not knowingly commit broken code without documenting why it is temporarily br
 
 Prefer focused commits over giant collections of unrelated changes.
 
+### Committing cadence (user authorization, pass 13)
+
+**The user has explicitly authorized the agent to commit and push its own work** (added 2026-08-20, pass 13). From this point the agent should:
+
+1. Commit each completed, verified work package (build + tests green, diff inspected) with a clear, self-written commit message.
+2. Follow the repository's existing message style (`feat(scope): ...` / `fix(scope): ...`).
+3. Push to `origin` (branch `main`) after committing, as part of the same pass.
+4. Record each commit's hash in the pass's AI work log and in `HANDOVER.md` so the next pass knows the exact checkpoint.
+
+This replaces any earlier "leave the tree uncommitted for the user" convention. The §15 build/test/diff pre-checks still apply before every commit.
+
 ---
 
 # 16. Preserve Existing Contracts
