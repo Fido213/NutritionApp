@@ -9,7 +9,6 @@ export interface AppState {
   todayGoals: GoalTargets;
   todayHydration: HydrationBreakdown;
   todayLogs: any[];
-  recents: any[];
   currentScore: ScoreResult | null;
   activeModal: string | null;
   selectedLogForAction: any | null;
@@ -35,7 +34,6 @@ const defaultState: AppState = {
     target: 4000
   },
   todayLogs: [],
-  recents: [],
   currentScore: null,
   activeModal: null,
   selectedLogForAction: null

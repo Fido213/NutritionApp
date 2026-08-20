@@ -6,6 +6,15 @@ import {
   InterpretedLabelOCR 
 } from './prompts';
 
+/**
+ * Placeholder used when a nutrition label does not reveal a product name.
+ * The UI asks the user for a real name before logging (HANDOVER §5a item 7).
+ */
+export const DEFAULT_LABEL_PRODUCT_NAME = 'Scanned Label Product';
+
+const LABEL_HEADING_RE = /(?:nutrition facts|nutrition information|valeurs nutritionnelles|informations nutritionnelles|informaci[oó]n nutricional|n[aä]hrwert|valori nutrizionali)/i;
+const LABEL_KEYWORD_LINE_RE = /^(?:serving size|servings?|per (?:100 ?g|100 ?ml|serving)|contains?|ingredients?|allergens?|storage|best before|net (?:weight|wt)|weight|calories?|energy|protein|carbohydrates?|carbs?|fat|sugars?|fibre|fiber|salt|sodium)/i;
+
 export class GemmaClient {
   private isModelLoaded: boolean = false;
 
@@ -113,6 +122,47 @@ export class GemmaClient {
   }
 
   /**
+   * Best-effort product name extraction from raw label OCR text (deterministic):
+   * an explicit "product name:" prefix wins; otherwise the first clean line
+   * before the nutrition-facts heading (typical label layout). Returns the
+   * placeholder when nothing usable is found — the UI then asks the user.
+   */
+  private extractLabelProductName(rawText: string): string {
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+    const prefixed = lines.find(l => /^(?:product\s*name|product)\s*:/i.test(l));
+    if (prefixed) {
+      const value = prefixed.replace(/^(?:product\s*name|product)\s*:\s*/i, '');
+      const clean = this.sanitizeLabelName(value);
+      if (clean) return clean;
+    }
+
+    const headingIndex = lines.findIndex(l => LABEL_HEADING_RE.test(l));
+    if (headingIndex > 0) {
+      for (let i = 0; i < headingIndex; i++) {
+        const clean = this.sanitizeLabelName(lines[i]);
+        if (clean) return clean;
+      }
+    }
+
+    return DEFAULT_LABEL_PRODUCT_NAME;
+  }
+
+  private sanitizeLabelName(raw: string): string {
+    let name = raw
+      .replace(/[“”"']/g, '')
+      .replace(/\s+/g, ' ')
+      .replace(/\b\d+(?:\.\d+)?\s*(?:g|ml|grams?|grammes?|millilitres?)\b/gi, ' ')
+      .replace(/\s*\d+(?:\.\d+)?\s*%?\s*$/g, '')
+      .trim()
+      .replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, '');
+
+    if (!name || name.length < 2 || name.length > 60) return '';
+    if (LABEL_KEYWORD_LINE_RE.test(name)) return '';
+    return name;
+  }
+
+  /**
    * Fallback deterministic regex parser for nutrition facts label OCR
    */
   private fallbackParseNutritionLabel(rawText: string): InterpretedLabelOCR {
@@ -123,7 +173,7 @@ export class GemmaClient {
 
     return {
       rawText,
-      foodName: 'Scanned Label Product',
+      foodName: this.extractLabelProductName(rawText),
       caloriesPer100g: calMatch ? parseFloat(calMatch[1]) : 0,
       proteinPer100g: proMatch ? parseFloat(proMatch[1]) : 0,
       carbsPer100g: carbMatch ? parseFloat(carbMatch[1]) : 0,

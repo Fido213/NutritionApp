@@ -1,8 +1,8 @@
 # EverydayFuel — Handover to Next Chat
 
-**Date:** 2026-08-20
-**From:** Laguna (DeepSeek V4 Flash), pass 14
-**Status:** Build + tests green (**234 tests, 18 files**). **All four on-device verification items (HANDOVER §5 items 2–4) are DONE on the user's phone** (OPPO CPH2363 via USB + WebView CDP): dashboard/native SQLite, text logging, label OCR, barcode camera/gallery, history views, offline/airplane-mode flows. **Spec §7.4's "optional internet lookup" is now implemented per the user's explicit requirement** — unknown local barcode → Open Food Facts lookup → log + save locally; offline/not-found → scan-the-label fallback (not manual entry). **User confirmed the real barcode camera scan works "in both ways"** (online lookup + local reuse). The user's pass-14 review requirements are recorded in **§5a — noted only, NOT implemented**. Pass-14 changes are **uncommitted** (see §6). JDK 21 at `C:\Android\jdk-21\home` still required for gradle builds.
+**Date:** 2026-08-21
+**From:** Muse Spark, pass 16
+**Status:** Build + tests green (**245 tests, 18 files**). **Pass 16 fixes** the follow-up review: whole UI pushed down from status bar (`viewport-fit=cover` + `env(safe-area-inset-top)`), scan button lowered into the dock bar, History view-switch made instant via batched range queries (month 21 ms / year 25 ms, was 733/8204 ms, 1095 → 3 native calls), year view now renders 365 day-dots without wedging, and heatmap cells auto-update via `dataVersion`-busted window cache. **Pass-15 §5a items 1–4, 7, 8** (1-Tap Recents→text bar, Journal/Manual top-left, vertical compression, real label name + grams panel) were already on-device verified on OPPO CPH2363. **§5a items 5–6 (scanning UX) remain deferred by design.** Pass-14 through pass-16 are **uncommitted until this handover's push** (see §6). JDK 21 at `C:\Android\jdk-21\home` still required for gradle builds.
 
 ---
 
@@ -92,6 +92,23 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - Tests: `online-lookup.test.ts` (new, 13 tests) + `food-service.test.ts` (+3 barcode-pipeline tests). Suite now **234 tests, 18 files**.
   - **On-device verification (all ✓ on OPPO CPH2363):** online lookup of `3017620422003` (Nutella) → real OFF fetch → "Logged "Nutella" · 539 kcal", dashboard 1,095 → 1,634, recents updated, `foods` row (source_type `barcode`, source_reference) + `food_barcodes` row (source `online`, verified 0) in native SQLite; **airplane-mode rescan of the same barcode → instant local hit (1,634 → 2,173) — the online-saved product works fully offline**; unknown barcode offline → "Barcode not found online — scan the nutrition label instead" + camera chooser opened (label-scan fallback, not manual entry; cancel clean); gallery→OCR label flow works end-to-end via the Prompt chooser (user-run: existing library entry reused, 765 → 1,095 kcal); history 7D/1M/1Y + paging + stats; offline water/text logging; logcat clean.
 
+- **Pass 15 additions — §5a dashboard layout items 1–4 + product naming 7 + grams panel 8, on-device verified** (pass-14 + pass-15 changes uncommitted, see §6):
+  - **1-Tap Recents removed from the UI (§5a #1)** — `recents` dropped from `AppState`/`defaultState` (`src/ui/state.ts`) and the recents rendering removed (`src/ui/views/dashboard.ts`); the query is kept as a debug hook: `console.debug('[debug] recents (UI hidden):', …)` in `refreshStateForDate` — agent-visible via WebView CDP console only, never in the UI. `quick-log-recent` listener removed.
+  - **Always-visible text bar (§5a #2)** — recents card replaced by `.textbar-card` with `#dash-text-input` + `#btn-dash-text-log`; `setupDashboardTextBar()` (replaces `setupTextLogHandlers()`), Enter/LOG → existing `logTextInput` → clears the bar; `#text-log-modal` deleted; journal empty-state copy points to the text bar.
+  - **Journal + Manual top-left (§5a #3)** — `.sys-btn-left` fixed bar (`#btn-open-journal`, `#btn-open-manual`) opposite top-right Settings; desktop ≥768px: `top: 30px; left: 100px`.
+  - **Vertical compression (§5a #4)** — main padding-top `max(52px, calc(env(safe-area-inset-top,0px)+52px))` (buttons below the 107px status bar, ring card 52px, no overlap — measured), view gap 16→12, card padding 16→12, grid gap 20→14 + bottom 16, progress ring 200→160, margin trims. Dashboard fits one 800dp screen, zero scroll.
+  - **Label product naming (§5a #7)** — `gemma-client.ts`: exported `DEFAULT_LABEL_PRODUCT_NAME = 'Scanned Label Product'`; fallback label parser extracts a real product name from the OCR heading / keyword lines (sanitized, 100-char cap). `logLabelOcrText(text, amount, askGrams=true)`: placeholder or empty name → **ask the user** via the new `#name-modal` (`requestName`); barcode path never asks (online lookup provides the name).
+  - **Grams panel for both scans (§5a #8)** — `requestGrams` + `#grams-modal` (title, per-100g subtitle, default 100, inline error, OK/Cancel, Enter); `logBarcodeFood` + `logBarcodeViaOnlineLookup` prompt for grams before logging — per-100g from the record, **grams = what the user ate** (old_app parity); Cancel aborts cleanly; paste-label dev path keeps `askGrams=false`.
+  - **On-device verification (all ✓ on OPPO CPH2363):** text bar "100g banana" → 0 → 200 kcal, bar cleared; Nutella barcode → grams modal (default 100) → 50 g → logged at `amount_g: 50` = 269.5 kcal (539 × 0.5) → 470; unnamed label text → name modal → "Test Granola" → logged 250 kcal → 720; grams Cancel → no log, scanner stays open; CDP watcher confirmed the `[debug] recents (UI hidden): …` hook on every refresh; native SQLite rows verified (correct amounts/scaling); layout metrics: no overlap, single-screen dashboard.
+  - Tests: `gemma-client.test.ts` (+5 name-extraction tests). Suite now **239 tests, 18 files**.
+
+- **Pass 16 additions — layout polish + History perf + auto-update (user follow-up review)** — on-device verified on OPPO CPH2363:
+  - **`viewport-fit=cover` + `env(safe-area-inset-top)`** (`src/index.html:5` viewport, `src/style.css:18` `main` `padding-top: max(64px, calc(env+64px))`, `.sys-btn-left/.sys-btn-top: max(32px, calc(env+28px))`) — whole UI pushed down; measured `paddingTop 100px` / `sysTop 64px` (was 20px under the 107px status bar), `env` was 36 on this device.
+  - **Scan button into dock** (`src/style.css:scan-wrapper 70px flex center`, `#scan-btn:relative`) — measured dock `730-800` (70h), scan `733.5-797.5` (64h) now inset 3.5px below dock top (was `692-756`, 38dp float).
+  - **History view-switch: batch range queries** — new repos `LogRepository.getDailyTotalsForRange` / `WaterRepository.getWaterTotalsBySourceForRange` / `GoalRepository.getGoalsForRange` (`src/data/repositories/*`, `GROUP BY date` + `GROUP BY date,source`, goal overlap `start<=to AND end>=from`), fallback shim branches `src/data/database.ts:329`, rewritten `computeHistoryWindow` (`src/services/history/history-window.ts:57` `Promise.all` 3 calls) + `HistoryRepos` interface update — on-device: week **104→21 ms**, month **733→21 ms**, year **8204→25 ms** (1095 → 3 native calls); year now shows 12 `month-block`s of `day-dot`s (was wedging CDP).
+  - **Auto-updating heatmap cells** — `src/main.ts:60` `dataVersion`, `refreshStateForDate:59` `dataVersion++`, `ensureHistoryWindow:211` key `view|anchor|dataVersion` + `if(active) ensureHistoryWindow().then(render)` (was stale `view|anchor` + bare `render`).
+  - Tests: `history-window.test.ts` fakes now batch-shaped +1 batch-path spy; `database-shim.test.ts` +2 grouped; `sqlite-real.test.ts` +3 batch. Suite now **245 tests, 18 files**.
+
 ## 3. Verification status
 
 | Check | Result |
@@ -116,7 +133,9 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 | Vision client (vision-client.test.ts, 8 tests: plugin detection, data-URL stripping, format list, Node-side unsupported detection + graceful rejection) | ✅ passes |
 | **Native Android build** (`gradlew assembleDebug`, JDK 21, Kotlin 2.2.20) — `app-debug.apk` (89 MB) produced; `:app:compileDebugKotlin` compiles GemmaPlugin.kt + VisionPlugin.kt; the camera plugin's `jvmToolchain(21)` requirement satisfied | ✅ passes (compile verified; on-device camera click-through ❌ NOT run — no device) |
 | **On-device verification, pass 14 (OPPO CPH2363, USB + WebView CDP)** — app launch + dashboard on native SQLite; text log; label OCR end-to-end (ML Kit → parse → log, library reuse); barcode camera/gallery paths (Prompt chooser); History 7D/1M/1Y + paging + stats; airplane-mode water/text/known-food flows; online barcode fallback (real OFF fetch → log + save; airplane-mode rescan → instant local hit; unknown+offline → label-scan fallback with camera chooser) | ✅ all pass (see pass-14 log for per-check details); logcat clean |
-| Manual click-through on device/browser | **Mostly done (pass 14).** Remaining: the user's **real barcode camera scan test** (deferred by the user until the online fallback was built — it is built now), P2P pairing flow with a second peer, WebRTC transport, laptop-layout visual check |
+| **On-device verification, pass 15 (OPPO CPH2363, USB + WebView CDP)** — §5a items 1–4, 7, 8: recents gone from UI (textbar card present); text bar logs + clears; Journal/Manual top-left + Settings top-right (no status-bar overlap, ring card 52px, dashboard fits one 800dp screen); label name modal (placeholder → user-named "Test Granola" logged); barcode grams modal (Nutella 50 g → 269.5 kcal, `amount_g: 50` in SQLite); grams Cancel aborts cleanly; `console.debug` recents hook fires on every refresh | ✅ all pass (see pass-15 log for per-check details) |
+| **On-device verification, pass 16 (OPPO CPH2363, USB + WebView CDP)** — viewport-fit/layout: `main paddingTop 100px` / `sysTop 64px` (env 36) no overlap, dock `730-800` scan `733.5-797.5` inside bar; History perf: month 21 ms (31 `cal-block`s) / year 25 ms (12 `month-block`s, 365 `day-dot`s) CDP stays responsive; batch parity verified on real SQLite | ✅ all pass (see pass-16 log) |
+| Manual click-through on device/browser | **Mostly done (pass 14-16).** Remaining: the user's real-barcode camera scan (built pass 14, user deferred — still open), P2P pairing flow with a second peer, WebRTC transport, laptop-layout visual check |
 
 ## 4. Known limitations (unchanged, documented in pass-3/pass-8 logs)
 
@@ -147,25 +166,25 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 9. ~~P2P transfer~~ — JS/service/UI done in pass 8 (spec §23; see §2/§4) — **manual device verification outstanding (see item 1)**.
 10. ~~Date-range / all-time / goal-phase CSV export (spec §21, QoL #9/#10)~~ — done in pass 11 (see §2); visual click-through of the modal still outstanding (folded into item 2's device pass).
 
-## 5a. User requirements backlog — pass-14 user review (RECORDED, NOT IMPLEMENTED)
+## 5a. User requirements backlog — pass-14 user review
 
-> The user explicitly asked for these to be **noted only, not built** — they are the next-pass work list. User wording preserved where useful. None of this is implemented.
+> Items 1–4, 7, 8 were **implemented and on-device verified in pass 15** (see §2). Items 5–6 remain "later stage, once everything is confirmed" — **noted only, NOT implemented**. User wording preserved where useful.
 
-**Dashboard layout**
-1. **Remove 1-Tap Recents from the UI** — but keep the underlying query as a debug hook in the logs (agent-visible for verification, e.g. via WebView CDP; **the user should not see it in the UI**).
-2. **Move the text input into an actual text bar** where 1-Tap Recents currently sits (always-visible text-logging bar on the dashboard, replacing the recents area).
-3. **Move Journal and Manual to the top-left**, opposite the Settings button (currently `+ JOURNAL / + TEXT / + MANUAL` sit in a row on the Recents card; Settings is top-right).
-4. **Reduce the overall UI length** — the top of the layout currently reaches almost to the notification bar ("settings is like practically in the same place as my notification bar"); compress the vertical extent.
+**Dashboard layout** — DONE (pass 15)
+1. ~~Remove 1-Tap Recents from the UI~~ — done; the query stays as a `console.debug('[debug] recents (UI hidden):', …)` hook (agent-visible via WebView CDP, never in the UI).
+2. ~~Move the text input into an actual text bar~~ where 1-Tap Recents currently sits — done: always-visible `.textbar-card` (`#dash-text-input` + LOG) on the dashboard.
+3. ~~Move Journal and Manual to the top-left~~, opposite the Settings button — done: `.sys-btn-left` (`#btn-open-journal`/`#btn-open-manual`).
+4. ~~Reduce the overall UI length~~ — done: compressed paddings/gaps/ring; buttons below the status bar (top 20px on device), no overlap, dashboard fits one screen.
 
-**Scanning UX (later stage, once everything is confirmed)**
+**Scanning UX (later stage, once everything is confirmed)** — NOT implemented
 5. **Keep the "From Photos / Take Photo" chooser for now as a debug aid.** Later, make **barcode scanning automatic like the old app**: the moment the camera sees a barcode it finishes by itself (no pressing "take a picture" every time). **Nutrition label stays manual**: the button press to take the picture is kept.
 6. **Never ship** the OCR-fallback paste-label-text path (`label-ocr-text` textarea) and the manual barcode-number lookup (`barcode-input`) — the user doesn't want them at all; keep them only for the dev cycle.
 
-**Product naming**
-7. **"Scanned Label Product" placeholder must go**: label scans should use the real product name (from OCR/Gemma). If the name cannot be determined: **ask the user** (simple, low-friction prompt) for a **nutrition label**; for a **barcode**, the name should be automatic (from the online lookup) — no asking.
+**Product naming** — DONE (pass 15)
+7. ~~"Scanned Label Product" placeholder must go~~ — done: label scans use the real product name (OCR heading/keyword extraction in the fallback parser); unknown name → ask the user (in-app name modal) for a **nutrition label**; **barcode** name is automatic (online lookup) — no asking.
 
-**Grams panel**
-8. **Add a grams-amount panel for BOTH label and barcode scans** (like the old app): the per-100g nutrition comes from the barcode/label record; **the grams the user enters are what THEY ate**, not the record's amount.
+**Grams panel** — DONE (pass 15)
+8. ~~Add a grams-amount panel for BOTH label and barcode scans~~ — done (old_app parity): per-100g nutrition from the barcode/label record; **the grams the user enters are what THEY ate** (grams modal with default 100, Cancel aborts cleanly; label path asks name first if unknown, then grams).
 
 **Not-yet-developed notes (recorded for context)**
 - Gemma on-device inference still needs the model file pushed (deterministic fallback parsers are used until then).
@@ -173,12 +192,12 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 
 ## 6. Before you start
 
-- **The working tree is committed up to pass 13 (hash `2ec44e9`, pushed, user-authorized). Pass-14 changes are UNCOMMITTED — the agent waits for the user's explicit go-ahead before committing/pushing.** Pass-14 files: `src/services/barcode/online-lookup.ts` + `online-lookup.test.ts` (new), `src/services/food/food-service.ts` + `food-service.test.ts`, `src/main.ts`, `HANDOVER.md`.
-- **Committing cadence (user-confirmed, pass 13):** the agent finishes the work, builds/tests/inspects the diff, then **reports and waits for the user's explicit go-ahead before committing and pushing** — it does NOT push on its own. Commit message uses the repo's `feat(scope): ...` style; the hash is recorded in the pass log + this handover. See governance §15.
-- `vitest` is a devDependency; the "test" script runs `vitest run` (234 tests, 18 files).
+- **The working tree up to pass 13 (`2ec44e9`) was pushed. Pass-14, pass-15 and pass-16 were batched and pushed together on 2026-08-21 after user go-ahead (see git log).** Pass-14 files: `src/services/barcode/online-lookup.ts` + `online-lookup.test.ts` (new), `src/services/food/food-service.ts` + `food-service.test.ts`, `src/main.ts`, `HANDOVER.md`. Pass-15 files: `src/ui/state.ts`, `src/ui/views/dashboard.ts`, `src/index.html`, `src/style.css`, `src/services/ai/gemma-client.ts` + `gemma-client.test.ts`, `src/main.ts`, `HANDOVER.md`. Pass-16 files: `src/data/database.ts` + `database-shim.test.ts`, `src/data/repositories/log.repo.ts`/`water.repo.ts`/`goal.repo.ts` + `sqlite-real.test.ts`, `src/services/history/history-window.ts` + `history-window.test.ts`, `src/index.html`, `src/style.css`, `src/main.ts`, `HANDOVER.md`.
+- **Committing cadence (user-confirmed, pass 13):** the agent finishes the work, builds/tests/inspects the diff, then **reports and waits for the user's explicit go-ahead before committing and pushing** — it does NOT push on its own. Commit messages use the repo's `feat(scope): ...` style; the hash is recorded in the pass log + this handover. See governance §15.
+- `vitest` is a devDependency; the "test" script runs `vitest run` (245 tests, 18 files).
 - The sql.js real-SQLite tests need no configuration: `initSqlJs()` loads `node_modules/sql.js/dist/sql-wasm.wasm` automatically in Node. Do not delete `src/types/sql-js.d.ts` — it is the type declaration for the untyped `sql.js` package (tsc strict would fail without it).
-- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-14 log: `[Laguna][pass 14][2026-08-20].md`.
-- **Toolchain (all present, pass 12/13):** JDK 17 (`C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot`), **JDK 21 at `C:\Android\jdk-21\home`** (required by `@capacitor/camera` `jvmToolchain(21)` — set `$env:JAVA_HOME = "C:\Android\jdk-21\home"` before gradle, or it fails with "Cannot find a Java installation... {languageVersion=21}"), Android SDK at `C:\Android` (platform android-36, build-tools 36 + 35), ANDROID_HOME=C:\Android. `npm run cap:sync` + `gradlew assembleDebug` verified working. **On-device verification flow (pass 14):** OPPO CPH2363 (adb `6c447b5a`), `adb install -r` the debug APK, WebView DevTools debugging enabled → `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>` + CDP eval helpers in `%LOCALAPPDATA%\Temp\opencode\` (`cdp_eval2.ps1` for plain eval). App debug builds have WebView debugging on (see `MainActivity.java`).
+- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-15 log: `[Laguna][pass 15][2026-08-21].md`; pass-16 log: `[Muse Spark][pass 16][2026-08-21].md`.
+- **Toolchain (all present, pass 12/13):** JDK 17 (`C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot`), **JDK 21 at `C:\Android\jdk-21\home`** (required by `@capacitor/camera` `jvmToolchain(21)` — set `$env:JAVA_HOME = "C:\Android\jdk-21\home"` before gradle, or it fails with "Cannot find a Java installation... {languageVersion=21}"), Android SDK at `C:\Android` (platform android-36, build-tools 36 + 35), ANDROID_HOME=C:\Android. `npm run cap:sync` + `gradlew assembleDebug` verified working. **On-device verification flow (pass 14/15):** OPPO CPH2363 (adb `6c447b5a`), `adb install -r` the debug APK, WebView DevTools debugging enabled → `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>` + CDP eval helpers in `%LOCALAPPDATA%\Temp\opencode\` (`cdp_eval2.ps1` for plain eval; `cdp_debugwatch.ps1` prints ALL console types incl. `debug`). App debug builds have WebView debugging on (see `MainActivity.java`). **Gotchas: run `npx cap sync android` from the repo ROOT (not `android/`); the CDP socket name changes per app start; the D: drive is removable media ("500gb") — it vanished briefly mid-pass-15 and re-appeared on its own, so if commands start failing with "File not found", check the drive before assuming repo damage.**
 - Read `Ai Guidelines/NutritionOS — Agent Governance & Development Rules.md` (em-dash in filename) before editing; PLAN.md §7 lists what must NOT change (scoring, hydration gating, goal resolution, v001 schema, domain types, CSV export format).
 - Commands: `npm run dev` (web), `npm run build`, `npm test`, `npm run cap:sync` / `cap:run` (Android).
 

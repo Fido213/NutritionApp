@@ -50,6 +50,20 @@ export class WaterRepository {
     return totals;
   }
 
+  /** Per-date, per-source water totals for a range — one query instead of one per date (history views). */
+  async getWaterTotalsBySourceForRange(startDate: string, endDate: string): Promise<Record<string, Record<string, number>>> {
+    const res = await this.db.query(
+      `SELECT date, source, SUM(amount_ml) as total FROM water_logs WHERE date >= ? AND date <= ? GROUP BY date, source`,
+      [startDate, endDate]
+    );
+    const out: Record<string, Record<string, number>> = {};
+    for (const row of res.values || []) {
+      out[row.date] = out[row.date] || { explicit: 0, drink: 0, food: 0 };
+      out[row.date][row.source] = row.total || 0;
+    }
+    return out;
+  }
+
   async deleteWaterLog(id: string): Promise<void> {
     await this.db.run(`DELETE FROM water_logs WHERE id = ?`, [id]);
   }

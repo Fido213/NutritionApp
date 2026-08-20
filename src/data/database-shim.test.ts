@@ -146,6 +146,65 @@ describe('createFallbackConnection', () => {
     expect(rows[0]).toEqual({ calories: 1000, protein_g: 60, carbs_g: 110, fat_g: 30, water_ml: 100 });
   });
 
+  it('groups daily food totals per date with SUM + GROUP BY date (batch history path)', async () => {
+    const store = createStore();
+    const db = createFallbackConnection(store);
+
+    await db.run(
+      `INSERT INTO food_logs (id, date, food_id, calories, protein_g, carbs_g, fat_g, water_ml, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['l1', '2026-08-19', 'f1', 300, 20, 30, 10, 0, 'now']
+    );
+    await db.run(
+      `INSERT INTO food_logs (id, date, food_id, calories, protein_g, carbs_g, fat_g, water_ml, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['l2', '2026-08-19', 'f2', 700, 40, 80, 20, 100, 'now']
+    );
+    await db.run(
+      `INSERT INTO food_logs (id, date, food_id, calories, protein_g, carbs_g, fat_g, water_ml, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['l3', '2026-08-18', 'f1', 100, 5, 10, 2, 0, 'now']
+    );
+
+    const rows = await queryValues(db,
+      `SELECT date, SUM(calories) as calories, SUM(protein_g) as protein_g, SUM(carbs_g) as carbs_g, SUM(fat_g) as fat_g, SUM(water_ml) as water_ml FROM food_logs WHERE date >= ? AND date <= ? GROUP BY date`,
+      ['2026-08-18', '2026-08-20']
+    );
+    const byDate = Object.fromEntries(rows.map(r => [r.date, r]));
+    expect(byDate['2026-08-19']).toEqual({ date: '2026-08-19', calories: 1000, protein_g: 60, carbs_g: 110, fat_g: 30, water_ml: 100 });
+    expect(byDate['2026-08-18']).toEqual({ date: '2026-08-18', calories: 100, protein_g: 5, carbs_g: 10, fat_g: 2, water_ml: 0 });
+  });
+
+  it('groups water totals per date and source with GROUP BY date, source (batch history path)', async () => {
+    const store = createStore();
+    const db = createFallbackConnection(store);
+
+    await db.run(
+      `INSERT INTO water_logs (id, date, amount_ml, source, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ['w1', '2026-08-19', 500, 'explicit', 'now']
+    );
+    await db.run(
+      `INSERT INTO water_logs (id, date, amount_ml, source, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ['w2', '2026-08-19', 250, 'drink', 'now']
+    );
+    await db.run(
+      `INSERT INTO water_logs (id, date, amount_ml, source, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ['w3', '2026-08-18', 999, 'explicit', 'now']
+    );
+
+    const rows = await queryValues(db,
+      `SELECT date, source, SUM(amount_ml) as total FROM water_logs WHERE date >= ? AND date <= ? GROUP BY date, source`,
+      ['2026-08-18', '2026-08-20']
+    );
+    const byDate: Record<string, Record<string, number>> = {};
+    for (const r of rows) {
+      byDate[r.date] = byDate[r.date] || {};
+      byDate[r.date][r.source] = r.total;
+    }
+    expect(byDate['2026-08-19']).toEqual({ explicit: 500, drink: 250 });
+    expect(byDate['2026-08-18']).toEqual({ explicit: 999 });
+  });
+
   it('counts rows for overlap validation', async () => {
     const store = createStore();
     const db = createFallbackConnection(store);

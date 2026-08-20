@@ -25,7 +25,7 @@ import { buildExportRows, datesBetween, goalPhaseRange, resolveExportDateRange, 
 import { parseCSV } from '@services/import/csv-import';
 import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive, collectAllTables } from '@services/backup/backup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from '@services/backup/encryption';
-import { GemmaClient } from '@services/ai/gemma-client';
+import { GemmaClient, DEFAULT_LABEL_PRODUCT_NAME } from '@services/ai/gemma-client';
 import { FoodService } from '@services/food/food-service';
 import { P2PTransferService } from '@services/transfer/transfer';
 import { WebRTCTransport, DEFAULT_ICE_SERVERS } from '@services/transfer/webrtc-transport';
@@ -58,6 +58,7 @@ let historyWindow = new Map<string, HistoryDay>();
 let historyView: HistoryViewMode = 'week';
 let historyAnchor = getTodayDateString();
 let historyWindowKey = '';
+let dataVersion = 0;
 let numpadBuffer = '';
 
 function loadP2PIceServers(): RTCIceServer[] {
@@ -146,7 +147,7 @@ async function initApp() {
     setupExportHandlers();
     setupActionHandlers();
     setupJournalHandlers();
-    setupTextLogHandlers();
+    setupDashboardTextBar();
     setupNumpadHandlers();
     setupScannerHandlers();
     setupActionHubHandlers();
@@ -165,6 +166,7 @@ async function initApp() {
 }
 
 async function refreshStateForDate(dateStr: string) {
+  dataVersion++;
   const goalRecord = await goalRepo.getGoalForDate(dateStr);
   const goal: GoalTargets = goalRecord 
     ? mapGoalToTargets(goalRecord)
@@ -183,7 +185,11 @@ async function refreshStateForDate(dateStr: string) {
   const score = calculateScore(totals, goal, hydration);
 
   const logs = await logRepo.getLogsForDate(dateStr);
+
+  // 1-Tap Recents query (HANDOVER §5a): kept as an agent-only debug hook.
+  // Not shown anywhere in the UI — visible via WebView DevTools CDP console.
   const recents = await foodRepo.fuzzySearch('', 5);
+  console.debug('[debug] recents (UI hidden):', recents.map(r => r.canonical_name).join(', '));
 
   store.setState({
     selectedDate: dateStr,
@@ -191,12 +197,16 @@ async function refreshStateForDate(dateStr: string) {
     todayGoals: goal,
     todayHydration: hydration,
     todayLogs: logs,
-    recents,
     currentScore: score
   });
 
   const historyViewEl = document.getElementById('history');
-  if (historyViewEl?.classList.contains('active-view')) renderHistoryView();
+  if (historyViewEl?.classList.contains('active-view')) {
+    // Data changed (this refresh follows every log/water/delete/edit/goal
+    // mutation): recompute the visible window (batch range queries, ~3 native
+    // calls) and re-render so heatmap cells update automatically.
+    ensureHistoryWindow().then(() => renderHistoryView());
+  }
 }
 
 /**
@@ -206,7 +216,11 @@ async function refreshStateForDate(dateStr: string) {
  * or the view mode changes — selecting a day never re-anchors it.
  */
 async function ensureHistoryWindow() {
-  const key = `${historyView}|${historyAnchor}`;
+  // dataVersion bumps on every refresh (which follows every data mutation),
+  // so the cached window is invalidated and recomputed after any change —
+  // heatmap cells update automatically without switching views. The batch
+  // range queries keep each recompute at ~3 native calls.
+  const key = `${historyView}|${historyAnchor}|${dataVersion}`;
   if (historyWindowKey === key) return;
   const dates = historyView === 'week'
     ? datesForRange(historyAnchor, 7)
@@ -482,11 +496,6 @@ function setupActionHandlers() {
     const dateStr = e.detail;
     refreshStateForDate(dateStr);
   });
-
-  window.addEventListener('quick-log-recent', (e: any) => {
-    const item = e.detail;
-    if (item?.id) quickLogFood(item.id);
-  });
 }
 
 // ---------- Text Logging (Gemma interpretation -> FoodService pipeline) ----------
@@ -503,8 +512,7 @@ async function logTextInput(rawText: string) {
   const results = await foodService.logTextInput(date, rawText, items);
   const totalCal = results.reduce((sum, r) => sum + r.nutrition.calories, 0);
 
-  document.getElementById('text-log-modal')?.classList.remove('active');
-  const textInput = document.getElementById('text-log-input') as HTMLInputElement | null;
+  const textInput = document.getElementById('dash-text-input') as HTMLInputElement | null;
   if (textInput) textInput.value = '';
 
   await refreshStateForDate(date);
@@ -524,7 +532,7 @@ function renderJournalResults(foods: Food[]) {
     empty.style.fontSize = '13px';
     empty.style.padding = '10px';
     empty.style.textAlign = 'center';
-    empty.innerText = 'No foods found in your library. Use the +TEXT button to log meals by description.';
+    empty.innerText = 'No foods found in your library. Use the text bar on the dashboard to log meals by description.';
     container.appendChild(empty);
     return;
   }
@@ -614,39 +622,28 @@ function setupJournalHandlers() {
   });
 }
 
-// ---------- Text Log Modal (dedicated, separate from journal/library) ----------
+// ---------- Dashboard Text Bar (always-visible text logging, HANDOVER §5a item 2) ----------
 
-function setupTextLogHandlers() {
-  const modal = document.getElementById('text-log-modal');
-  const input = document.getElementById('text-log-input') as HTMLInputElement | null;
+function setupDashboardTextBar() {
+  const input = document.getElementById('dash-text-input') as HTMLInputElement | null;
 
-  document.getElementById('btn-open-text')?.addEventListener('click', () => {
-    if (input) input.value = '';
-    modal?.classList.add('active');
-    setTimeout(() => input?.focus(), 30);
-  });
-
-  modal?.querySelector('.close')?.addEventListener('click', () => modal.classList.remove('active'));
-  document.getElementById('btn-close-text')?.addEventListener('click', () => modal?.classList.remove('active'));
-  modal?.addEventListener('click', (e) => {
-    if (e.target === modal) modal.classList.remove('active');
-  });
-
-  input?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      (document.getElementById('btn-log-text') as HTMLButtonElement | null)?.click();
-    }
-  });
-
-  document.getElementById('btn-log-text')?.addEventListener('click', async () => {
+  const submit = async () => {
     const rawText = input?.value.trim();
     if (!rawText) {
       showToast('Type a meal description, e.g. "250g chicken breast, 100g rice"');
       return;
     }
     await logTextInput(rawText);
+  };
+
+  input?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submit();
+    }
   });
+
+  document.getElementById('btn-dash-text-log')?.addEventListener('click', submit);
 }
 
 // ---------- Numpad Custom Water ----------
@@ -692,6 +689,8 @@ function setupNumpadHandlers() {
 
 let passwordPromptResolver: ((value: string | null) => void) | null = null;
 let confirmPromptResolver: ((value: boolean) => void) | null = null;
+let gramsPromptResolver: ((value: number | null) => void) | null = null;
+let namePromptResolver: ((value: string | null) => void) | null = null;
 let pwRequireConfirm = false;
 
 function setupDialogModals() {
@@ -749,6 +748,58 @@ function setupDialogModals() {
     confirmPromptResolver = null;
     resolve?.(false);
   });
+
+  // Grams modal (label + barcode scans — HANDOVER §5a item 8)
+  document.getElementById('btn-grams-ok')?.addEventListener('click', () => {
+    const input = document.getElementById('grams-input') as HTMLInputElement | null;
+    const errorEl = document.getElementById('grams-error');
+    const value = parseFloat(input?.value || '');
+    if (!(value > 0)) {
+      if (errorEl) errorEl.innerText = 'Enter a positive amount';
+      return;
+    }
+    document.getElementById('grams-modal')?.classList.remove('active');
+    const resolve = gramsPromptResolver;
+    gramsPromptResolver = null;
+    resolve?.(value);
+  });
+
+  document.getElementById('btn-grams-cancel')?.addEventListener('click', () => {
+    document.getElementById('grams-modal')?.classList.remove('active');
+    const resolve = gramsPromptResolver;
+    gramsPromptResolver = null;
+    resolve?.(null);
+  });
+
+  document.getElementById('grams-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') (document.getElementById('btn-grams-ok') as HTMLButtonElement | null)?.click();
+  });
+
+  // Name modal (label scan when the product name can't be read — item 7)
+  document.getElementById('btn-name-ok')?.addEventListener('click', () => {
+    const input = document.getElementById('name-input') as HTMLInputElement | null;
+    const errorEl = document.getElementById('name-error');
+    const value = input?.value.trim() || '';
+    if (!value) {
+      if (errorEl) errorEl.innerText = 'Name must not be empty';
+      return;
+    }
+    document.getElementById('name-modal')?.classList.remove('active');
+    const resolve = namePromptResolver;
+    namePromptResolver = null;
+    resolve?.(value);
+  });
+
+  document.getElementById('btn-name-cancel')?.addEventListener('click', () => {
+    document.getElementById('name-modal')?.classList.remove('active');
+    const resolve = namePromptResolver;
+    namePromptResolver = null;
+    resolve?.(null);
+  });
+
+  document.getElementById('name-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') (document.getElementById('btn-name-ok') as HTMLButtonElement | null)?.click();
+  });
 }
 
 function requestPassword(title: string, requireConfirm: boolean): Promise<string | null> {
@@ -783,6 +834,43 @@ function requestConfirmation(title: string, message: string): Promise<boolean> {
   return new Promise(resolve => { confirmPromptResolver = resolve; });
 }
 
+/** Ask how many grams the user actually ate (per-100g values are scaled to it). */
+function requestGrams(title: string, sub: string, defaultValue = 100): Promise<number | null> {
+  const titleEl = document.getElementById('grams-title');
+  const subEl = document.getElementById('grams-sub');
+  const input = document.getElementById('grams-input') as HTMLInputElement | null;
+  const errorEl = document.getElementById('grams-error');
+
+  if (titleEl) titleEl.innerText = title;
+  if (subEl) subEl.innerText = sub;
+  if (input) input.value = String(defaultValue);
+  if (errorEl) errorEl.innerText = '';
+
+  document.getElementById('grams-modal')?.classList.add('active');
+  input?.focus();
+  if (input) input.select();
+
+  return new Promise(resolve => { gramsPromptResolver = resolve; });
+}
+
+/** Ask the user for a product name when the label text doesn't reveal one. */
+function requestName(title: string, sub: string, defaultValue = ''): Promise<string | null> {
+  const titleEl = document.getElementById('name-title');
+  const subEl = document.getElementById('name-sub');
+  const input = document.getElementById('name-input') as HTMLInputElement | null;
+  const errorEl = document.getElementById('name-error');
+
+  if (titleEl) titleEl.innerText = title;
+  if (subEl) subEl.innerText = sub;
+  if (input) input.value = defaultValue;
+  if (errorEl) errorEl.innerText = '';
+
+  document.getElementById('name-modal')?.classList.add('active');
+  input?.focus();
+
+  return new Promise(resolve => { namePromptResolver = resolve; });
+}
+
 // ---------- Scanner / Barcode / Label OCR ----------
 
 /**
@@ -798,8 +886,17 @@ async function logBarcodeViaOnlineLookup(code: string) {
 
   const product = await lookupBarcodeOnline(code);
   if (product) {
+    // HANDOVER §5a item 8: the grams the user enters are what THEY ate.
+    const grams = await requestGrams(
+      'How many grams did you eat?',
+      `${product.productName} · ${Math.round(product.caloriesPer100g)} kcal per 100g`
+    );
+    if (grams === null) {
+      showToast('Cancelled — nothing logged');
+      return null;
+    }
     try {
-      const result = await foodService.logBarcodeLookup(date, product, code);
+      const result = await foodService.logBarcodeLookup(date, product, code, grams);
       await barcodeRepo.saveBarcode(result.food.id, code, 'online');
       document.getElementById('scanner-modal')?.classList.remove('active');
       await refreshStateForDate(date);
@@ -819,19 +916,31 @@ async function logBarcodeViaOnlineLookup(code: string) {
   return null;
 }
 
-/** Look up a barcode in the local library and log the product at 100 g. */
+/** Look up a barcode in the local library and log the product at the eaten amount. */
 async function logBarcodeFood(code: string) {
   const food = await barcodeRepo.lookupBarcode(code);
   if (!food) return logBarcodeViaOnlineLookup(code);
 
   const ref = foodRepo.toFoodReference(food);
-  const nutrition = calculateNutrition(ref, 100);
+
+  // HANDOVER §5a item 8: the grams the user enters are what THEY ate.
+  const per100 = food.calories_per_100g != null ? `${Math.round(food.calories_per_100g)} kcal` : 'no calories listed';
+  const grams = await requestGrams(
+    'How many grams did you eat?',
+    `${food.canonical_name} · ${per100} per 100g`
+  );
+  if (grams === null) {
+    showToast('Cancelled — nothing logged');
+    return null;
+  }
+
+  const nutrition = calculateNutrition(ref, grams);
   const date = store.getState().selectedDate;
 
   const log = await logRepo.insertFoodLog({
     date,
     food_id: food.id,
-    amount_g: 100,
+    amount_g: grams,
     calories: nutrition.calories,
     protein_g: nutrition.proteinG,
     carbs_g: nutrition.carbsG,
@@ -854,13 +963,45 @@ async function logBarcodeFood(code: string) {
   return food;
 }
 
-/** Run the shared label-text pipeline (parse → interpret → log) on OCR'd text. */
-async function logLabelOcrText(text: string, amount: number) {
+/**
+ * Run the shared label-text pipeline (parse → interpret → log) on OCR'd text.
+ * When `askGrams` is set (camera/gallery scans) the user is asked how many
+ * grams they ate; the dev-only paste-text path keeps its own amount field.
+ */
+async function logLabelOcrText(text: string, amount: number, askGrams = true) {
   const ocr = await gemmaClient.parseNutritionLabel(text);
   const date = store.getState().selectedDate;
 
+  // HANDOVER §5a item 7: never log the "Scanned Label Product" placeholder —
+  // use the name read from the label text, or ask the user for one.
+  if (!ocr.foodName || ocr.foodName === DEFAULT_LABEL_PRODUCT_NAME) {
+    const name = await requestName(
+      'Name this product',
+      "We couldn't read the product name from the label — what is it?"
+    );
+    if (name === null) {
+      showToast('Cancelled — nothing logged');
+      return;
+    }
+    ocr.foodName = name;
+  }
+
+  let grams = amount;
+  if (askGrams) {
+    const per100 = ocr.caloriesPer100g ? `${Math.round(ocr.caloriesPer100g)} kcal` : 'no calories listed';
+    const g = await requestGrams(
+      'How many grams did you eat?',
+      `${ocr.foodName} · ${per100} per 100g`
+    );
+    if (g === null) {
+      showToast('Cancelled — nothing logged');
+      return;
+    }
+    grams = g;
+  }
+
   try {
-    const result = await foodService.logLabelOcr(date, ocr, amount);
+    const result = await foodService.logLabelOcr(date, ocr, grams);
     document.getElementById('scanner-modal')?.classList.remove('active');
     await refreshStateForDate(date);
     showToast(`Logged "${ocr.foodName}" · ${Math.round(result.nutrition.calories)} kcal`);
@@ -1059,7 +1200,8 @@ function setupScannerHandlers() {
       return;
     }
 
-    await logLabelOcrText(text, amount);
+    // Dev-only path (never shipped): the paste-text area keeps its own amount field.
+    await logLabelOcrText(text, amount, false);
     if (textEl) textEl.value = '';
   });
 }

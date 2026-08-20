@@ -364,6 +364,28 @@ export function createFallbackConnection(store: FallbackTableStore): SQLiteDBCon
       }
 
       // Aggregates
+      if (statement.includes('SUM(calories)') && statement.includes('GROUP BY date')) {
+        const byDate: Record<string, any> = {};
+        for (const row of rows) {
+          byDate[row.date] = byDate[row.date] || { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, water_ml: 0 };
+          byDate[row.date].calories += row.calories || 0;
+          byDate[row.date].protein_g += row.protein_g || 0;
+          byDate[row.date].carbs_g += row.carbs_g || 0;
+          byDate[row.date].fat_g += row.fat_g || 0;
+          byDate[row.date].water_ml += row.water_ml || 0;
+        }
+        return { values: Object.entries(byDate).map(([date, sums]) => ({ date, ...sums })) };
+      }
+      if (statement.includes('SUM(amount_ml)') && statement.includes('GROUP BY date, source')) {
+        const byDate: Record<string, Record<string, number>> = {};
+        for (const row of rows) {
+          byDate[row.date] = byDate[row.date] || {};
+          byDate[row.date][row.source] = (byDate[row.date][row.source] || 0) + (row.amount_ml || 0);
+        }
+        return { values: Object.entries(byDate).flatMap(([date, sources]) =>
+          Object.entries(sources).map(([source, total]) => ({ date, source, total }))
+        ) };
+      }
       if (statement.includes('SUM(calories)')) {
         const sumCal = rows.reduce((acc, curr) => acc + (curr.calories || 0), 0);
         const sumPro = rows.reduce((acc, curr) => acc + (curr.protein_g || 0), 0);

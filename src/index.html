@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>EverydayFuel</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -65,17 +65,6 @@
         </div>
     </div>
 
-    <!-- Text Log Modal (Gemma text interpretation -> food logging) -->
-    <div id="text-log-modal" class="modal">
-        <div class="modal-content form-body" style="max-width: 420px;">
-            <h3 style="text-align: center; color: var(--accent-glow); margin-bottom: 15px;">Log by Text</h3>
-            <input type="text" id="text-log-input" placeholder='E.g. "250g chicken breast, 100g rice, 200ml orange juice"' style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
-            <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 15px; text-align: center;">Described foods are matched against your library (or estimated when not found).</div>
-            <button id="btn-log-text" class="btn-primary" style="width: 100%;">Interpret & Log</button>
-            <button id="btn-close-text" class="btn-close" style="margin-top: 10px; width: 100%;">Cancel</button>
-        </div>
-    </div>
-
     <!-- Action Hub Modal (Context Menu for Entries) -->
     <div id="action-hub-modal" class="modal">
         <div class="modal-content" style="max-width: 320px; text-align: center;">
@@ -125,6 +114,30 @@
             <div id="pw-error" style="font-size: 12px; color: #ef4444; min-height: 16px; margin-bottom: 6px;"></div>
             <button id="btn-pw-ok" class="btn-primary" style="width: 100%; margin-bottom: 10px;">Confirm</button>
             <button id="btn-pw-cancel" class="btn-close" style="width: 100%;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Grams Modal (how much did the user actually eat — label & barcode scans) -->
+    <div id="grams-modal" class="modal">
+        <div class="modal-content" style="max-width: 320px; text-align: center;">
+            <h3 id="grams-title" style="margin-bottom: 6px; color: var(--accent-glow); font-size: 16px;">How many grams did you eat?</h3>
+            <div id="grams-sub" style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px; word-break: break-word;"></div>
+            <input type="number" id="grams-input" value="100" min="1" step="any" style="width: 100%; text-align: center; font-size: 24px; font-weight: 700; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; box-sizing: border-box; margin-bottom: 8px;">
+            <div id="grams-error" style="font-size: 12px; color: #ef4444; min-height: 16px; margin-bottom: 6px;"></div>
+            <button id="btn-grams-ok" class="btn-primary" style="width: 100%; margin-bottom: 10px;">Log It</button>
+            <button id="btn-grams-cancel" class="btn-close" style="width: 100%;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Name Modal (label scan when the product name can't be read) -->
+    <div id="name-modal" class="modal">
+        <div class="modal-content" style="max-width: 320px; text-align: center;">
+            <h3 id="name-title" style="margin-bottom: 6px; color: var(--accent-glow); font-size: 16px;">Name this product</h3>
+            <p id="name-sub" style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">We couldn't read the product name from the label — what is it?</p>
+            <input type="text" id="name-input" placeholder="Product name" style="width: 100%; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; box-sizing: border-box; font-family: inherit; font-size: 15px; margin-bottom: 8px;">
+            <div id="name-error" style="font-size: 12px; color: #ef4444; min-height: 16px; margin-bottom: 6px;"></div>
+            <button id="btn-name-ok" class="btn-primary" style="width: 100%; margin-bottom: 10px;">Save Name</button>
+            <button id="btn-name-cancel" class="btn-close" style="width: 100%;">Cancel</button>
         </div>
     </div>
 
@@ -230,6 +243,12 @@
         </div>
     </div>
 
+    <!-- Top Left Quick Actions (opposite the Settings button) -->
+    <div class="sys-btn-left">
+        <button id="btn-open-journal">+ JOURNAL</button>
+        <button id="btn-open-manual">+ MANUAL</button>
+    </div>
+
     <!-- Main View Container -->
     <main id="main-container">
         <!-- Dashboard View -->
@@ -299,17 +318,12 @@
                         </div>
                     </div>
 
-                    <!-- 1-Tap Recents & Actions -->
-                    <div class="card recents-card">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                            <h3 style="margin: 0;">1-Tap Recents</h3>
-                            <div style="display: flex; gap: 8px;">
-                                <button id="btn-open-journal" style="background: var(--accent-glow); color: #000; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-family: inherit; font-size: 12px; cursor: pointer;">+ JOURNAL</button>
-                                <button id="btn-open-text" style="background: var(--accent-glow); color: #000; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-family: inherit; font-size: 12px; cursor: pointer;">+ TEXT</button>
-                                <button id="btn-open-manual" style="background: var(--pro); color: #fff; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-family: inherit; font-size: 12px; cursor: pointer;">+ MANUAL</button>
-                            </div>
+                    <!-- Always-Visible Text Logging Bar -->
+                    <div class="card textbar-card">
+                        <div class="text-bar">
+                            <input type="text" id="dash-text-input" placeholder='What did you eat? e.g. "250g chicken breast, 100g rice"' autocomplete="off" enterkeyhint="done">
+                            <button id="btn-dash-text-log">LOG</button>
                         </div>
-                        <div id="recents-container" class="recents-list"></div>
                     </div>
                 </div>
             </div>

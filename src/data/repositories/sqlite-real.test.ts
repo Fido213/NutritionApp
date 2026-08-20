@@ -329,6 +329,36 @@ describe('LogRepository on a real SQLite database', () => {
     expect(emptyDay.proteinG).toBe(0);
   });
 
+  it('groups daily totals per date for a range (batch history path)', async () => {
+    const { conn } = createRealDb();
+    const foodRepo = new FoodRepository(conn);
+    const logRepo = new LogRepository(conn);
+    const f1 = await foodRepo.insert(CHICKEN);
+
+    await logRepo.insertFoodLog({
+      date: '2026-08-19', food_id: f1.id, amount_g: 100,
+      calories: 165, protein_g: 31, carbs_g: 0, fat_g: 3.6, water_ml: 65
+    });
+    await logRepo.insertFoodLog({
+      date: '2026-08-19', food_id: f1.id, amount_g: 100,
+      calories: 165, protein_g: 31, carbs_g: 0, fat_g: 3.6, water_ml: 65
+    });
+    await logRepo.insertFoodLog({
+      date: '2026-08-20', food_id: f1.id, amount_g: 100,
+      calories: 100, protein_g: 10, carbs_g: 5, fat_g: 2, water_ml: 0
+    });
+
+    const byDate = await logRepo.getDailyTotalsForRange('2026-08-18', '2026-08-21');
+    expect(Object.keys(byDate).sort()).toEqual(['2026-08-19', '2026-08-20']);
+    expect(byDate['2026-08-19'].calories).toBe(330);
+    expect(byDate['2026-08-19'].proteinG).toBe(62);
+    expect(byDate['2026-08-20'].calories).toBe(100);
+    expect(byDate['2026-08-20'].carbsG).toBe(5);
+
+    const outOfRange = await logRepo.getDailyTotalsForRange('2025-01-01', '2025-01-31');
+    expect(outOfRange).toEqual({});
+  });
+
   it('duplicates a log to another date and updates/deletes logs', async () => {
     const { conn } = createRealDb();
     const foodId = await seedChicken(conn);
@@ -378,6 +408,26 @@ describe('WaterRepository on a real SQLite database', () => {
     const after = await repo.getWaterTotalsBySource('2026-08-19');
     expect(after.explicit).toBe(250);
   });
+
+  it('groups water totals per date and source for a range (batch history path)', async () => {
+    const { conn } = createRealDb();
+    const repo = new WaterRepository(conn);
+
+    await repo.insertWaterLog({ date: '2026-08-19', amount_ml: 500, source: 'explicit' });
+    await repo.insertWaterLog({ date: '2026-08-19', amount_ml: 250, source: 'explicit' });
+    await repo.insertWaterLog({ date: '2026-08-19', amount_ml: 200, source: 'drink' });
+    await repo.insertWaterLog({ date: '2026-08-19', amount_ml: 100, source: 'food' });
+    await repo.insertWaterLog({ date: '2026-08-18', amount_ml: 999, source: 'explicit' });
+    await repo.insertWaterLog({ date: '2026-08-20', amount_ml: 50, source: 'drink' });
+
+    const byDate = await repo.getWaterTotalsBySourceForRange('2026-08-18', '2026-08-21');
+    expect(byDate['2026-08-18']).toEqual({ explicit: 999, drink: 0, food: 0 });
+    expect(byDate['2026-08-19']).toEqual({ explicit: 750, drink: 200, food: 100 });
+    expect(byDate['2026-08-20']).toEqual({ explicit: 0, drink: 50, food: 0 });
+
+    const outOfRange = await repo.getWaterTotalsBySourceForRange('2025-01-01', '2025-01-31');
+    expect(outOfRange).toEqual({});
+  });
 });
 
 describe('GoalRepository on a real SQLite database', () => {
@@ -406,6 +456,30 @@ describe('GoalRepository on a real SQLite database', () => {
     expect((await repo.getGoalForDate('2026-03-14'))?.id).toBe(cut.id);
     expect((await repo.getGoalForDate('2026-03-15'))?.id).toBe(bulk.id);
     expect(await repo.getGoalForDate('2025-01-01')).toBeNull();
+  });
+
+  it('returns every goal overlapping a range, most recent first (batch history path)', async () => {
+    const { conn } = createRealDb();
+    const repo = new GoalRepository(conn);
+
+    const cut = await repo.createGoal({
+      name: 'Cut', start_date: '2026-01-01', end_date: null,
+      calories_target: 2200, protein_target: 150, carbs_target: 200, fat_target: 80, water_target: 4000
+    });
+    const bulk = await repo.createGoal({
+      name: 'Bulk', start_date: '2026-03-15', end_date: null,
+      calories_target: 2800, protein_target: 180, carbs_target: 300, fat_target: 100, water_target: 4500
+    });
+
+    const inRange = await repo.getGoalsForRange('2026-03-01', '2026-03-31');
+    expect(inRange.map(g => g.name)).toEqual(['Bulk', 'Cut']);
+    expect(inRange.map(g => g.id)).toEqual([bulk.id, cut.id]);
+
+    const beforeAny = await repo.getGoalsForRange('2025-01-01', '2025-01-31');
+    expect(beforeAny).toEqual([]);
+
+    const spanning = await repo.getGoalsForRange('2026-06-01', '2026-06-30');
+    expect(spanning.map(g => g.name)).toEqual(['Bulk']);
   });
 
   it('validates overlap against existing goals', async () => {

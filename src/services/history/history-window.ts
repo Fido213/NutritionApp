@@ -25,9 +25,9 @@ export const DEFAULT_TARGETS: GoalTargets = {
 };
 
 export interface HistoryRepos {
-  goal: GoalRepository;
-  log: LogRepository;
-  water: WaterRepository;
+  goal: GoalRepository & { getGoalsForRange(startDate: string, endDate: string): Promise<any[]> };
+  log: LogRepository & { getDailyTotalsForRange(startDate: string, endDate: string): Promise<Record<string, any>> };
+  water: WaterRepository & { getWaterTotalsBySourceForRange(startDate: string, endDate: string): Promise<Record<string, Record<string, number>>> };
 }
 
 export interface HistoryDay {
@@ -56,12 +56,29 @@ export function dayHasData(totals: DailyTotals, water: Record<string, number>): 
 
 export async function computeHistoryWindow(dates: string[], repos: HistoryRepos): Promise<Map<string, HistoryDay>> {
   const days = new Map<string, HistoryDay>();
+  if (dates.length === 0) return days;
+
+  const from = dates[0];
+  const to = dates[dates.length - 1];
+
+  // Batch path: three range queries total (goals / food totals / water by
+  // source) instead of one native round-trip per date per table. A year view
+  // previously issued 1,095 sequential queries (multi-second freeze on device).
+  const [goals, totalsByDate, waterByDate] = await Promise.all([
+    repos.goal.getGoalsForRange(from, to),
+    repos.log.getDailyTotalsForRange(from, to),
+    repos.water.getWaterTotalsBySourceForRange(from, to)
+  ]);
+
+  // getGoalsForRange returns most-recent-first; the first goal whose start is
+  // <= date is the goal active on that date.
+  const goalForDate = (date: string) => goals.find(g => g.start_date <= date) ?? null;
 
   for (const date of dates) {
-    const goalRecord = await repos.goal.getGoalForDate(date);
+    const goalRecord = goalForDate(date);
     const targets = goalRecord ? mapGoalToTargets(goalRecord) : DEFAULT_TARGETS;
-    const totals = await repos.log.getDailyTotals(date);
-    const water = await repos.water.getWaterTotalsBySource(date);
+    const totals = totalsByDate[date] ?? { date, calories: 0, proteinG: 0, carbsG: 0, fatG: 0, waterMl: 0 };
+    const water = waterByDate[date] ?? { explicit: 0, drink: 0, food: 0 };
     const hydration = calculateEffectiveHydration(water.explicit, water.drink, water.food, targets.waterTarget);
     days.set(date, {
       score: calculateScore(totals, targets, hydration).score,

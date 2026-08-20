@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GemmaClient } from './gemma-client';
+import { GemmaClient, DEFAULT_LABEL_PRODUCT_NAME } from './gemma-client';
 
 describe('GemmaClient fallback text parser', () => {
   it('parses "250g chicken, 100g rice" into two items with gram amounts', async () => {
@@ -117,5 +117,43 @@ describe('GemmaClient fallback label OCR parser', () => {
     // number after the energy keyword — for EU labels that is the kJ value.
     const parsed = await new GemmaClient().parseNutritionLabel('Energy 1542 kJ / 368 kcal\nFat 8g');
     expect(parsed.caloriesPer100g).toBe(1542);
+  });
+});
+
+describe('GemmaClient fallback label product naming', () => {
+  it('uses the line before the nutrition heading as the product name', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel(
+      'Granola Crunch\nNutrition Facts\nCalories 250\nTotal Fat 8g\nCarbohydrate 30g\nProtein 10g'
+    );
+    expect(parsed.foodName).toBe('Granola Crunch');
+    expect(parsed.caloriesPer100g).toBe(250);
+  });
+
+  it('honors an explicit "Product Name:" prefix', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel(
+      'Product Name: Strawberry Yogurt\nCalories 150\nProtein 5g'
+    );
+    expect(parsed.foodName).toBe('Strawberry Yogurt');
+  });
+
+  it('strips weights and junk from the extracted name', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel(
+      'Peanut Butter 340g\nNutrition Facts\nCalories 589\nFat 50g'
+    );
+    expect(parsed.foodName).toBe('Peanut Butter');
+  });
+
+  it('skips junk-only lines before the heading and falls back to the placeholder', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel(
+      '100g\nServing Size 40g\nNutrition Facts\nCalories 200'
+    );
+    expect(parsed.foodName).toBe(DEFAULT_LABEL_PRODUCT_NAME);
+  });
+
+  it('keeps the placeholder when the label has no readable name', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel(
+      'Nutrition Facts\nCalories 250\nTotal Fat 8g\nCarbohydrate 30g\nProtein 10g'
+    );
+    expect(parsed.foodName).toBe(DEFAULT_LABEL_PRODUCT_NAME);
   });
 });

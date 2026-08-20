@@ -11,13 +11,13 @@ import {
 } from './history-window';
 
 function fakeRepos(overrides: Partial<HistoryRepos> = {}): HistoryRepos {
-  const noGoal = async () => null;
-  const emptyTotals = async () => ({ calories: 0, proteinG: 0, carbsG: 0, fatG: 0, waterMl: 0 });
-  const emptyWater = async () => ({ explicit: 0, drink: 0, food: 0 });
+  const noGoals = async () => [];
+  const emptyTotals = async () => ({});
+  const emptyWater = async () => ({});
   return {
-    goal: { getGoalForDate: noGoal } as any,
-    log: { getDailyTotals: emptyTotals } as any,
-    water: { getWaterTotalsBySource: emptyWater } as any,
+    goal: { getGoalsForRange: noGoals } as any,
+    log: { getDailyTotalsForRange: emptyTotals } as any,
+    water: { getWaterTotalsBySourceForRange: emptyWater } as any,
     ...overrides
   };
 }
@@ -90,22 +90,19 @@ describe('computeHistoryWindow', () => {
   it('computes score, totals and hydration per day', async () => {
     const repos = fakeRepos({
       goal: {
-        getGoalForDate: async (date: string) =>
-          date === '2026-08-20'
-            ? { calories_target: 2500, protein_target: 150, carbs_target: 250, fat_target: 80, water_target: 4000 }
-            : null
+        getGoalsForRange: async () => [
+          { start_date: '2026-08-20', calories_target: 2500, protein_target: 150, carbs_target: 250, fat_target: 80, water_target: 4000 }
+        ]
       } as any,
       log: {
-        getDailyTotals: async (date: string) =>
-          date === '2026-08-20'
-            ? { calories: 1000, proteinG: 80, carbsG: 100, fatG: 20, waterMl: 0 }
-            : { calories: 0, proteinG: 0, carbsG: 0, fatG: 0, waterMl: 0 }
+        getDailyTotalsForRange: async () => ({
+          '2026-08-20': { calories: 1000, proteinG: 80, carbsG: 100, fatG: 20, waterMl: 0 }
+        })
       } as any,
       water: {
-        getWaterTotalsBySource: async (date: string) =>
-          date === '2026-08-20'
-            ? { explicit: 2000, drink: 500, food: 300 }
-            : { explicit: 0, drink: 0, food: 0 }
+        getWaterTotalsBySourceForRange: async () => ({
+          '2026-08-20': { explicit: 2000, drink: 500, food: 300 }
+        })
       } as any
     });
 
@@ -129,7 +126,7 @@ describe('computeHistoryWindow', () => {
   it('counts food+drink hydration once the explicit target is met', async () => {
     const repos = fakeRepos({
       water: {
-        getWaterTotalsBySource: async () => ({ explicit: 4500, drink: 500, food: 300 })
+        getWaterTotalsBySourceForRange: async () => ({ '2026-08-20': { explicit: 4500, drink: 500, food: 300 } })
       } as any
     });
 
@@ -140,11 +137,29 @@ describe('computeHistoryWindow', () => {
   it('marks a day with only water logs as having data', async () => {
     const repos = fakeRepos({
       water: {
-        getWaterTotalsBySource: async () => ({ explicit: 250, drink: 0, food: 0 })
+        getWaterTotalsBySourceForRange: async () => ({ '2026-08-20': { explicit: 250, drink: 0, food: 0 } })
       } as any
     });
 
     const days = await computeHistoryWindow(['2026-08-20'], repos);
     expect(days.get('2026-08-20')!.hasData).toBe(true);
+  });
+
+  it('uses the batch range queries (one per table), not per-date queries', async () => {
+    const calls: string[] = [];
+    const repos = fakeRepos({
+      goal: {
+        getGoalsForRange: async () => { calls.push('getGoalsForRange'); return []; }
+      } as any,
+      log: {
+        getDailyTotalsForRange: async () => { calls.push('getDailyTotalsForRange'); return {}; }
+      } as any,
+      water: {
+        getWaterTotalsBySourceForRange: async () => { calls.push('getWaterTotalsBySourceForRange'); return {}; }
+      } as any
+    });
+
+    await computeHistoryWindow(['2026-01-01', '2026-01-02', '2026-01-03'], repos);
+    expect(calls).toEqual(['getGoalsForRange', 'getDailyTotalsForRange', 'getWaterTotalsBySourceForRange']);
   });
 });

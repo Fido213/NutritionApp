@@ -1,5 +1,6 @@
 import { SQLiteDBConnection } from '@capacitor-community/sqlite';
 import { FoodLog, UpdateFoodLog } from '../types';
+import { DailyTotals } from '../../domain/types';
 
 export class LogRepository {
   constructor(private db: SQLiteDBConnection) {}
@@ -128,5 +129,32 @@ export class LogRepository {
       fatG: row?.fat_g || 0,
       waterMl: row?.water_ml || 0
     };
+  }
+
+  /** Per-date food totals for a range — one query instead of one per date (history views). */
+  async getDailyTotalsForRange(startDate: string, endDate: string): Promise<Record<string, DailyTotals>> {
+    const res = await this.db.query(
+      `SELECT 
+        date,
+        SUM(calories) as calories, 
+        SUM(protein_g) as protein_g, 
+        SUM(carbs_g) as carbs_g, 
+        SUM(fat_g) as fat_g, 
+        SUM(water_ml) as water_ml 
+       FROM food_logs WHERE date >= ? AND date <= ? GROUP BY date`,
+      [startDate, endDate]
+    );
+    const out: Record<string, DailyTotals> = {};
+    for (const row of res.values || []) {
+      out[row.date] = {
+        date: row.date,
+        calories: row.calories || 0,
+        proteinG: row.protein_g || 0,
+        carbsG: row.carbs_g || 0,
+        fatG: row.fat_g || 0,
+        waterMl: row.water_ml || 0
+      };
+    }
+    return out;
   }
 }

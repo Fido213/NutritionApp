@@ -5,7 +5,7 @@ import { formatWater } from '@utils/format';
 
 export function renderDashboard() {
   const state = store.getState();
-  const { todayTotals, todayGoals, todayHydration, recents } = state;
+  const { todayTotals, todayGoals, todayHydration } = state;
 
   // 1. Calorie Ring
   renderCalorieRing(todayTotals.calories, todayGoals.caloriesTarget);
@@ -47,27 +47,6 @@ export function renderDashboard() {
     } else {
       waterDeltaEl.innerText = '✓';
       waterDeltaEl.classList.add('on-target');
-    }
-  }
-
-  // 4. 1-Tap Recents
-  const recentsContainer = document.getElementById('recents-container');
-  if (recentsContainer) {
-    recentsContainer.innerHTML = '';
-    if (!recents || recents.length === 0) {
-      recentsContainer.innerHTML = '<span style="color: var(--text-dim); font-size: 12px;">No recents logged yet.</span>';
-    } else {
-      recents.slice(0, 5).forEach((item: any) => {
-        const pill = document.createElement('button');
-        pill.className = 'pill';
-        pill.innerText = item.canonical_name || item.canonicalName || item.name;
-        pill.addEventListener('click', () => {
-          // Trigger quick log for recent food
-          const event = new CustomEvent('quick-log-recent', { detail: item });
-          window.dispatchEvent(event);
-        });
-        recentsContainer.appendChild(pill);
-      });
     }
   }
 }

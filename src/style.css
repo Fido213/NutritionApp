@@ -39,29 +39,52 @@ body {
 }
 
 /* Layout Architecture */
-main { flex: 1; overflow-y: auto; position: relative; padding: 16px; padding-bottom: 90px; transition: transform 0.2s ease-out; }
-.view { display: none; height: 100%; flex-direction: column; gap: 16px; }
+main { flex: 1; overflow-y: auto; position: relative; padding: max(64px, calc(env(safe-area-inset-top, 0px) + 64px)) 14px 80px; transition: transform 0.2s ease-out; }
+.view { display: none; height: 100%; flex-direction: column; gap: 12px; }
 .active-view { display: flex; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
 
 .grid-layout {
     display: flex;
     flex-direction: column;
-    gap: 20px;
-    padding-bottom: 40px; 
+    gap: 14px;
+    padding-bottom: 16px; 
 }
+
+/* Top Left Quick Actions (opposite Settings) */
+.sys-btn-left {
+    position: fixed;
+    top: max(32px, calc(env(safe-area-inset-top, 0px) + 28px));
+    left: 14px;
+    z-index: 100;
+    display: flex;
+    gap: 8px;
+}
+.sys-btn-left button {
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+.sys-btn-left #btn-open-journal { background: var(--accent-glow); color: #000; border: none; }
+.sys-btn-left #btn-open-manual { background: var(--pro); color: #fff; border: none; }
 
 /* System Button Top Right */
 .sys-btn-top {
     position: fixed;
-    top: 16px;
+    top: max(32px, calc(env(safe-area-inset-top, 0px) + 28px));
     right: 16px;
     z-index: 100;
     background: var(--surface-light);
     border: 1px solid var(--border);
     border-radius: 50%;
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -92,12 +115,13 @@ main { flex: 1; overflow-y: auto; position: relative; padding: 16px; padding-bot
 .scan-wrapper {
     position: relative;
     width: 60px;
+    height: 70px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 .scan-btn {
-    position: absolute;
-    bottom: 10px; 
-    left: 50%;
-    transform: translateX(-50%);
+    position: relative;
     width: 64px;
     height: 64px;
     border-radius: 50%;
@@ -121,6 +145,7 @@ main { flex: 1; overflow-y: auto; position: relative; padding: 16px; padding-bot
     main { padding-left: 100px; padding-bottom: 16px; max-width: 1200px; margin: 0 auto; }
     .grid-layout { display: grid; grid-template-columns: 350px 1fr; gap: 24px; align-items: start; padding-bottom: 0; }
     .sys-btn-top { top: 30px; right: 30px; }
+    .sys-btn-left { top: 30px; left: 100px; }
 
     /* Laptop: History — tabs + trend chart span both columns, heatmap and day logs sit side by side */
     #history.active-view { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
@@ -137,7 +162,7 @@ main { flex: 1; overflow-y: auto; position: relative; padding: 16px; padding-bot
 
 /* Ring & Visuals */
 .ring-container { display: flex; flex-direction: column; align-items: center; position: relative; }
-.progress-ring { width: 200px; height: 200px; transform: rotate(-90deg); }
+.progress-ring { width: 160px; height: 160px; transform: rotate(-90deg); }
 .ring-bg { fill: none; stroke: var(--surface-light); stroke-width: 8; }
 .ring-fill { fill: none; stroke: var(--accent-glow); stroke-width: 8; stroke-linecap: round; stroke-dasharray: 314; stroke-dashoffset: 314; transition: stroke-dashoffset 0.5s ease-out, stroke 0.3s; }
 .ring-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; display: flex; flex-direction: column; }
@@ -170,7 +195,7 @@ main { flex: 1; overflow-y: auto; position: relative; padding: 16px; padding-bot
 .delta-badge.over { color: var(--warn); }
 
 /* Macro Rows */
-.macro-row { margin-bottom: 12px; }
+.macro-row { margin-bottom: 8px; }
 .macro-labels { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 4px; }
 .macro-bar-bg, .water-bar-bg { width: 100%; height: 8px; background: var(--surface-light); border-radius: 4px; overflow: hidden; }
 .macro-bar, .water-bar { height: 100%; border-radius: 4px; transition: width 0.3s ease; }
@@ -182,20 +207,42 @@ main { flex: 1; overflow-y: auto; position: relative; padding: 16px; padding-bot
 .macro-bar.success { background: var(--accent-glow); box-shadow: 0 0 8px rgba(34,197,94,0.4); }
 
 /* Hydration Breakdown */
-.water-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.water-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .water-breakdown { display: flex; gap: 6px; margin-top: 4px; }
 .w-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); }
 .w-explicit { color: var(--water); }
 .w-drink { color: var(--pro); }
 .w-food { color: var(--carb); }
 
-.quick-actions { display: flex; gap: 8px; margin-top: 12px; }
-.quick-actions button { flex: 1; background: var(--surface-light); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+.quick-actions { display: flex; gap: 8px; margin-top: 8px; }
+.quick-actions button { flex: 1; background: var(--surface-light); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 8px; font-weight: 600; cursor: pointer; }
 
-/* Recents & Lists */
-.recents-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.pill { background: var(--surface-light); border: 1px solid var(--border); color: var(--text); padding: 8px 16px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: background 0.2s; }
-.pill:hover { background: var(--border); }
+/* Always-Visible Text Logging Bar (dashboard) */
+.text-bar { display: flex; gap: 8px; }
+.text-bar input {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 10px;
+    outline: none;
+    font-family: inherit;
+    font-size: 14px;
+}
+.text-bar button {
+    background: var(--accent-glow);
+    color: #000;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-weight: 800;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
 
 /* History Tabs */
 .tabs { display: inline-flex; background: var(--surface-light); padding: 4px; border-radius: 12px; gap: 4px; border: 1px solid var(--border); }

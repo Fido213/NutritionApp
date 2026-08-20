@@ -23,6 +23,17 @@ export class GoalRepository {
     return res.values && res.values.length > 0 ? (res.values[0] as Goal) : null;
   }
 
+  /** Every goal overlapping a date range, most recent first — one query (history views). */
+  async getGoalsForRange(startDate: string, endDate: string): Promise<Goal[]> {
+    const res = await this.db.query(
+      `SELECT * FROM goals 
+       WHERE start_date <= ? AND (end_date IS NULL OR end_date >= ?) 
+       ORDER BY start_date DESC`,
+      [endDate, startDate]
+    );
+    return (res.values as Goal[]) || [];
+  }
+
   async createGoal(goal: InsertGoal): Promise<Goal> {
     const current = await this.getCurrentGoal();
     if (current) {
