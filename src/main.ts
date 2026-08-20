@@ -34,6 +34,9 @@ import { GoalTargets } from '@domain/types';
 import { computeHistoryWindow, datesForRange, datesForMonth, datesForYear, mapGoalToTargets, HistoryDay } from '@services/history/history-window';
 import { renderPairingCodeAsQR, supportsQrScanning, startQrScan } from '@services/transfer/qr-code';
 import type { QrScanHandle } from '@services/transfer/qr-code';
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { getVisionPlugin, stripDataUrlPrefix, supportsBrowserBarcodeScan, startBrowserBarcodeScan } from '@services/vision/vision-client';
+import type { ScanHandle } from '@services/vision/vision-client';
 
 let dbManager: DatabaseManager;
 let foodRepo: FoodRepository;
@@ -779,10 +782,93 @@ function requestConfirmation(title: string, message: string): Promise<boolean> {
   return new Promise(resolve => { confirmPromptResolver = resolve; });
 }
 
-// ---------- Scanner / Barcode ----------
+// ---------- Scanner / Barcode / Label OCR ----------
+
+/** Look up a barcode in the local library and log the product at 100 g. */
+async function logBarcodeFood(code: string) {
+  const food = await barcodeRepo.lookupBarcode(code);
+  if (!food) {
+    showToast('Barcode not found in local library');
+    document.getElementById('scanner-modal')?.classList.remove('active');
+    document.getElementById('manual-log-modal')?.classList.add('active');
+    return;
+  }
+
+  const ref = foodRepo.toFoodReference(food);
+  const nutrition = calculateNutrition(ref, 100);
+  const date = store.getState().selectedDate;
+
+  const log = await logRepo.insertFoodLog({
+    date,
+    food_id: food.id,
+    amount_g: 100,
+    calories: nutrition.calories,
+    protein_g: nutrition.proteinG,
+    carbs_g: nutrition.carbsG,
+    fat_g: nutrition.fatG,
+    water_ml: nutrition.waterMl
+  });
+
+  if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
+    await waterRepo.insertWaterLog({
+      date,
+      amount_ml: nutrition.waterMl,
+      source: classifyWaterSource(ref),
+      food_log_id: log.id
+    });
+  }
+
+  document.getElementById('scanner-modal')?.classList.remove('active');
+  await refreshStateForDate(date);
+  showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
+  return food;
+}
+
+/** Run the shared label-text pipeline (parse → interpret → log) on OCR'd text. */
+async function logLabelOcrText(text: string, amount: number) {
+  const ocr = await gemmaClient.parseNutritionLabel(text);
+  const date = store.getState().selectedDate;
+
+  try {
+    const result = await foodService.logLabelOcr(date, ocr, amount);
+    document.getElementById('scanner-modal')?.classList.remove('active');
+    await refreshStateForDate(date);
+    showToast(`Logged "${ocr.foodName}" · ${Math.round(result.nutrition.calories)} kcal`);
+  } catch (err) {
+    console.error('Label OCR logging failed:', err);
+    showToast('Could not parse that label text');
+  }
+}
+
+/** Capture a photo with the camera; returns a content URI or null when cancelled. */
+async function capturePhotoUri(): Promise<string | null> {
+  try {
+    const photo = await Camera.getPhoto({
+      quality: 90,
+      resultType: CameraResultType.Uri,
+      source: CameraSource.Camera,
+      correctOrientation: true
+    });
+    return photo.path || null;
+  } catch (err: any) {
+    if (err && typeof err.message === 'string' && err.message.toLowerCase().includes('cancel')) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+function stopLiveScan(handle: ScanHandle | null) {
+  if (handle) {
+    handle.stop();
+    const container = document.getElementById('barcode-scan-container');
+    if (container) container.style.display = 'none';
+  }
+}
 
 function setupScannerHandlers() {
   const barcodeInput = document.getElementById('barcode-input') as HTMLInputElement | null;
+  let liveScan: ScanHandle | null = null;
 
   const doBarcodeLookup = async () => {
     const code = (barcodeInput?.value || '').trim();
@@ -790,57 +876,127 @@ function setupScannerHandlers() {
       showToast('Enter a barcode number first');
       return;
     }
+    stopLiveScan(liveScan);
+    liveScan = null;
+    const food = await logBarcodeFood(code);
+    if (food && barcodeInput) barcodeInput.value = '';
+  };
 
-    const food = await barcodeRepo.lookupBarcode(code);
-    if (!food) {
-      showToast('Barcode not found in local library');
-      document.getElementById('scanner-modal')?.classList.remove('active');
-      document.getElementById('manual-log-modal')?.classList.add('active');
+  const doBarcodeScan = async () => {
+    const plugin = getVisionPlugin();
+
+    if (plugin) {
+      // Native ML Kit: camera capture → decode on-device
+      try {
+        const path = await capturePhotoUri();
+        if (!path) return;
+        const result = await plugin.scanBarcode({ imagePath: path });
+        if (!result.barcode) {
+          showToast('No barcode found in the photo — try again or type the number');
+          return;
+        }
+        const food = await logBarcodeFood(result.barcode);
+        if (food && barcodeInput) barcodeInput.value = '';
+      } catch (err) {
+        console.error('Barcode scan failed:', err);
+        showToast('Barcode scan failed — type the number instead');
+      }
       return;
     }
 
-    const ref = foodRepo.toFoodReference(food);
-    const nutrition = calculateNutrition(ref, 100);
-    const date = store.getState().selectedDate;
-
-    const log = await logRepo.insertFoodLog({
-      date,
-      food_id: food.id,
-      amount_g: 100,
-      calories: nutrition.calories,
-      protein_g: nutrition.proteinG,
-      carbs_g: nutrition.carbsG,
-      fat_g: nutrition.fatG,
-      water_ml: nutrition.waterMl
-    });
-
-    if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
-      await waterRepo.insertWaterLog({
-        date,
-        amount_ml: nutrition.waterMl,
-        source: classifyWaterSource(ref),
-        food_log_id: log.id
-      });
+    if (supportsBrowserBarcodeScan()) {
+      // Browser fallback: live BarcodeDetector feed inside the scanner modal
+      const container = document.getElementById('barcode-scan-container');
+      if (!container) return;
+      stopLiveScan(liveScan);
+      container.style.display = 'block';
+      try {
+        liveScan = await startBrowserBarcodeScan(container, async (code) => {
+          stopLiveScan(liveScan);
+          liveScan = null;
+          await logBarcodeFood(code);
+        });
+      } catch (err) {
+        container.style.display = 'none';
+        showToast(err instanceof Error ? err.message : 'Could not start the camera.');
+      }
+      return;
     }
 
-    if (barcodeInput) barcodeInput.value = '';
-    document.getElementById('scanner-modal')?.classList.remove('active');
-    await refreshStateForDate(date);
-    showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
+    showToast('Camera scanning needs the native app — type the barcode number instead');
+    barcodeInput?.focus();
   };
 
+  const doLabelScan = async () => {
+    const plugin = getVisionPlugin();
+
+    if (plugin) {
+      // Native ML Kit: camera capture → OCR → existing interpret pipeline
+      try {
+        const path = await capturePhotoUri();
+        if (!path) return;
+        const result = await plugin.ocrLabel({ imagePath: path });
+        const text = (result.text || '').trim();
+        if (!text) {
+          showToast('No label text found in the photo — paste it below instead');
+          return;
+        }
+        await logLabelOcrText(text, 100);
+      } catch (err) {
+        console.error('Label OCR failed:', err);
+        showToast('Label scan failed — paste the label text below instead');
+      }
+      return;
+    }
+
+    // Browser: file picker (native APK also keeps this as a gallery path)
+    document.getElementById('ai-file-input')?.click();
+  };
+
+  document.getElementById('btn-scan-barcode')?.addEventListener('click', doBarcodeScan);
   document.getElementById('btn-decode-barcode')?.addEventListener('click', doBarcodeLookup);
   barcodeInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') doBarcodeLookup();
   });
 
-  document.getElementById('btn-decode-label')?.addEventListener('click', () => {
-    document.getElementById('ai-file-input')?.click();
+  document.getElementById('btn-close-scanner')?.addEventListener('click', () => {
+    stopLiveScan(liveScan);
+    liveScan = null;
   });
 
-  document.getElementById('ai-file-input')?.addEventListener('change', (e) => {
-    (e.target as HTMLInputElement).value = '';
-    showToast('Image label OCR needs the native ML Kit integration — paste the label text below instead');
+  document.getElementById('btn-decode-label')?.addEventListener('click', doLabelScan);
+
+  document.getElementById('ai-file-input')?.addEventListener('change', async (e) => {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+
+    if (!file) return;
+
+    const plugin = getVisionPlugin();
+    if (!plugin) {
+      showToast('Image label OCR needs the native ML Kit integration — paste the label text below instead');
+      return;
+    }
+
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(stripDataUrlPrefix(String(reader.result || '')));
+        reader.onerror = () => reject(new Error('Could not read the selected image'));
+        reader.readAsDataURL(file);
+      });
+      const result = await plugin.ocrLabel({ imageBase64: base64 });
+      const text = (result.text || '').trim();
+      if (!text) {
+        showToast('No label text found in the image — paste it below instead');
+        return;
+      }
+      await logLabelOcrText(text, 100);
+    } catch (err) {
+      console.error('Label OCR failed:', err);
+      showToast('Label scan failed — paste the label text below instead');
+    }
   });
 
   document.getElementById('btn-parse-label-text')?.addEventListener('click', async () => {
@@ -854,19 +1010,8 @@ function setupScannerHandlers() {
       return;
     }
 
-    const ocr = await gemmaClient.parseNutritionLabel(text);
-    const date = store.getState().selectedDate;
-
-    try {
-      const result = await foodService.logLabelOcr(date, ocr, amount);
-      if (textEl) textEl.value = '';
-      document.getElementById('scanner-modal')?.classList.remove('active');
-      await refreshStateForDate(date);
-      showToast(`Logged "${ocr.foodName}" · ${Math.round(result.nutrition.calories)} kcal`);
-    } catch (err) {
-      console.error('Label OCR logging failed:', err);
-      showToast('Could not parse that label text');
-    }
+    await logLabelOcrText(text, amount);
+    if (textEl) textEl.value = '';
   });
 }
 

@@ -37,7 +37,9 @@
         <div class="modal-content scanner-box">
             <div id="reader"></div>
             <input type="text" id="barcode-input" placeholder="Enter barcode number (e.g. 8901234567890)" style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
+            <button id="btn-scan-barcode" class="btn-primary" style="margin-top: 10px; width: 100%; background: #3b82f6;">Scan Barcode (Camera)</button>
             <button id="btn-decode-barcode" class="btn-primary" style="margin-top: 10px; width: 100%; background: #3b82f6;">Lookup Barcode</button>
+            <div id="barcode-scan-container" style="display: none; margin-top: 10px; text-align: center;"></div>
             <button id="btn-decode-label" class="btn-primary" style="margin-top: 10px; width: 100%; background: var(--pro);">Scan Nutrition Label</button>
             <input type="file" id="ai-file-input" accept="image/*" capture="environment" style="display: none;">
             <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
