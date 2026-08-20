@@ -273,3 +273,64 @@ describe('FoodService label OCR pipeline', () => {
       .rejects.toThrow('positive');
   });
 });
+
+describe('FoodService online barcode pipeline', () => {
+  let service: FoodService;
+  let tables: any;
+
+  beforeAll(() => {
+    const { db, tables: t } = createFakeDb();
+    tables = t;
+    const foodRepo = new FoodRepository(db as any);
+    const logRepo = new LogRepository(db as any);
+    const obsRepo = new ObservationRepository(db as any);
+    const waterRepo = new WaterRepository(db as any);
+    service = new FoodService(foodRepo, logRepo, obsRepo, waterRepo);
+  });
+
+  const PRODUCT: any = {
+    productName: 'Nutella',
+    caloriesPer100g: 539,
+    proteinPer100g: 6.3,
+    carbsPer100g: 57.5,
+    fatPer100g: 30.9
+  };
+
+  it('creates a barcode-source food + observation + log at 100 g', async () => {
+    const result = await service.logBarcodeLookup('2026-08-20', PRODUCT, '3017620422003');
+
+    expect(result.nutrition.calories).toBe(539);
+    expect(result.nutrition.proteinG).toBe(6.3);
+
+    expect(tables.foods).toHaveLength(1);
+    expect(tables.foods[0].source_type).toBe('barcode');
+    expect(tables.foods[0].source_reference).toBe('3017620422003');
+    expect(tables.foods[0].calories_per_100g).toBe(539);
+    expect(tables.foods[0].confidence).toBe(0.8);
+
+    expect(tables.food_observations).toHaveLength(1);
+    expect(tables.food_observations[0].source_type).toBe('barcode');
+    expect(tables.food_observations[0].raw_input).toBe('3017620422003');
+
+    expect(tables.food_logs).toHaveLength(1);
+    expect(tables.food_logs[0].amount_g).toBe(100);
+    expect(tables.food_logs[0].observation_id).toBe(tables.food_observations[0].id);
+    expect(tables.water_logs).toHaveLength(0);
+  });
+
+  it('logs at a custom amount and reuses the library entry on re-scan', async () => {
+    const result = await service.logBarcodeLookup('2026-08-20', PRODUCT, '3017620422003', 40);
+
+    expect(result.nutrition.calories).toBeCloseTo(215.6, 10); // 539 kcal/100g x 0.4
+    expect(tables.foods).toHaveLength(1); // reused, no duplicate food
+    expect(tables.food_logs).toHaveLength(2);
+    expect(tables.food_observations).toHaveLength(2);
+  });
+
+  it('rejects a product without a name and a non-positive amount', async () => {
+    await expect(service.logBarcodeLookup('2026-08-20', { ...PRODUCT, productName: '  ' }, '3017620422003'))
+      .rejects.toThrow('missing a name');
+    await expect(service.logBarcodeLookup('2026-08-20', PRODUCT, '3017620422003', 0))
+      .rejects.toThrow('positive');
+  });
+});

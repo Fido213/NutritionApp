@@ -238,7 +238,7 @@ Computing scores for 28 dates requires 28 × (3 queries + 1 score calc) = ~84 DB
 `goalRepo.createGoal()` sets the previous goal's `end_date` but doesn't check for overlaps with non-current goals. **Mitigation:** Use existing `validateNoOverlap` method in the goals view save handler.
 
 ### 6.5 Barcode Not Found (MEDIUM)
-When a barcode isn't in the local DB, the UI must gracefully prompt for label scan or manual entry. **Mitigation:** Show a toast + open the manual log modal.
+When a barcode isn't in the local DB, the UI must gracefully prompt for label scan or manual entry. **Implemented (pass 14, per spec §7.4 + user requirement):** local lookup → optional internet lookup (Open Food Facts) → on hit log + save locally; on miss/offline → scan-the-nutrition-label fallback (toast + camera/gallery OCR). Manual entry stays available via + MANUAL.
 
 ---
 

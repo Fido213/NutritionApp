@@ -37,6 +37,7 @@ import type { QrScanHandle } from '@services/transfer/qr-code';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { getVisionPlugin, stripDataUrlPrefix, supportsBrowserBarcodeScan, startBrowserBarcodeScan } from '@services/vision/vision-client';
 import type { ScanHandle } from '@services/vision/vision-client';
+import { lookupBarcodeOnline } from '@services/barcode/online-lookup';
 
 let dbManager: DatabaseManager;
 let foodRepo: FoodRepository;
@@ -784,15 +785,44 @@ function requestConfirmation(title: string, message: string): Promise<boolean> {
 
 // ---------- Scanner / Barcode / Label OCR ----------
 
+/**
+ * Spec §7.4 fallback chain: the barcode is missing from the local library,
+ * so try the optional internet lookup (Open Food Facts). When it succeeds the
+ * product is logged and saved locally for future scans; when the device is
+ * offline or the product is not found online, fall back to scanning the
+ * nutrition label (never silent manual entry).
+ */
+async function logBarcodeViaOnlineLookup(code: string) {
+  const date = store.getState().selectedDate;
+  showToast('Not in library — checking online…');
+
+  const product = await lookupBarcodeOnline(code);
+  if (product) {
+    try {
+      const result = await foodService.logBarcodeLookup(date, product, code);
+      await barcodeRepo.saveBarcode(result.food.id, code, 'online');
+      document.getElementById('scanner-modal')?.classList.remove('active');
+      await refreshStateForDate(date);
+      showToast(`Logged "${product.productName}" · ${Math.round(result.nutrition.calories)} kcal`);
+      return { id: result.food.id, canonical_name: product.productName };
+    } catch (err) {
+      console.error('Online barcode logging failed:', err);
+      showToast('Could not save that product — scan the label instead');
+      triggerLabelScanFallback();
+      return null;
+    }
+  }
+
+  document.getElementById('scanner-modal')?.classList.remove('active');
+  showToast('Barcode not found online — scan the nutrition label instead');
+  triggerLabelScanFallback();
+  return null;
+}
+
 /** Look up a barcode in the local library and log the product at 100 g. */
 async function logBarcodeFood(code: string) {
   const food = await barcodeRepo.lookupBarcode(code);
-  if (!food) {
-    showToast('Barcode not found in local library');
-    document.getElementById('scanner-modal')?.classList.remove('active');
-    document.getElementById('manual-log-modal')?.classList.add('active');
-    return;
-  }
+  if (!food) return logBarcodeViaOnlineLookup(code);
 
   const ref = foodRepo.toFoodReference(food);
   const nutrition = calculateNutrition(ref, 100);
@@ -840,13 +870,18 @@ async function logLabelOcrText(text: string, amount: number) {
   }
 }
 
-/** Capture a photo with the camera; returns a content URI or null when cancelled. */
+/**
+ * Capture a photo (camera or an existing gallery image) via the system
+ * chooser; returns a content URI or null when cancelled. Gallery picks keep
+ * the saved-photo OCR/barcode paths reachable in the APK (the browser-only
+ * `#ai-file-input` path is otherwise dead code on native).
+ */
 async function capturePhotoUri(): Promise<string | null> {
   try {
     const photo = await Camera.getPhoto({
       quality: 90,
       resultType: CameraResultType.Uri,
-      source: CameraSource.Camera,
+      source: CameraSource.Prompt,
       correctOrientation: true
     });
     return photo.path || null;
@@ -863,6 +898,39 @@ function stopLiveScan(handle: ScanHandle | null) {
     handle.stop();
     const container = document.getElementById('barcode-scan-container');
     if (container) container.style.display = 'none';
+  }
+}
+
+/**
+ * Native label scan: camera/gallery capture -> ML Kit OCR -> interpret + log.
+ * Returns true when the flow started (photo taken and processed).
+ */
+async function scanLabelFromScanner(): Promise<boolean> {
+  const plugin = getVisionPlugin();
+  if (!plugin) return false;
+
+  try {
+    const path = await capturePhotoUri();
+    if (!path) return false;
+    const result = await plugin.ocrLabel({ imagePath: path });
+    const text = (result.text || '').trim();
+    if (!text) {
+      showToast('No label text found in the photo — paste it below instead');
+      return false;
+    }
+    await logLabelOcrText(text, 100);
+    return true;
+  } catch (err) {
+    console.error('Label OCR failed:', err);
+    showToast('Label scan failed — paste the label text below instead');
+    return false;
+  }
+}
+
+/** Kick off the label-scan fallback (native capture, or the file picker on web). */
+function triggerLabelScanFallback() {
+  if (!scanLabelFromScanner() && !getVisionPlugin()) {
+    document.getElementById('ai-file-input')?.click();
   }
 }
 
@@ -928,26 +996,7 @@ function setupScannerHandlers() {
   };
 
   const doLabelScan = async () => {
-    const plugin = getVisionPlugin();
-
-    if (plugin) {
-      // Native ML Kit: camera capture → OCR → existing interpret pipeline
-      try {
-        const path = await capturePhotoUri();
-        if (!path) return;
-        const result = await plugin.ocrLabel({ imagePath: path });
-        const text = (result.text || '').trim();
-        if (!text) {
-          showToast('No label text found in the photo — paste it below instead');
-          return;
-        }
-        await logLabelOcrText(text, 100);
-      } catch (err) {
-        console.error('Label OCR failed:', err);
-        showToast('Label scan failed — paste the label text below instead');
-      }
-      return;
-    }
+    if (await scanLabelFromScanner()) return;
 
     // Browser: file picker (native APK also keeps this as a gallery path)
     document.getElementById('ai-file-input')?.click();

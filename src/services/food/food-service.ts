@@ -9,6 +9,7 @@ import { calculateNutrition } from '@domain/nutrition';
 import { normalizeFoodName } from '@domain/logging';
 import { classifyWaterSource } from '@domain/hydration';
 import { InterpretedFoodItem, InterpretedLabelOCR } from '@services/ai/prompts';
+import { OnlineBarcodeProduct } from '@services/barcode/online-lookup';
 
 /**
  * Deterministic per-100g estimate used when an unknown food is resolved
@@ -201,6 +202,90 @@ export class FoodService {
       food_id: food.id,
       observation_id: observation.id,
       amount_g: amountG,
+      calories: nutrition.calories,
+      protein_g: nutrition.proteinG,
+      carbs_g: nutrition.carbsG,
+      fat_g: nutrition.fatG,
+      water_ml: nutrition.waterMl
+    });
+
+    if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
+      await this.waterRepo.insertWaterLog({
+        date,
+        amount_ml: nutrition.waterMl,
+        source: classifyWaterSource(ref),
+        food_log_id: log.id
+      });
+    }
+
+    return { food: ref, observation, log, nutrition };
+  }
+
+  /**
+   * Log an online barcode lookup result for a date (spec §7.4):
+   * resolve the food (library reuse or new barcode-source entry), record the
+   * observation, calculate nutrition at the given amount, insert the food log,
+   * and store any food-derived water separately. The barcode-to-food mapping
+   * itself is saved by the caller via BarcodeRepository.saveBarcode.
+   */
+  async logBarcodeLookup(
+    date: string,
+    product: OnlineBarcodeProduct,
+    barcode: string,
+    amountG: number = 100
+  ): Promise<LoggedLabelEntry> {
+    const name = product.productName?.trim();
+    if (!name) throw new Error('Online product is missing a name');
+    if (!(amountG > 0)) throw new Error('Barcode log amount must be positive');
+
+    const normalized = normalizeFoodName(name);
+    const stripped = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const found = await this.foodRepo.findByNormalizedName(normalized)
+      ?? await this.foodRepo.findByNormalizedName(stripped)
+      ?? await this.foodRepo.findByAlias(normalized);
+
+    let food: Food;
+    if (found) {
+      food = found;
+    } else {
+      food = await this.foodRepo.insert({
+        canonical_name: name,
+        normalized_name: normalized,
+        calories_per_100g: product.caloriesPer100g,
+        protein_per_100g: product.proteinPer100g,
+        carbs_per_100g: product.carbsPer100g,
+        fat_per_100g: product.fatPer100g,
+        water_per_100g: 0,
+        nutrition_basis: 'per_100g',
+        source_type: 'barcode',
+        source_reference: barcode,
+        confidence: 0.8
+      });
+    }
+
+    const ref = this.foodRepo.toFoodReference(food);
+
+    const observation = await this.observationRepo.insert({
+      food_id: food.id,
+      source_type: 'barcode',
+      estimated_amount: amountG,
+      final_amount: amountG,
+      amount_unit: 'g',
+      confidence: 0.8,
+      raw_input: barcode,
+      interpretation_json: JSON.stringify(product),
+      user_corrected: 0
+    });
+
+    const nutrition = calculateNutrition(ref, amountG);
+
+    const log = await this.logRepo.insertFoodLog({
+      date,
+      food_id: food.id,
+      observation_id: observation.id,
+      amount_g: amountG,
+      amount_ml: null,
       calories: nutrition.calories,
       protein_g: nutrition.proteinG,
       carbs_g: nutrition.carbsG,
