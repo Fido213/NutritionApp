@@ -30,6 +30,12 @@ export class WaterRepository {
     return (res.values as WaterLog[]) || [];
   }
 
+  async getFirstAndLastDate(): Promise<{ first: string | null; last: string | null }> {
+    const res = await this.db.query(`SELECT MIN(date) as first_date, MAX(date) as last_date FROM water_logs`);
+    const row = res.values?.[0];
+    return { first: row?.first_date ?? null, last: row?.last_date ?? null };
+  }
+
   async getWaterTotalsBySource(date: string): Promise<Record<string, number>> {
     const res = await this.db.query(
       `SELECT source, SUM(amount_ml) as total FROM water_logs WHERE date = ? GROUP BY source`,

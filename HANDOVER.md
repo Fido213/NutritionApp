@@ -1,8 +1,8 @@
 # EverydayFuel — Handover to Next Chat
 
 **Date:** 2026-08-20
-**From:** Laguna (DeepSeek V4 Flash), pass 10
-**Status:** Build + tests green; pass-9 + pass-10 working tree NOT committed (see §6)
+**From:** Laguna (DeepSeek V4 Flash), pass 11
+**Status:** Build + tests green; pass-11 working tree NOT committed (see §6)
 
 ---
 
@@ -67,13 +67,20 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - **QR-code pairing (spec §23 "shown as text/QR"):** `src/services/transfer/qr-code.ts` (new) — `renderPairingCodeAsQR` (tiny `qrcode` package, ECC L for large SDP payloads, rejects oversized payloads), `supportsQrScanning` + `startQrScan` (native `BarcodeDetector` API, zero deps; every-4th-frame decode loop; graceful rejection when unsupported). The P2P modal now shows the receiver's code as a **big QR image** (text copy collapsed under a details toggle) and the sender gets a **"Scan QR Code"** button → camera modal → auto-fills → auto-connects (`onP2PScan`). Manual paste remains as the fallback everywhere; the scan button hides automatically where `BarcodeDetector` is missing. `AndroidManifest.xml` gained the `CAMERA` permission (WebView `getUserMedia`). One new runtime dep: `qrcode` (+ `@types/qrcode` dev). Tests: `qr-code.test.ts` (5 tests: data-URL render, large-payload render, oversized rejection, no-browser support detection, graceful scan failure).
   - `src/index.html` + `src/style.css` — `#text-log-modal`; `.history-nav` (paging header), `.heatmap-year` (3-col), `.month-block`/`.month-title`/`.month-days` (7-col day grid), `.day-dot` + `.day-dot.selected` (tiny year heatmap cells).
   - Tests: `src/data/database-shim.test.ts` (new, 12 tests — positional INSERT with literals/bound values, UPDATE by id/date, ORDER BY+LIMIT and standalone LIMIT, water GROUP BY by source, SUM(calories) totals, COUNT(*), current-goal + active-on-date resolution, JOIN-foods enrichment, ON CONFLICT barcode upsert with `excluded.*`, DELETE by id/combo_id, alias JOIN) and `src/services/history/history-window.test.ts` (new, 12 tests — range/month/year date builders incl. leap years, `dayHasData`, `mapGoalToTargets` defaults/null-safety, per-day score/totals/hydration computation, hydration gating, water-only days). Suite now **192 tests, 15 files**.
+- **Pass 11 additions — full CSV export per spec §21 / QoL #9/#10 (all-time, date-range, goal-phase) with real metadata**:
+  - `src/services/export/export-service.ts` (new) — `datesBetween(start, end)` (inclusive, month-boundary safe), `resolveExportDateRange(repos)` (all-time bounds: earliest of first food/water log + oldest goal start → latest of last food/water log + today), `goalPhaseRange(goal)` (goal span; `end_date` NULL → today), and `buildExportRows(dates, repos)` which replays the dashboard's deterministic pipeline per day (goal-for-date → targets, daily totals, water by source, hydration gating, full legacy score contract) plus daily-record metadata. **Days with no food/water data are skipped** (legacy behavior — old_app/app.js `exportDataToCSV` only emitted rows for days with entries; the regression reference `exportexample.csv` contains only data days). Emits the established 21-column `ExportRow` shape — the locked CSV format (csv-export.test.ts) is byte-for-byte unchanged.
+  - Repo additions: `LogRepository.getFirstAndLastDate()` / `WaterRepository.getFirstAndLastDate()` (`SELECT MIN(date)/MAX(date)`) — used only by the all-time export.
+  - `src/index.html` + `src/main.ts` — `#export-modal` (radio scope: Selected Day / All Time / Date Range / Goal Phase; From/To date inputs for range; goal-phase dropdown populated from `getGoalsHistory()`); `setupExportHandlers()` + `openExportModal()`; `btn-export-csv` now opens the modal. The previous handler hardcoded `goalName: 'Active Phase'`, `lowAccuracy: false`, `dailyNote: ''` for a single selected day — the modal's "Selected Day" scope preserves that behavior with **real** data (actual goal name, real low-accuracy flag + day note from `daily_records`).
+  - `src/data/database.ts` — fallback shim now handles `SELECT MIN(date)/MAX(date)` (returned raw rows before → silently wrong all-time bounds in fallback mode).
+  - Tests: `src/services/export/export-service.test.ts` (new, 12 tests against a **real SQLite engine** — same sql.js harness as sqlite-real.test.ts): date list building incl. month boundaries, all-time bounds (data + no-data fallback to today), goal-phase span with open end, one row per data day with the correct per-phase goal name/targets across a Cut→Bulk range (no relabeling of history), actuals + water breakdown + hydration gating (effective = explicit only below target; explicit + food once target reached), legacy score contract, low-accuracy flag + day note propagation, empty-day skipping + empty range, 21-column CSV round-trip. Plus 1 new shim MIN/MAX test. Suite now **205 tests, 16 files**.
 
 ## 3. Verification status
 
 | Check | Result |
 |---|---|
 | `npm run build` (tsc strict + Vite) | ✅ passes |
-| `npm test` (vitest 4.1.11, 192 tests, 15 files) | ✅ passes (run 3× to confirm no flakes) |
+| `npm test` (vitest 4.1.11, 205 tests, 16 files) | ✅ passes (run 2× to confirm no flakes) |
+| Export service (export-service.test.ts, 12 tests on real sql.js SQLite: date lists, all-time bounds, per-phase goal resolution, hydration gating, legacy score contract, low-accuracy/note, empty-day skipping, 21-column CSV round-trip) | ✅ passes — the export modal's logic is fully covered; the modal DOM itself ❌ NOT clicked through (no browser) |
 | QR pairing helpers (qr-code.test.ts, 5 tests: render → PNG data URL, large-SDP payloads, oversized rejection, unsupported-platform detection, graceful scan failure) | ✅ passes |
 | Fallback shim evaluator (database-shim.test.ts, 12 tests: positional INSERTs, UPDATE, ORDER BY/LIMIT, GROUP BY, COUNT, ON CONFLICT + excluded.*, JOIN enrichment, DELETE) | ✅ passes — the evaluator is now an exported factory tested directly, closing the fallback-mode gaps that caused "edit doesn't persist" / "goal config not saving" in fallback mode |
 | History window derivation (history-window.test.ts, 12 tests: range/month/year dates incl. leap years, hasData gating, per-day score/totals/hydration, hydration gating) | ✅ passes |
@@ -102,6 +109,7 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 - Scoring regression coverage has one blind spot, locked in by the test itself: `2026-05-03` in exportexample.csv is not replayable because the legacy CSV exports only pure water while the old app scored hydration against pure + drink/food water (the bridging water isn't in the file). The new hydration-gating rule (spec §16) also means the new app intentionally scores with `effectiveTotal` rather than the old raw sum — no legacy row contradicts this within the replayable set.
 - Zero-target semantics preserved as-is (pre-existing): a 0 target yields a 0 component (no penalty) and reasons "calories lower than goal" etc. The legacy app would have divided by zero (→ +Infinity → "higher than goal"); no legacy CSV row has a zero target, so this was never observed in real data.
 - Offline: the only network touchpoint in the app is the Google Fonts `<link>` in `index.html` (static audit, pass 9); it degrades to the system sans-serif offline. No service worker exists (the old app had `sw.js`) — adding one is an open decision for the Phase 11 device pass.
+- Export (pass 11): days with no data are skipped (legacy behavior); a range with no data yields an empty file + "No data" toast. Spec §21's "confidence metrics" column is not part of the locked 21-column CSV format (documented since pass 1) — confidence remains available in the DB, just not exported.
 
 ## 5. What's next (from PLAN.md §9 handoff)
 
@@ -114,13 +122,14 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 7. ~~Restore-from-backup UI~~ — done in pass 3 (Settings → Restore from Backup Archive)
 8. ~~Encrypted backup format~~ — done in pass 5 (spec §23; see §2/§4). ~~Replace `window.prompt` password entry with a proper in-app modal~~ — done in pass 7 (password + confirm modals wired).
 9. ~~P2P transfer~~ — JS/service/UI done in pass 8 (spec §23; see §2/§4) — **manual device verification outstanding (see item 1)**.
+10. ~~Date-range / all-time / goal-phase CSV export (spec §21, QoL #9/#10)~~ — done in pass 11 (see §2); visual click-through of the modal still outstanding (folded into item 2's device pass).
 
 ## 6. Before you start
 
-- **The working tree is NOT committed.** Pass-9 changes: `src/style.css` (+12 lines: laptop History/Goals layouts inside the existing desktop media query), `Ai Guidelines/ai logs/logs/[Laguna][pass 9][2026-08-20].md`. **Pass-10 changes:** `src/data/database.ts` (shim extraction + fixes), `src/data/database-shim.test.ts` (new), `src/services/history/history-window.ts` + `.test.ts` (new), `src/ui/views/history.ts` (rewritten), `src/main.ts` (history window wiring, tabs/nav, text-log modal, journal library-only, P2P TURN + QR wiring), `src/index.html` (+TEXT button + text-log modal + journal title + P2P QR UI + qr-scan-modal), `src/style.css` (history-nav/year/month heatmap CSS), `src/services/transfer/webrtc-transport.ts` (STUN + gathering fix + exported defaults), `src/services/transfer/qr-code.ts` + `.test.ts` (new), `android/app/src/main/AndroidManifest.xml` (CAMERA permission), `package.json` (+`qrcode`, +`@types/qrcode`), `HANDOVER.md`, `Ai Guidelines/ai logs/logs/[Laguna][pass 10][2026-08-20].md`. (Note: pass 8 was committed as `8a79963` after its handover was written.) Commit this pass first.
-- `vitest` is a devDependency; the "test" script runs `vitest run` (192 tests, 15 files).
+- **The working tree is NOT committed.** Pass-11 changes: `src/services/export/export-service.ts` + `.test.ts` (new), `src/main.ts` (export modal handlers + button rewiring), `src/index.html` (`#export-modal`), `src/data/database.ts` (shim MIN/MAX aggregate), `src/data/database-shim.test.ts` (+1 test), `src/data/repositories/log.repo.ts` + `water.repo.ts` (`getFirstAndLastDate`), `HANDOVER.md`, `Ai Guidelines/ai logs/logs/[Laguna][pass 11][2026-08-20].md`. Commit this pass first. (Note: pass 9/10 were committed as `132a035`/`19ffe4a`/`4f79daa` after their handover was written — HEAD is clean before this pass's changes.)
+- `vitest` is a devDependency; the "test" script runs `vitest run` (205 tests, 16 files).
 - The sql.js real-SQLite tests need no configuration: `initSqlJs()` loads `node_modules/sql.js/dist/sql-wasm.wasm` automatically in Node. Do not delete `src/types/sql-js.d.ts` — it is the type declaration for the untyped `sql.js` package (tsc strict would fail without it).
-- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-10 log: `[Laguna][pass 10][2026-08-20].md`.
+- AI work logs live in `Ai Guidelines/ai logs/logs/` which is **git-ignored by design** (matches previous passes). Pass-11 log: `[Laguna][pass 11][2026-08-20].md`.
 - **No Java/Android SDK on the development machine** (rechecked pass 8) — native Android builds (`gradlew assembleDebug`) cannot run here; the Android project is untouched and unverified since pass 1. The next native pass must run on a machine with the Android toolchain.
 - Read `Ai Guidelines/NutritionOS — Agent Governance & Development Rules.md` (em-dash in filename) before editing; PLAN.md §7 lists what must NOT change (scoring, hydration gating, goal resolution, v001 schema, domain types, CSV export format).
 - Commands: `npm run dev` (web), `npm run build`, `npm test`, `npm run cap:sync` / `cap:run` (Android).

@@ -293,6 +293,30 @@ describe('createFallbackConnection', () => {
     expect(store.debug().tables.combo_items).toEqual([]);
   });
 
+  it('computes first/last dates with MIN(date)/MAX(date)', async () => {
+    const store = createStore();
+    const db = createFallbackConnection(store);
+
+    await db.run(
+      `INSERT INTO food_logs (id, date, food_id, calories, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ['l1', '2026-08-10', 'f1', 300, 'now']
+    );
+    await db.run(
+      `INSERT INTO food_logs (id, date, food_id, calories, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ['l2', '2026-08-20', 'f2', 400, 'now']
+    );
+
+    const rows = await queryValues(db,
+      `SELECT MIN(date) as first_date, MAX(date) as last_date FROM food_logs`
+    );
+    expect(rows[0]).toEqual({ first_date: '2026-08-10', last_date: '2026-08-20' });
+
+    const empty = await queryValues(db,
+      `SELECT MIN(date) as first_date, MAX(date) as last_date FROM water_logs`
+    );
+    expect(empty[0]).toEqual({ first_date: null, last_date: null });
+  });
+
   it('resolves alias lookups via JOIN food_aliases', async () => {
     const store = createStore();
     const db = createFallbackConnection(store);

@@ -102,6 +102,12 @@ export class LogRepository {
     return res.values![0] as FoodLog;
   }
 
+  async getFirstAndLastDate(): Promise<{ first: string | null; last: string | null }> {
+    const res = await this.db.query(`SELECT MIN(date) as first_date, MAX(date) as last_date FROM food_logs`);
+    const row = res.values?.[0];
+    return { first: row?.first_date ?? null, last: row?.last_date ?? null };
+  }
+
   async getDailyTotals(date: string): Promise<{ date: string; calories: number; proteinG: number; carbsG: number; fatG: number; waterMl: number }> {
     const res = await this.db.query(
       `SELECT 

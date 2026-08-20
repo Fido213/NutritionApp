@@ -21,6 +21,7 @@ import { calculateNutrition } from '@domain/nutrition';
 import { normalizeFoodName } from '@domain/logging';
 import { getTodayDateString, formatDateISO } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
+import { buildExportRows, datesBetween, goalPhaseRange, resolveExportDateRange, ExportRepos } from '@services/export/export-service';
 import { parseCSV } from '@services/import/csv-import';
 import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive, collectAllTables } from '@services/backup/backup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from '@services/backup/encryption';
@@ -138,6 +139,7 @@ async function initApp() {
     setupNavigation();
     setupModals();
     setupDialogModals();
+    setupExportHandlers();
     setupActionHandlers();
     setupJournalHandlers();
     setupTextLogHandlers();
@@ -312,6 +314,98 @@ function setupModals() {
   document.getElementById('btn-close-edit')?.addEventListener('click', () => closeModal('edit-modal'));
 }
 
+// ---------- Export (spec §21: all-time / date range / goal phase) ----------
+
+async function openExportModal() {
+  const select = document.getElementById('export-goal-phase') as HTMLSelectElement | null;
+  if (select) {
+    const goals = await goalRepo.getGoalsHistory();
+    select.innerHTML = '';
+    goals.forEach(goal => {
+      const option = document.createElement('option');
+      option.value = goal.id;
+      option.textContent = `${goal.name} (${goal.start_date}${goal.end_date ? ' → ' + goal.end_date : ' → now'})`;
+      select.appendChild(option);
+    });
+    if (select.options.length > 0) select.selectedIndex = 0;
+  }
+
+  const from = document.getElementById('export-from') as HTMLInputElement | null;
+  const to = document.getElementById('export-to') as HTMLInputElement | null;
+  if (from) from.value = store.getState().selectedDate;
+  if (to) to.value = getTodayDateString();
+
+  document.getElementById('export-modal')?.classList.add('active');
+}
+
+function setupExportHandlers() {
+  const closeModal = () => document.getElementById('export-modal')?.classList.remove('active');
+
+  document.getElementById('btn-export-close')?.addEventListener('click', closeModal);
+  document.getElementById('export-modal')?.addEventListener('click', (e) => {
+    if (e.target === document.getElementById('export-modal')) closeModal();
+  });
+
+  document.querySelectorAll<HTMLInputElement>('input[name="export-mode"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const mode = document.querySelector<HTMLInputElement>('input[name="export-mode"]:checked')?.value || 'day';
+      const rangeFields = document.getElementById('export-range-fields');
+      const phaseField = document.getElementById('export-phase-field');
+      if (rangeFields) rangeFields.style.display = mode === 'range' ? '' : 'none';
+      if (phaseField) phaseField.style.display = mode === 'phase' ? '' : 'none';
+    });
+  });
+
+  document.getElementById('btn-export-do')?.addEventListener('click', async () => {
+    const mode = document.querySelector<HTMLInputElement>('input[name="export-mode"]:checked')?.value || 'day';
+    const repos: ExportRepos = { goal: goalRepo, log: logRepo, water: waterRepo, dailyRecord: dailyRecordRepo };
+
+    let dates: string[] = [];
+    let label = '';
+
+    if (mode === 'day') {
+      const day = store.getState().selectedDate;
+      dates = [day];
+      label = day;
+    } else if (mode === 'all') {
+      const range = await resolveExportDateRange(repos);
+      dates = datesBetween(range.startDate, range.endDate);
+      label = range.startDate + '_' + range.endDate;
+    } else if (mode === 'range') {
+      const from = (document.getElementById('export-from') as HTMLInputElement | null)?.value || '';
+      const to = (document.getElementById('export-to') as HTMLInputElement | null)?.value || '';
+      if (!from || !to || from > to) {
+        showToast('Pick a valid date range (From ≤ To)');
+        return;
+      }
+      dates = datesBetween(from, to);
+      label = from + '_' + to;
+    } else {
+      const goalId = (document.getElementById('export-goal-phase') as HTMLSelectElement | null)?.value;
+      const goals = await goalRepo.getGoalsHistory();
+      const goal = goals.find(g => g.id === goalId);
+      if (!goal) {
+        showToast('No goal phase selected');
+        return;
+      }
+      const range = goalPhaseRange(goal);
+      dates = datesBetween(range.startDate, range.endDate);
+      label = `${goal.name.replace(/[^a-zA-Z0-9_-]+/g, '_')}_${range.startDate}_${range.endDate}`;
+    }
+
+    const rows = await buildExportRows(dates, repos);
+    if (rows.length === 0) {
+      showToast('No data in this range to export');
+      return;
+    }
+
+    const csv = generateCSV(rows);
+    downloadCSV(`EverydayFuel_Export_${label}.csv`, csv);
+    closeModal();
+    showToast(`Exported ${rows.length} day(s) to CSV`);
+  });
+}
+
 function setupActionHandlers() {
   document.getElementById('btn-save-goals')?.addEventListener('click', async () => {
     const newGoals = readGoalsForm();
@@ -330,30 +424,7 @@ function setupActionHandlers() {
   });
 
   document.getElementById('btn-export-csv')?.addEventListener('click', () => {
-    const state = store.getState();
-    const row = {
-      date: state.selectedDate,
-      goalName: 'Active Phase',
-      ...state.todayGoals,
-      caloriesActual: state.todayTotals.calories,
-      proteinActual: state.todayTotals.proteinG,
-      carbsActual: state.todayTotals.carbsG,
-      fatActual: state.todayTotals.fatG,
-      explicitWaterMl: state.todayHydration.explicit,
-      drinkWaterMl: state.todayHydration.drink,
-      foodWaterMl: state.todayHydration.food,
-      effectiveWaterMl: state.todayHydration.effectiveTotal,
-      scoreTier: state.currentScore?.scoreTier || 'neutral',
-      scoreCode: state.currentScore?.scoreCode || '0',
-      scoreResult: state.currentScore?.result || '',
-      scoreReason: state.currentScore?.reason || '',
-      lowAccuracy: false,
-      dailyNote: ''
-    };
-
-    const csv = generateCSV([row]);
-    downloadCSV(`EverydayFuel_Export_${getTodayDateString()}.csv`, csv);
-    showToast('Exported CSV file');
+    openExportModal();
   });
 
   document.getElementById('btn-save-manual')?.addEventListener('click', async () => {

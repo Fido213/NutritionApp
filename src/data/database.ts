@@ -382,6 +382,15 @@ export function createFallbackConnection(store: FallbackTableStore): SQLiteDBCon
       if (statement.includes('COUNT(*)')) {
         return { values: [{ count: rows.length }] };
       }
+      if (statement.includes('MIN(date)') && statement.includes('MAX(date)')) {
+        const dates = rows.map(r => r.date).filter(d => d !== undefined && d !== null);
+        return {
+          values: [{
+            first_date: dates.length ? dates.reduce((a, b) => (a < b ? a : b)) : null,
+            last_date: dates.length ? dates.reduce((a, b) => (a > b ? a : b)) : null
+          }]
+        };
+      }
 
       // JOIN foods enriches food_logs with the display name (history day view)
       if (statement.includes('JOIN foods') && table === 'food_logs') {
