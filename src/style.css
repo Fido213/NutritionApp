@@ -318,7 +318,44 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(76px, calc(en
 .log-name { font-weight: 600; font-size: 14px; color: var(--text); }
 .log-cal, .log-water { font-weight: 700; font-size: 14px; }
 .log-cal { color: var(--accent-glow); }
+.log-water { color: var(--water); }
+.water-name { color: var(--water); }
 .log-macros { display: flex; gap: 12px; font-size: 11px; font-weight: 600; background: rgba(0,0,0,0.2); padding: 4px 8px; border-radius: 6px; width: fit-content; pointer-events: none; }
+
+/* Day detail (History selected-day breakdown) */
+.day-detail-header { display: flex; justify-content: space-between; align-items: center; margin: 16px 0 10px 0; }
+.day-detail-header h3 { color: var(--text-dim); font-size: 16px; }
+.day-detail-select-btn { background: var(--surface-light); border: 1px solid var(--border); color: var(--text-dim); padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 12px; cursor: pointer; }
+.day-detail-select-btn.active { color: var(--accent-glow); border-color: var(--accent-glow); }
+.day-note-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface-light); border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; }
+.day-note-text { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.day-note-text.empty { color: var(--text-dim); font-style: italic; }
+.day-note-btn { background: transparent; border: none; color: var(--text-dim); font-size: 15px; cursor: pointer; padding: 2px 6px; }
+.day-detail-empty { color: var(--text-dim); font-size: 14px; }
+
+/* Inline expand actions + selection */
+.log-item.expanded { border-color: var(--accent-glow); }
+.log-actions { display: flex; gap: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+.log-action-btn { flex: 1; background: var(--surface-light); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 8px; font-weight: 700; font-size: 12px; cursor: pointer; font-family: inherit; }
+.log-action-btn.blue { background: #3b82f6; color: #fff; border-color: transparent; }
+.log-action-btn.danger { background: #ef4444; color: #fff; border-color: transparent; }
+.log-note-line { font-size: 12px; color: var(--text-dim); font-style: italic; overflow-wrap: anywhere; }
+.log-item.selected { border-color: var(--water); }
+.select-box { width: 20px; height: 20px; min-width: 20px; border: 2px solid var(--text-dim); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; color: #000; align-self: center; }
+.select-box.checked { background: var(--water); border-color: var(--water); }
+.bulk-bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px; margin-bottom: 10px; }
+.bulk-btn { flex: 1; background: var(--surface-light); border: 1px solid var(--border); color: var(--text); padding: 9px 4px; border-radius: 8px; font-weight: 700; font-size: 12px; cursor: pointer; font-family: inherit; }
+.bulk-btn.danger { background: #ef4444; color: #fff; border-color: transparent; }
+.bulk-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* Edit screen (full view) */
+.edit-view .edit-header { display: flex; align-items: center; gap: 12px; }
+.edit-view .edit-header h2 { font-size: 20px; }
+.edit-back-btn { background: var(--surface-light); border: 1px solid var(--border); color: var(--text); padding: 8px 14px; border-radius: 10px; font-weight: 700; font-size: 14px; cursor: pointer; font-family: inherit; }
+
+/* Combos (journal modal) */
+.journal-combo-item { display: flex; justify-content: space-between; align-items: center; }
+.combo-del { background: transparent; border: none; color: var(--warn); font-weight: 700; cursor: pointer; padding: 4px 8px; font-family: inherit; }
 
 /* Multi-lap Ring Colors */
 .lap-over-1 { stroke: #ef4444; }

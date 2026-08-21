@@ -61,25 +61,49 @@
             <h3 style="text-align: center; color: var(--accent-glow); margin-bottom: 15px;">Food Library</h3>
             <input type="text" id="journal-search" placeholder="Search foods or aliases..." style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
             <div id="journal-results" class="log-list" style="max-height: 300px; overflow-y: auto;"></div>
+            <div id="journal-combo-bar" style="display: none; margin-top: 10px;">
+                <input type="text" id="combo-name-input" placeholder="Combo name (e.g. Breakfast)" style="width: 100%; margin-bottom: 8px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
+                <div style="display: flex; gap: 8px;">
+                    <button id="btn-save-combo" class="btn-primary" style="margin-top: 0;">Save Combo</button>
+                    <button id="btn-cancel-combo" class="btn-close" style="width: auto; padding: 12px 18px;">Cancel</button>
+                </div>
+            </div>
+            <details id="combo-list-section" style="margin-top: 12px;">
+                <summary style="font-size: 13px; color: var(--text-dim); cursor: pointer;">Combos — tap to log all ingredients</summary>
+                <div id="combo-list" class="log-list" style="margin-top: 8px;"></div>
+            </details>
             <button id="btn-close-journal" class="btn-close" style="margin-top: 15px;">Cancel</button>
         </div>
     </div>
 
-    <!-- Action Hub Modal (Context Menu for Entries) -->
-    <div id="action-hub-modal" class="modal">
-        <div class="modal-content" style="max-width: 320px; text-align: center;">
-            <h3 id="action-hub-title" style="margin-bottom: 20px; color: var(--accent-glow);">Log Actions</h3>
-            <button id="hub-btn-edit" class="btn-primary" style="margin-bottom: 12px; width: 100%;">Edit Details</button>
-            <button id="hub-btn-duplicate" class="btn-primary" style="margin-bottom: 12px; width: 100%; background: #3b82f6;">Duplicate</button>
-            <button id="hub-btn-delete" class="btn-primary" style="margin-bottom: 25px; width: 100%; background: #ef4444; color: #fff;">Delete</button>
-            <button id="hub-btn-close" class="btn-close" style="width: 100%;">Cancel</button>
+    <!-- Day Note Modal -->
+    <div id="note-modal" class="modal">
+        <div class="modal-content" style="max-width: 340px;">
+            <h3 style="margin-bottom: 12px; text-align: center; color: var(--accent-glow);">Day Note</h3>
+            <textarea id="day-note-input" rows="4" placeholder="Note for this day..." style="width: 100%; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none; font-family: inherit; font-size: 14px; resize: vertical; box-sizing: border-box;"></textarea>
+            <button id="btn-note-ok" class="btn-primary" style="width: 100%; margin-top: 10px;">Save Note</button>
+            <button id="btn-note-cancel" class="btn-close" style="width: 100%; margin-top: 10px;">Cancel</button>
         </div>
     </div>
 
-    <!-- Edit Entry Modal -->
-    <div id="edit-modal" class="modal">
-        <div class="modal-content form-body settings-grid" style="max-width: 380px;">
-            <h3 style="margin-bottom: 20px; text-align: center; color: var(--accent-glow);">Edit Entry</h3>
+    <!-- Bulk Change Date Modal (multi-select) -->
+    <div id="bulk-date-modal" class="modal">
+        <div class="modal-content" style="max-width: 320px;">
+            <h3 style="margin-bottom: 12px; text-align: center; color: var(--accent-glow);">Change Date</h3>
+            <div id="bulk-date-count" style="font-size: 13px; color: var(--text-dim); margin-bottom: 10px; text-align: center;"></div>
+            <input type="date" id="bulk-date-input" style="width: 100%; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
+            <button id="btn-bulk-date-ok" class="btn-primary" style="width: 100%; margin-top: 12px;">Move Items</button>
+            <button id="btn-bulk-date-cancel" class="btn-close" style="width: 100%; margin-top: 10px;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Edit Entry Screen (full view, §5b item 2) -->
+    <section id="view-edit" class="view scroller edit-view">
+        <header class="view-header edit-header">
+            <button id="btn-edit-back" class="edit-back-btn">‹ Back</button>
+            <h2>Edit Entry</h2>
+        </header>
+        <div class="card form-body settings-grid">
             <input type="hidden" id="edit-log-id">
             <input type="hidden" id="base-cal">
             <input type="hidden" id="base-pro">
@@ -88,10 +112,10 @@
 
             <div class="input-row"><label>Name</label><input type="text" id="edit-name" style="text-align: right; width: 160px;"></div>
             <div class="input-row"><label>Date</label><input type="date" id="edit-date" style="text-align: right; background: transparent; color: #fff; border: none; font-family: inherit;"></div>
-            
-            <div id="multiplier-section" style="border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 10px 0; margin-bottom: 10px;">
-                <div class="input-row"><label style="font-size: 12px; color: var(--pro);">Base Amount (g/ml)</label><input type="number" id="base-amount" value="100"></div>
-                <div class="input-row"><label style="font-size: 12px; color: var(--pro);">New Amount (g/ml)</label><input type="number" id="eaten-amount" placeholder="E.g. 250"></div>
+
+            <div id="multiplier-section" style="border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 10px 0;">
+                <div class="input-row" style="background: transparent; padding: 6px 0;"><label style="font-size: 12px; color: var(--pro);">Base Amount (g/ml)</label><input type="number" id="base-amount" value="100"></div>
+                <div class="input-row" style="background: transparent; padding: 6px 0;"><label style="font-size: 12px; color: var(--pro);">New Amount (g/ml)</label><input type="number" id="eaten-amount" placeholder="E.g. 250"></div>
             </div>
 
             <div class="input-row"><label>Calories</label><input type="number" id="edit-cal"></div>
@@ -99,11 +123,10 @@
             <div class="input-row"><label>Carbs (g)</label><input type="number" id="edit-carb"></div>
             <div class="input-row"><label>Fat (g)</label><input type="number" id="edit-fat"></div>
             <div class="input-row"><label>Note</label><input type="text" id="edit-note" placeholder="Optional log note..."></div>
-            
-            <button id="btn-save-edit" class="btn-primary" style="margin-top: 20px; width: 100%;">Save Changes</button>
-            <button id="btn-close-edit" class="btn-close" style="width: 100%; margin-top: 10px;">Cancel</button>
+
+            <button id="btn-save-edit" class="btn-primary">Save Changes</button>
         </div>
-    </div>
+    </section>
 
     <!-- Password Modal (Backup / Restore) -->
     <div id="password-modal" class="modal">

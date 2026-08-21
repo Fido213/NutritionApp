@@ -90,7 +90,12 @@ function escapeCSV(val: string): string {
   return `"${clean}"`;
 }
 
-export function downloadCSV(filename: string, csvContent: string) {
+import { saveDownloadNative } from '@services/native/file-saver';
+
+/** Save via MediaStore on Android (WebView drops blob downloads); anchor-click in browsers. */
+export async function downloadCSV(filename: string, csvContent: string) {
+  if (await saveDownloadNative(filename, csvContent, 'text/csv')) return;
+
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

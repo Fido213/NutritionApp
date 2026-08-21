@@ -17,13 +17,78 @@ import { ExportRow } from './csv-export';
 import { calculateEffectiveHydration } from '@domain/hydration';
 import { calculateScore } from '@domain/scoring';
 import { DEFAULT_TARGETS, dayHasData, mapGoalToTargets } from '@services/history/history-window';
-import { formatDateISO, getTodayDateString } from '@utils/dates';
+import { getTodayDateString } from '@utils/dates';
 
 export interface ExportRepos {
   goal: GoalRepository;
   log: LogRepository;
   water: WaterRepository;
   dailyRecord: DailyRecordRepository;
+}
+
+/**
+ * Batched totals with a graceful per-date fallback for connections that
+ * cannot run the grouped range query (degraded fallback shim).
+ */
+async function batchedTotals(dates: string[], repos: ExportRepos): Promise<Record<string, any>> {
+  const start = dates[0];
+  const end = dates[dates.length - 1];
+  try {
+    const byDate = await repos.log.getDailyTotalsForRange(start, end);
+    // Degraded fallback shims may silently return {} — verify with one probe
+    // before trusting the empty result; otherwise fall back per-date.
+    if (dates.length > 1 && Object.keys(byDate).length === 0) {
+      const probe = await repos.log.getDailyTotals(dates[Math.floor(dates.length / 2)]);
+      if (!probe || (!probe.calories && !probe.proteinG && !probe.carbsG && !probe.fatG)) {
+        return {}; // genuinely empty range
+      }
+      return await perDateTotals(dates, repos);
+    }
+    const out: Record<string, any> = {};
+    for (const date of dates) {
+      if (byDate[date]) out[date] = byDate[date];
+    }
+    return out;
+  } catch {
+    return perDateTotals(dates, repos);
+  }
+}
+
+async function perDateTotals(dates: string[], repos: ExportRepos): Promise<Record<string, any>> {
+  const out: Record<string, any> = {};
+  for (const date of dates) {
+    out[date] = await repos.log.getDailyTotals(date);
+  }
+  return out;
+}
+
+/** Batched water-by-source with the same shim fallback strategy. */
+async function batchedWater(dates: string[], repos: ExportRepos): Promise<Record<string, Record<string, number>>> {
+  const start = dates[0];
+  const end = dates[dates.length - 1];
+  try {
+    const byDate = await repos.water.getWaterTotalsBySourceForRange(start, end);
+    const hasAny = Object.keys(byDate).length > 0;
+    if (!hasAny && dates.length > 1) {
+      const mid = dates[Math.floor(dates.length / 2)];
+      const probe = await repos.water.getWaterTotalsBySource(mid);
+      if (!probe.explicit && !probe.drink && !probe.food) {
+        return byDate;
+      }
+      return await perDateWater(dates, repos);
+    }
+    return byDate;
+  } catch {
+    return perDateWater(dates, repos);
+  }
+}
+
+async function perDateWater(dates: string[], repos: ExportRepos): Promise<Record<string, Record<string, number>>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const date of dates) {
+    out[date] = await repos.water.getWaterTotalsBySource(date);
+  }
+  return out;
 }
 
 export interface ExportDateRange {
@@ -33,12 +98,27 @@ export interface ExportDateRange {
 
 /** Every date between startDate and endDate inclusive (YYYY-MM-DD). */
 export function datesBetween(startDate: string, endDate: string): string[] {
+  // Pure UTC-millisecond arithmetic anchored at UTC midnights: local
+  // DST transitions (e.g. Africa/Cairo springs forward AT midnight, carrying
+  // +1h into every later Date) made `d <= end` fail one hour early and drop
+  // the final day of every range crossing a transition (verified on device
+  // and by regression test).
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const toUTC = (s: string): number => {
+    const [y, m, d] = s.split('-').map(Number);
+    return Date.UTC(y, m - 1, d);
+  };
+  const fmt = (t: number) => {
+    const d = new Date(t);
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  };
+
   const dates: string[] = [];
-  const d = new Date(startDate + 'T00:00:00');
-  const end = new Date(endDate + 'T00:00:00');
-  while (d <= end) {
-    dates.push(formatDateISO(d));
-    d.setDate(d.getDate() + 1);
+  const startT = toUTC(startDate);
+  const endT = toUTC(endDate);
+  if (Number.isNaN(startT) || Number.isNaN(endT)) return dates;
+  for (let t = startT; t <= endT; t += 86400000) {
+    dates.push(fmt(t));
   }
   return dates;
 }
@@ -72,23 +152,38 @@ export function goalPhaseRange(goal: { start_date: string; end_date: string | nu
 /**
  * Build the export rows for a set of dates using the deterministic pipeline.
  * Days with no food/water data are skipped (legacy behavior).
+ *
+ * Uses the batched range queries (pass-16 pattern) instead of one native
+ * round-trip per date per table — an all-time export previously issued ~400
+ * sequential IPC calls, took seconds, and under that load the newest day's
+ * rows could come back empty on device (verified on OPPO CPH2363).
  */
 export async function buildExportRows(dates: string[], repos: ExportRepos): Promise<ExportRow[]> {
   if (dates.length === 0) return [];
 
   const start = dates[0];
   const end = dates[dates.length - 1];
-  const records = await repos.dailyRecord.getForRange(start, end);
+
+  const [records, goalsForRange, totalsByDate, waterByDate] = await Promise.all([
+    repos.dailyRecord.getForRange(start, end),
+    start === end ? repos.goal.getGoalForDate(start).then(g => (g ? [g] : [])) : repos.goal.getGoalsForRange(start, end),
+    batchedTotals(dates, repos),
+    batchedWater(dates, repos)
+  ]);
   const recordByDate = new Map(records.map(r => [r.date, r]));
+
+  // getGoalsForRange returns most-recent-first; the first goal whose start is
+  // <= date is the goal active on that date (same rule as computeHistoryWindow).
+  const sortedGoals = [...goalsForRange].sort((a, b) => b.start_date.localeCompare(a.start_date));
+  const goalForDate = (date: string) => sortedGoals.find(g => g.start_date <= date) ?? null;
 
   const rows: ExportRow[] = [];
 
   for (const date of dates) {
-    const goalRecord = await repos.goal.getGoalForDate(date);
+    const goalRecord = goalForDate(date);
     const targets = goalRecord ? mapGoalToTargets(goalRecord) : DEFAULT_TARGETS;
-
-    const totals = await repos.log.getDailyTotals(date);
-    const water = await repos.water.getWaterTotalsBySource(date);
+    const totals = totalsByDate[date] ?? { date, calories: 0, proteinG: 0, carbsG: 0, fatG: 0, waterMl: 0 };
+    const water = waterByDate[date] ?? { explicit: 0, drink: 0, food: 0 };
 
     if (!dayHasData(totals, water)) continue;
 

@@ -8,6 +8,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(GemmaPlugin.class);
         registerPlugin(VisionPlugin.class);
+        registerPlugin(SaveFilePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

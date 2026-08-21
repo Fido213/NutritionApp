@@ -1,5 +1,5 @@
 import { getScoreColorClass } from '@domain/scoring';
-import { formatDisplayDate, formatDateISO, getDaysInMonth, getFirstDayOfMonthOffset, getDateRange } from '@utils/dates';
+import { formatDateISO, getDaysInMonth, getFirstDayOfMonthOffset, getDateRange } from '@utils/dates';
 import type { HistoryDay } from '@services/history/history-window';
 
 export type HistoryViewMode = 'week' | 'month' | 'year';
@@ -9,20 +9,19 @@ export interface HistoryRenderArgs {
   view: HistoryViewMode;
   anchor: string;
   selectedDate: string;
-  logsForSelectedDate: any[];
 }
 
 /**
  * Render the History view: navigation header (◀ ▶ paging), the consistency
- * heatmap (week / month / year grids, per the legacy app), the calorie trend
- * chart and the selected-day log breakdown.
+ * heatmap (week / month / year grids, per the legacy app) and the calorie
+ * trend chart. The selected-day breakdown lives in day-detail.ts.
  *
  * The window is anchored to `anchor` (independent of the selected date), so
  * clicking a day only moves the highlight and the detail list — it never
  * re-anchors the visible range.
  */
 export function renderHistory(args: HistoryRenderArgs) {
-  const { days, view, anchor, selectedDate, logsForSelectedDate } = args;
+  const { days, view, anchor, selectedDate } = args;
 
   const anchorDate = new Date(anchor + 'T00:00:00');
   const calendarEl = document.getElementById('calendar-container');
@@ -184,66 +183,6 @@ export function renderHistory(args: HistoryRenderArgs) {
     }
   }
 
-  // 4. Selected Day Log Breakdown List
-  const dayContainerEl = document.getElementById('day-view-container');
-  if (dayContainerEl) {
-    dayContainerEl.innerHTML = '';
-
-    const header = document.createElement('h3');
-    header.style.margin = '16px 0 10px 0';
-    header.style.color = 'var(--text-dim)';
-    header.innerText = `Logs for ${formatDisplayDate(selectedDate)}`;
-    dayContainerEl.appendChild(header);
-
-    if (!logsForSelectedDate || logsForSelectedDate.length === 0) {
-      const empty = document.createElement('div');
-      empty.style.color = 'var(--text-dim)';
-      empty.style.fontSize = '14px';
-      empty.innerText = 'No entries logged on this date.';
-      dayContainerEl.appendChild(empty);
-    } else {
-      const list = document.createElement('div');
-      list.className = 'log-list';
-
-      logsForSelectedDate.forEach(log => {
-        const item = document.createElement('div');
-        item.className = 'log-item';
-
-        const main = document.createElement('div');
-        main.className = 'log-main';
-
-        const name = document.createElement('span');
-        name.className = 'log-name';
-        name.innerText = log.food_name || log.canonical_name || log.food || 'Logged Item';
-
-        const cal = document.createElement('span');
-        cal.className = 'log-cal';
-        cal.innerText = log.calories ? `${Math.round(log.calories)} kcal` : `${Math.round(log.amount_ml || 0)} ml`;
-
-        main.appendChild(name);
-        main.appendChild(cal);
-        item.appendChild(main);
-
-        if (log.calories) {
-          const macros = document.createElement('div');
-          macros.className = 'log-macros';
-          macros.innerHTML = `
-            <span style="color: var(--pro);">P: ${Math.round(log.protein_g || 0)}g</span>
-            <span style="color: var(--carb);">C: ${Math.round(log.carbs_g || 0)}g</span>
-            <span style="color: var(--fat);">F: ${Math.round(log.fat_g || 0)}g</span>
-          `;
-          item.appendChild(macros);
-        }
-
-        item.addEventListener('click', () => {
-          const event = new CustomEvent('open-log-actions', { detail: log });
-          window.dispatchEvent(event);
-        });
-
-        list.appendChild(item);
-      });
-
-      dayContainerEl.appendChild(list);
-    }
-  }
+  // The selected-day log breakdown (day-view-container) is rendered by
+  // renderDayDetail in main.ts — it needs live water + note data.
 }

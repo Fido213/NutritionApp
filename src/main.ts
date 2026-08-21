@@ -13,12 +13,15 @@ import { Food } from '@data/types';
 import { store } from './ui/state';
 import { renderDashboard } from './ui/views/dashboard';
 import { renderHistory, HistoryViewMode } from './ui/views/history';
+import { renderDayDetail } from './ui/views/day-detail';
+import type { DayDetailLog } from './ui/views/day-detail';
 import { renderGoals, readGoalsForm } from './ui/views/goals';
+import { setupTabNavigation, pushLayer, closeLayer, initNavStack, ViewId } from './ui/nav';
 import { showToast } from './ui/components/toast';
 import { calculateEffectiveHydration, classifyWaterSource } from '@domain/hydration';
 import { calculateScore } from '@domain/scoring';
 import { calculateNutrition } from '@domain/nutrition';
-import { normalizeFoodName } from '@domain/logging';
+import { normalizeFoodName, expandCombo } from '@domain/logging';
 import { getTodayDateString, formatDateISO } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
 import { buildExportRows, datesBetween, goalPhaseRange, resolveExportDateRange, ExportRepos } from '@services/export/export-service';
@@ -60,6 +63,39 @@ let historyAnchor = getTodayDateString();
 let historyWindowKey = '';
 let dataVersion = 0;
 let numpadBuffer = '';
+
+// Day-detail UI state (§5b: inline expand, multi-select, day note, water rows)
+let dayWaters: any[] = [];
+let dayNoteText: string | null = null;
+let expandedLogId: string | null = null;
+let selectMode = false;
+const selection = new Set<string>();
+let currentViewId: ViewId = 'today';
+let tabController: ReturnType<typeof setupTabNavigation> | null = null;
+
+/**
+ * Modal ↔ navigation-layer bridge: opening a modal pushes one history entry,
+ * so Android BACK / swipe-back closes it instead of leaving the app.
+ * `onClosed` runs for BOTH paths (BACK or programmatic close) so pending
+ * prompt promises always settle.
+ */
+function openModalLayer(id: string, onClosed?: () => void) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.add('active');
+  pushLayer(() => {
+    el.classList.remove('active');
+    onClosed?.();
+  });
+}
+
+function closeModalLayer(id: string) {
+  const el = document.getElementById(id);
+  if (!el || !el.classList.contains('active')) return;
+  el.classList.remove('active');
+  // The registered layer close re-runs hide + onClosed; hiding twice is safe.
+  closeLayer();
+}
 
 function loadP2PIceServers(): RTCIceServer[] {
   const servers = [...DEFAULT_ICE_SERVERS];
@@ -147,11 +183,11 @@ async function initApp() {
     setupExportHandlers();
     setupActionHandlers();
     setupJournalHandlers();
+    setupComboHandlers();
     setupDashboardTextBar();
     setupNumpadHandlers();
     setupScannerHandlers();
-    setupActionHubHandlers();
-    setupEditModalHandlers();
+    setupEditHandlers();
     setupImportHandlers();
     setupBackupHandler();
     setupRestoreHandler();
@@ -185,6 +221,9 @@ async function refreshStateForDate(dateStr: string) {
   const score = calculateScore(totals, goal, hydration);
 
   const logs = await logRepo.getLogsForDate(dateStr);
+  dayWaters = await waterRepo.getWaterForDate(dateStr);
+  const [dayRecord] = await dailyRecordRepo.getForRange(dateStr, dateStr);
+  dayNoteText = dayRecord?.note ?? null;
 
   // 1-Tap Recents query (HANDOVER §5a): kept as an agent-only debug hook.
   // Not shown anywhere in the UI — visible via WebView DevTools CDP console.
@@ -237,9 +276,9 @@ function renderHistoryView() {
     days: historyWindow,
     view: historyView,
     anchor: historyAnchor,
-    selectedDate: state.selectedDate,
-    logsForSelectedDate: state.todayLogs
+    selectedDate: state.selectedDate
   });
+  renderDayDetailIfVisible();
 }
 
 function shiftHistoryAnchor(delta: number) {
@@ -268,7 +307,7 @@ function setupNavigation() {
   const historyView = document.getElementById('history');
   const goalsView = document.getElementById('view-goals');
 
-  function switchTab(viewId: string) {
+  function switchTabInternal(viewId: ViewId) {
     [todayView, historyView, goalsView].forEach(v => v?.classList.remove('active-view'));
     [dashBtn, logsBtn].forEach(b => b?.classList.remove('active'));
 
@@ -282,11 +321,15 @@ function setupNavigation() {
     } else if (viewId === 'view-goals') {
       goalsView?.classList.add('active-view');
     }
+    currentViewId = viewId;
   }
 
-  dashBtn?.addEventListener('click', () => switchTab('today'));
-  logsBtn?.addEventListener('click', () => switchTab('history'));
-  sysBtn?.addEventListener('click', () => switchTab('view-goals'));
+  initNavStack();
+  tabController = setupTabNavigation(switchTabInternal, () => currentViewId);
+
+  dashBtn?.addEventListener('click', () => tabController!.switchTab('today'));
+  logsBtn?.addEventListener('click', () => tabController!.switchTab('history'));
+  sysBtn?.addEventListener('click', () => tabController!.switchTab('view-goals'));
 
   document.getElementById('btn-view-week')?.addEventListener('click', () => setHistoryView('week'));
   document.getElementById('btn-view-month')?.addEventListener('click', () => setHistoryView('month'));
@@ -299,8 +342,8 @@ function setupNavigation() {
 }
 
 function setupModals() {
-  const openModal = (id: string) => document.getElementById(id)?.classList.add('active');
-  const closeModal = (id: string) => document.getElementById(id)?.classList.remove('active');
+  const openModal = (id: string) => openModalLayer(id);
+  const closeModal = (id: string) => closeModalLayer(id);
 
   document.getElementById('btn-water-250')?.addEventListener('click', async () => {
     const date = store.getState().selectedDate;
@@ -319,8 +362,17 @@ function setupModals() {
   document.getElementById('btn-water-custom')?.addEventListener('click', () => openModal('numpad-modal'));
   document.getElementById('numpad-close')?.addEventListener('click', () => closeModal('numpad-modal'));
 
-  document.getElementById('btn-open-journal')?.addEventListener('click', () => openModal('journal-modal'));
-  document.getElementById('btn-close-journal')?.addEventListener('click', () => closeModal('journal-modal'));
+  document.getElementById('btn-open-journal')?.addEventListener('click', () => {
+    pendingComboFoodIds = [];
+    updateComboBar();
+    openModalLayer('journal-modal');
+    renderComboList();
+    const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
+    if (searchInput && !searchInput.value.trim()) {
+      foodRepo.fuzzySearch('', 20).then(renderJournalResults);
+    }
+  });
+  document.getElementById('btn-close-journal')?.addEventListener('click', () => closeModalLayer('journal-modal'));
 
   document.getElementById('btn-open-manual')?.addEventListener('click', () => openModal('manual-log-modal'));
   document.getElementById('btn-close-manual')?.addEventListener('click', () => closeModal('manual-log-modal'));
@@ -328,8 +380,8 @@ function setupModals() {
   document.getElementById('scan-btn')?.addEventListener('click', () => openModal('scanner-modal'));
   document.getElementById('btn-close-scanner')?.addEventListener('click', () => closeModal('scanner-modal'));
 
-  document.getElementById('hub-btn-close')?.addEventListener('click', () => closeModal('action-hub-modal'));
-  document.getElementById('btn-close-edit')?.addEventListener('click', () => closeModal('edit-modal'));
+  setupDayNoteHandlers();
+  setupBulkDateHandlers();
 }
 
 // ---------- Export (spec §21: all-time / date range / goal phase) ----------
@@ -353,11 +405,11 @@ async function openExportModal() {
   if (from) from.value = store.getState().selectedDate;
   if (to) to.value = getTodayDateString();
 
-  document.getElementById('export-modal')?.classList.add('active');
+  openModalLayer('export-modal');
 }
 
 function setupExportHandlers() {
-  const closeModal = () => document.getElementById('export-modal')?.classList.remove('active');
+  const closeModal = () => closeModalLayer('export-modal');
 
   document.getElementById('btn-export-close')?.addEventListener('click', closeModal);
   document.getElementById('export-modal')?.addEventListener('click', (e) => {
@@ -559,6 +611,23 @@ function renderJournalResults(foods: Food[]) {
     main.appendChild(name);
     main.appendChild(cal);
     item.appendChild(main);
+
+    // §5b item 7: collect foods into a reusable combo template
+    const addCombo = document.createElement('button');
+    addCombo.className = 'log-action-btn';
+    addCombo.style.marginTop = '4px';
+    addCombo.style.width = 'fit-content';
+    addCombo.textContent = pendingComboFoodIds.includes(food.id) ? '✓ In Combo' : '+ Combo';
+    if (!pendingComboFoodIds.includes(food.id)) {
+      addCombo.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pendingComboFoodIds.push(food.id);
+        updateComboBar();
+        renderJournalResults(foods);
+      });
+    }
+    item.appendChild(addCombo);
+
     container.appendChild(item);
   });
 }
@@ -623,6 +692,146 @@ function setupJournalHandlers() {
     if (input) input.value = '';
     quickLogFood(target.dataset.foodId);
   });
+}
+
+// ---------- Combos (§5b item 7 — domain/repo support exists since pass 2) ----------
+
+let pendingComboFoodIds: string[] = [];
+
+async function renderComboList() {
+  const listEl = document.getElementById('combo-list');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  const combos = await comboRepo.getAllCombos();
+  if (combos.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.color = 'var(--text-dim)';
+    empty.style.fontSize = '12px';
+    empty.style.padding = '6px 10px';
+    empty.textContent = 'No combos yet. Search above, tap "+ Combo" on results, then save.';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  for (const combo of combos) {
+    const item = document.createElement('div');
+    item.className = 'log-item journal-combo-item';
+
+    const main = document.createElement('div');
+    main.className = 'log-main';
+    const name = document.createElement('span');
+    name.className = 'log-name';
+    name.textContent = combo.name;
+    const count = document.createElement('span');
+    count.className = 'log-cal';
+    count.style.fontSize = '12px';
+    count.textContent = `${combo.items.length} item(s)`;
+    main.append(name, count);
+    item.appendChild(main);
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.gap = '8px';
+
+    const logBtn = document.createElement('button');
+    logBtn.className = 'log-action-btn blue';
+    logBtn.textContent = 'Log All';
+    logBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await logCombo(combo);
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'combo-del';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await comboRepo.deleteCombo(combo.id);
+      await renderComboList();
+      showToast(`Deleted combo "${combo.name}"`);
+    });
+
+    actions.append(logBtn, delBtn);
+    item.appendChild(actions);
+    listEl.appendChild(item);
+  }
+}
+
+/** Expand a combo through the deterministic domain path and log every ingredient. */
+async function logCombo(combo: Awaited<ReturnType<ComboRepository['getAllCombos']>>[number]) {
+  const date = store.getState().selectedDate;
+  const items: Array<{ foodId: string; food: any; amountG: number | null; amountMl: number | null }> = [];
+  for (const ci of combo.items) {
+    const food = await foodRepo.findById(ci.food_id);
+    if (!food) continue;
+    items.push({ foodId: food.id, food: foodRepo.toFoodReference(food), amountG: ci.amount_g ?? 100, amountMl: ci.amount_ml });
+  }
+  if (items.length === 0) {
+    showToast('Combo ingredients missing from library');
+    return;
+  }
+
+  const template = { id: combo.id, name: combo.name, items };
+  const entries = expandCombo(template, date);
+  let totalCal = 0;
+  for (const entry of entries) {
+    const nutrition = calculateNutrition(entry.food, entry.amountG ?? entry.amountMl ?? 100);
+    totalCal += nutrition.calories;
+    const log = await logRepo.insertFoodLog({
+      date,
+      food_id: entry.foodId,
+      amount_g: entry.amountG,
+      amount_ml: entry.amountMl,
+      calories: nutrition.calories,
+      protein_g: nutrition.proteinG,
+      carbs_g: nutrition.carbsG,
+      fat_g: nutrition.fatG,
+      water_ml: nutrition.waterMl
+    });
+    if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
+      await waterRepo.insertWaterLog({
+        date,
+        amount_ml: nutrition.waterMl,
+        source: classifyWaterSource(entry.food),
+        food_log_id: log.id
+      });
+    }
+  }
+
+  closeModalLayer('journal-modal');
+  await refreshStateForDate(date);
+  showToast(`Logged combo "${combo.name}" · ${Math.round(totalCal)} kcal`);
+}
+
+function setupComboHandlers() {
+  document.getElementById('btn-save-combo')?.addEventListener('click', async () => {
+    const nameInput = document.getElementById('combo-name-input') as HTMLInputElement | null;
+    const name = nameInput?.value.trim() || '';
+    if (!name || pendingComboFoodIds.length === 0) {
+      showToast('Pick a name and at least one food first');
+      return;
+    }
+    await comboRepo.createCombo(
+      name,
+      pendingComboFoodIds.map(food_id => ({ food_id, amount_g: 100, amount_ml: null }))
+    );
+    pendingComboFoodIds = [];
+    if (nameInput) nameInput.value = '';
+    updateComboBar();
+    await renderComboList();
+    showToast(`Saved combo "${name}"`);
+  });
+
+  document.getElementById('btn-cancel-combo')?.addEventListener('click', () => {
+    pendingComboFoodIds = [];
+    updateComboBar();
+  });
+}
+
+function updateComboBar() {
+  const bar = document.getElementById('journal-combo-bar');
+  if (bar) bar.style.display = pendingComboFoodIds.length > 0 ? '' : 'none';
 }
 
 // ---------- Dashboard Text Bar (always-visible text logging, HANDOVER §5a item 2) ----------
@@ -719,17 +928,12 @@ function setupDialogModals() {
       return;
     }
 
-    document.getElementById('password-modal')?.classList.remove('active');
-    const resolve = passwordPromptResolver;
-    passwordPromptResolver = null;
-    resolve?.(pw);
+    passwordPromptResolver?.(pw);
+    closeModalLayer('password-modal');
   });
 
   document.getElementById('btn-pw-cancel')?.addEventListener('click', () => {
-    document.getElementById('password-modal')?.classList.remove('active');
-    const resolve = passwordPromptResolver;
-    passwordPromptResolver = null;
-    resolve?.(null);
+    closeModalLayer('password-modal');
   });
 
   document.getElementById('pw-input')?.addEventListener('keydown', (e) => {
@@ -746,17 +950,12 @@ function setupDialogModals() {
   });
 
   document.getElementById('btn-confirm-ok')?.addEventListener('click', () => {
-    document.getElementById('confirm-modal')?.classList.remove('active');
-    const resolve = confirmPromptResolver;
-    confirmPromptResolver = null;
-    resolve?.(true);
+    confirmPromptResolver?.(true);
+    closeModalLayer('confirm-modal');
   });
 
   document.getElementById('btn-confirm-cancel')?.addEventListener('click', () => {
-    document.getElementById('confirm-modal')?.classList.remove('active');
-    const resolve = confirmPromptResolver;
-    confirmPromptResolver = null;
-    resolve?.(false);
+    closeModalLayer('confirm-modal');
   });
 
   // Grams modal (label + barcode scans — HANDOVER §5a item 8)
@@ -768,17 +967,12 @@ function setupDialogModals() {
       if (errorEl) errorEl.innerText = 'Enter a positive amount';
       return;
     }
-    document.getElementById('grams-modal')?.classList.remove('active');
-    const resolve = gramsPromptResolver;
-    gramsPromptResolver = null;
-    resolve?.(value);
+    gramsPromptResolver?.(value);
+    closeModalLayer('grams-modal');
   });
 
   document.getElementById('btn-grams-cancel')?.addEventListener('click', () => {
-    document.getElementById('grams-modal')?.classList.remove('active');
-    const resolve = gramsPromptResolver;
-    gramsPromptResolver = null;
-    resolve?.(null);
+    closeModalLayer('grams-modal');
   });
 
   document.getElementById('grams-input')?.addEventListener('keydown', (e) => {
@@ -794,17 +988,12 @@ function setupDialogModals() {
       if (errorEl) errorEl.innerText = 'Name must not be empty';
       return;
     }
-    document.getElementById('name-modal')?.classList.remove('active');
-    const resolve = namePromptResolver;
-    namePromptResolver = null;
-    resolve?.(value);
+    namePromptResolver?.(value);
+    closeModalLayer('name-modal');
   });
 
   document.getElementById('btn-name-cancel')?.addEventListener('click', () => {
-    document.getElementById('name-modal')?.classList.remove('active');
-    const resolve = namePromptResolver;
-    namePromptResolver = null;
-    resolve?.(null);
+    closeModalLayer('name-modal');
   });
 
   document.getElementById('name-input')?.addEventListener('keydown', (e) => {
@@ -828,7 +1017,11 @@ function requestPassword(title: string, requireConfirm: boolean): Promise<string
   }
   if (errorEl) errorEl.innerText = '';
 
-  document.getElementById('password-modal')?.classList.add('active');
+  openModalLayer('password-modal', () => {
+    const resolve = passwordPromptResolver;
+    passwordPromptResolver = null;
+    resolve?.(null);
+  });
   pwEl?.focus();
 
   return new Promise(resolve => { passwordPromptResolver = resolve; });
@@ -840,7 +1033,11 @@ function requestConfirmation(title: string, message: string): Promise<boolean> {
   if (titleEl) titleEl.innerText = title;
   if (msgEl) msgEl.innerText = message;
 
-  document.getElementById('confirm-modal')?.classList.add('active');
+  openModalLayer('confirm-modal', () => {
+    const resolve = confirmPromptResolver;
+    confirmPromptResolver = null;
+    resolve?.(false);
+  });
   return new Promise(resolve => { confirmPromptResolver = resolve; });
 }
 
@@ -856,7 +1053,11 @@ function requestGrams(title: string, sub: string, defaultValue = 100): Promise<n
   if (input) input.value = String(defaultValue);
   if (errorEl) errorEl.innerText = '';
 
-  document.getElementById('grams-modal')?.classList.add('active');
+  openModalLayer('grams-modal', () => {
+    const resolve = gramsPromptResolver;
+    gramsPromptResolver = null;
+    resolve?.(null);
+  });
   input?.focus();
   if (input) input.select();
 
@@ -875,7 +1076,11 @@ function requestName(title: string, sub: string, defaultValue = ''): Promise<str
   if (input) input.value = defaultValue;
   if (errorEl) errorEl.innerText = '';
 
-  document.getElementById('name-modal')?.classList.add('active');
+  openModalLayer('name-modal', () => {
+    const resolve = namePromptResolver;
+    namePromptResolver = null;
+    resolve?.(null);
+  });
   input?.focus();
 
   return new Promise(resolve => { namePromptResolver = resolve; });
@@ -908,7 +1113,7 @@ async function logBarcodeViaOnlineLookup(code: string) {
     try {
       const result = await foodService.logBarcodeLookup(date, product, code, grams);
       await barcodeRepo.saveBarcode(result.food.id, code, 'online');
-      document.getElementById('scanner-modal')?.classList.remove('active');
+      closeModalLayer('scanner-modal');
       await refreshStateForDate(date);
       showToast(`Logged "${product.productName}" · ${Math.round(result.nutrition.calories)} kcal`);
       return { id: result.food.id, canonical_name: product.productName };
@@ -920,7 +1125,7 @@ async function logBarcodeViaOnlineLookup(code: string) {
     }
   }
 
-  document.getElementById('scanner-modal')?.classList.remove('active');
+  closeModalLayer('scanner-modal');
   showToast('Barcode not found online — scan the nutrition label instead');
   triggerLabelScanFallback();
   return null;
@@ -967,7 +1172,7 @@ async function logBarcodeFood(code: string) {
     });
   }
 
-  document.getElementById('scanner-modal')?.classList.remove('active');
+  closeModalLayer('scanner-modal');
   await refreshStateForDate(date);
   showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
   return food;
@@ -1012,7 +1217,7 @@ async function logLabelOcrText(text: string, amount: number, askGrams = true) {
 
   try {
     const result = await foodService.logLabelOcr(date, ocr, grams);
-    document.getElementById('scanner-modal')?.classList.remove('active');
+    closeModalLayer('scanner-modal');
     await refreshStateForDate(date);
     showToast(`Logged "${ocr.foodName}" · ${Math.round(result.nutrition.calories)} kcal`);
   } catch (err) {
@@ -1216,45 +1421,150 @@ function setupScannerHandlers() {
   });
 }
 
-// ---------- Action Hub (Edit / Duplicate / Delete) ----------
+// ---------- Day detail (inline expand / multi-select / day note / water delete) ----------
 
-function setupActionHubHandlers() {
-  window.addEventListener('open-log-actions', (e: any) => {
-    const log = e.detail;
-    if (!log?.id) return;
-    store.setState({ selectedLogForAction: log });
-    document.getElementById('action-hub-modal')?.classList.add('active');
-  });
+function renderDayDetailIfVisible() {
+  if (currentViewId !== 'history') return;
+  const container = document.getElementById('day-view-container');
+  if (!container) return;
 
-  document.getElementById('hub-btn-edit')?.addEventListener('click', openEditModal);
-
-  document.getElementById('hub-btn-duplicate')?.addEventListener('click', async () => {
-    const log = store.getState().selectedLogForAction;
-    if (!log) return;
-    const date = store.getState().selectedDate;
-    await logRepo.duplicateLog(log.id, date);
-    document.getElementById('action-hub-modal')?.classList.remove('active');
-    await refreshStateForDate(date);
-    showToast('Log duplicated');
-  });
-
-  document.getElementById('hub-btn-delete')?.addEventListener('click', async () => {
-    const log = store.getState().selectedLogForAction;
-    if (!log) return;
-    await logRepo.deleteLog(log.id);
-    store.setState({ selectedLogForAction: null });
-    document.getElementById('action-hub-modal')?.classList.remove('active');
-    await refreshStateForDate(store.getState().selectedDate);
-    showToast('Log deleted');
+  renderDayDetail({
+    container,
+    selectedDate: store.getState().selectedDate,
+    logs: (store.getState().todayLogs as any[]).map(l => ({ ...l, kind: 'food' as const })),
+    waters: dayWaters,
+    dayNote: dayNoteText,
+    expandedLogId,
+    selection,
+    selectMode,
+    onToggleExpand(id) {
+      expandedLogId = expandedLogId === id ? null : id;
+      renderDayDetailIfVisible();
+    },
+    onEdit: openEditView,
+    onDuplicate: async (log) => {
+      const date = log.date;
+      await logRepo.duplicateLog(log.id, date);
+      expandedLogId = null;
+      await refreshStateForDate(date);
+      showToast('Log duplicated');
+    },
+    onDeleteFood: async (log) => {
+      const ok = await requestConfirmation('Delete Log', `Delete "${log.food_name || 'this entry'}" from ${log.date}?`);
+      if (!ok) return;
+      await logRepo.deleteLog(log.id);
+      expandedLogId = null;
+      await refreshStateForDate(store.getState().selectedDate);
+      showToast('Log deleted');
+    },
+    onDeleteWater: async (water) => {
+      await waterRepo.deleteWaterLog(water.id);
+      await refreshStateForDate(store.getState().selectedDate);
+      showToast(`Deleted ${Math.round(water.amount_ml)}ml water entry`);
+    },
+    onEditDayNote: openDayNoteModal,
+    onToggleSelectMode() {
+      selectMode = !selectMode;
+      if (!selectMode) selection.clear();
+      renderDayDetailIfVisible();
+    },
+    onToggleSelect(id) {
+      if (selection.has(id)) selection.delete(id);
+      else selection.add(id);
+      renderDayDetailIfVisible();
+    },
+    onBulkChangeDate(ids) {
+      const input = document.getElementById('bulk-date-input') as HTMLInputElement | null;
+      const countEl = document.getElementById('bulk-date-count');
+      if (input) input.value = store.getState().selectedDate;
+      if (countEl) countEl.textContent = `${ids.length} item(s) will move to a different date.`;
+      pendingBulkIds = ids.filter(id => !dayWaters.some(w => w.id === id));
+      openModalLayer('bulk-date-modal');
+    },
+    onBulkDuplicate: async (ids) => {
+      const foodIds = ids.filter(id => !dayWaters.some(w => w.id === id));
+      const date = store.getState().selectedDate;
+      for (const id of foodIds) {
+        await logRepo.duplicateLog(id, date);
+      }
+      selectMode = false;
+      selection.clear();
+      await refreshStateForDate(date);
+      showToast(`Duplicated ${foodIds.length} item(s)`);
+    },
+    onBulkDelete: async (ids) => {
+      const ok = await requestConfirmation('Delete Items', `Delete ${ids.length} selected item(s)? This cannot be undone.`);
+      if (!ok) return;
+      for (const id of ids) {
+        if (dayWaters.some(w => w.id === id)) await waterRepo.deleteWaterLog(id);
+        else await logRepo.deleteLog(id);
+      }
+      selectMode = false;
+      selection.clear();
+      expandedLogId = null;
+      await refreshStateForDate(store.getState().selectedDate);
+      showToast(`Deleted ${ids.length} item(s)`);
+    }
   });
 }
 
-// ---------- Edit Modal ----------
+let pendingBulkIds: string[] = [];
 
-async function openEditModal() {
-  const log = store.getState().selectedLogForAction;
-  if (!log) return;
+/** Day notes (§5b item 5): daily_records.note exists in data + export; this is its UI. */
+function setupDayNoteHandlers() {
+  document.getElementById('btn-note-ok')?.addEventListener('click', async () => {
+    const input = document.getElementById('day-note-input') as HTMLTextAreaElement | null;
+    if (!input) return;
+    const noteDate = noteTargetDate;
+    dayNoteText = input.value.trim() || null;
+    await dailyRecordRepo.setNote(noteDate, dayNoteText);
+    closeModalLayer('note-modal');
+    if (store.getState().selectedDate === noteDate) {
+      dataVersion++;
+      renderDayDetailIfVisible();
+    }
+    showToast('Day note saved');
+  });
 
+  document.getElementById('btn-note-cancel')?.addEventListener('click', () => closeModalLayer('note-modal'));
+}
+
+let noteTargetDate = getTodayDateString();
+
+function openDayNoteModal() {
+  noteTargetDate = store.getState().selectedDate;
+  const input = document.getElementById('day-note-input') as HTMLTextAreaElement | null;
+  if (input) input.value = dayNoteText || '';
+  openModalLayer('note-modal');
+  input?.focus();
+}
+
+function setupBulkDateHandlers() {
+  document.getElementById('btn-bulk-date-cancel')?.addEventListener('click', () => closeModalLayer('bulk-date-modal'));
+  document.getElementById('btn-bulk-date-ok')?.addEventListener('click', async () => {
+    const input = document.getElementById('bulk-date-input') as HTMLInputElement | null;
+    const target = input?.value;
+    if (!target || pendingBulkIds.length === 0) {
+      closeModalLayer('bulk-date-modal');
+      return;
+    }
+    for (const id of pendingBulkIds) {
+      await logRepo.updateLog(id, { date: target } as any);
+    }
+    const moved = pendingBulkIds.length;
+    pendingBulkIds = [];
+    selectMode = false;
+    selection.clear();
+    closeModalLayer('bulk-date-modal');
+    historyWindowKey = '';
+    await refreshStateForDate(target);
+    showToast(`Moved ${moved} item(s) to ${target}`);
+  });
+}
+
+// ---------- Edit screen (§5b item 2 — dedicated full view, not a popup) ----------
+
+async function openEditView(log: DayDetailLog) {
   const food = log.food_id ? await foodRepo.findById(log.food_id) : null;
   const baseAmount = log.amount_g ?? log.amount_ml ?? 100;
 
@@ -1278,11 +1588,24 @@ async function openEditModal() {
   setValue('edit-fat', String(Math.round(log.fat_g || 0)));
   setValue('edit-note', log.note || '');
 
-  document.getElementById('action-hub-modal')?.classList.remove('active');
-  document.getElementById('edit-modal')?.classList.add('active');
+  const editView = document.getElementById('view-edit');
+  const previousView = currentViewId;
+  if (!editView) return;
+
+  pushLayer(() => switchToBaseView(previousView));
+  [document.getElementById('today'), document.getElementById('history'), document.getElementById('view-goals')]
+    .forEach(v => v?.classList.remove('active-view'));
+  editView.classList.add('active-view');
 }
 
-function setupEditModalHandlers() {
+function switchToBaseView(viewId: ViewId) {
+  document.getElementById('view-edit')?.classList.remove('active-view');
+  tabController?.switchTabDirect(viewId);
+}
+
+function setupEditHandlers() {
+  document.getElementById('btn-edit-back')?.addEventListener('click', () => closeLayer());
+
   document.getElementById('btn-save-edit')?.addEventListener('click', async () => {
     const idEl = document.getElementById('edit-log-id') as HTMLInputElement | null;
     const logId = idEl?.value;
@@ -1350,8 +1673,14 @@ function setupEditModalHandlers() {
     }
 
     await logRepo.updateLog(logId, updates);
-    document.getElementById('edit-modal')?.classList.remove('active');
+
+    const previousDate = current.date;
+    historyWindowKey = '';
+    closeLayer();
     await refreshStateForDate(date);
+    if (date !== previousDate) {
+      await refreshStateForDate(previousDate);
+    }
     showToast('Log updated');
   });
 }
@@ -1577,7 +1906,7 @@ function resetP2PModal() {
   p2pBusy = false;
 }
 
-function closeP2PModal() {
+function teardownP2P() {
   stopQrScan();
   document.getElementById('qr-scan-modal')?.classList.remove('active');
   if (p2pPeer) {
@@ -1591,12 +1920,18 @@ function closeP2PModal() {
   p2pTransport.dispose();
   p2pRole = null;
   resetP2PModal();
-  document.getElementById('p2p-modal')?.classList.remove('active');
+}
+
+function closeP2PModal() {
+  const modal = document.getElementById('p2p-modal');
+  const wasOpen = modal?.classList.contains('active') ?? false;
+  teardownP2P();
+  if (wasOpen) closeModalLayer('p2p-modal');
 }
 
 async function onP2PScan() {
   if (p2pBusy || qrScanHandle) return;
-  document.getElementById('qr-scan-modal')?.classList.add('active');
+  openModalLayer('qr-scan-modal', () => stopQrScan());
   const container = document.getElementById('qr-scan-container');
   if (!container) return;
 
@@ -1605,12 +1940,12 @@ async function onP2PScan() {
       const input = document.getElementById('p2p-code-in') as HTMLTextAreaElement | null;
       if (input) input.value = code;
       stopQrScan();
-      document.getElementById('qr-scan-modal')?.classList.remove('active');
+      closeModalLayer('qr-scan-modal');
       onP2PConnect();
     });
   } catch (err) {
     console.error('QR scan failed:', err);
-    document.getElementById('qr-scan-modal')?.classList.remove('active');
+    closeModalLayer('qr-scan-modal');
     setP2PStatus(err instanceof Error ? err.message : 'Could not start the camera.');
   }
 }
@@ -1639,7 +1974,7 @@ async function openP2PModal(role: 'send' | 'receive') {
   const outLabel = document.getElementById('p2p-out-label');
   const inLabel = document.getElementById('p2p-in-label');
 
-  document.getElementById('p2p-modal')?.classList.add('active');
+  openModalLayer('p2p-modal', () => teardownP2P());
 
   if (role === 'receive') {
     if (title) title.innerText = 'Receive Backup (P2P)';
@@ -1794,8 +2129,7 @@ function setupP2PHandlers() {
   document.getElementById('btn-p2p-connect')?.addEventListener('click', onP2PConnect);
   document.getElementById('btn-p2p-scan')?.addEventListener('click', onP2PScan);
   document.getElementById('btn-qr-scan-close')?.addEventListener('click', () => {
-    stopQrScan();
-    document.getElementById('qr-scan-modal')?.classList.remove('active');
+    closeModalLayer('qr-scan-modal');
   });
   document.getElementById('btn-p2p-close')?.addEventListener('click', closeP2PModal);
 

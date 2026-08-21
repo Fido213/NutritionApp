@@ -168,6 +168,17 @@ describe('datesBetween', () => {
   it('crosses month boundaries correctly', () => {
     expect(datesBetween('2026-01-30', '2026-02-02')).toEqual(['2026-01-30', '2026-01-31', '2026-02-01', '2026-02-02']);
   });
+
+  // Regression (pass 18): Africa/Cairo (and other midnight-DST zones) spring
+  // forward AT 00:00 — local Date arithmetic carried +1h into every later day
+  // and dropped the final date of any range crossing the transition.
+  it('includes both bounds across a DST transition (Cairo springs forward 2026-04-24 at midnight)', () => {
+    const dates = datesBetween('2026-04-20', '2026-04-30');
+    expect(dates[0]).toBe('2026-04-20');
+    expect(dates[dates.length - 1]).toBe('2026-04-30');
+    expect(dates).toHaveLength(11);
+    expect(dates.filter(d => d.startsWith('2026-04')).length).toBe(11);
+  });
 });
 
 describe('goalPhaseRange', () => {
@@ -297,5 +308,34 @@ describe('buildExportRows', () => {
     expect(rows[0].caloriesTarget).toBe(2000);
     expect(rows[1].goalName).toBe('Bulk');
     expect(rows[1].caloriesTarget).toBe(2800);
+  });
+
+  // Regression (pass 18, on-device finding): an all-time export over ~130 days
+  // of sequential per-date queries dropped the newest day's row on device.
+  // The batched pipeline must include a trailing water-only day in a long
+  // range — exactly the shape that failed on OPPO CPH2363.
+  it('includes a trailing water-only day at the end of a long all-time range', async () => {
+    const { conn } = createRealDb();
+    const repos = await buildRepos(conn);
+    const foodRepo = new FoodRepository(conn);
+    const logRepo = new LogRepository(conn);
+    const waterRepo = new WaterRepository(conn);
+
+    const chicken = await foodRepo.insert(CHICKEN);
+    await logRepo.insertFoodLog({
+      date: '2026-04-11', food_id: chicken.id, amount_g: 100,
+      calories: 165, protein_g: 31, carbs_g: 0, fat_g: 3.6, water_ml: 65
+    });
+    // The newest day has ONLY explicit water (no food) — like the live DB.
+    const lastDay = '2026-08-21';
+    await waterRepo.insertWaterLog({ date: lastDay, amount_ml: 82000, source: 'explicit' });
+
+    const dates = datesBetween('2026-04-11', lastDay); // 133-date range, mostly empty
+    expect(dates.length).toBeGreaterThan(100);
+
+    const rows = await buildExportRows(dates, repos);
+    expect(rows.map(r => r.date)).toEqual(['2026-04-11', lastDay]);
+    expect(rows[1].explicitWaterMl).toBe(82000);
+    expect(rows[1].caloriesActual).toBe(0);
   });
 });

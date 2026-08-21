@@ -3,6 +3,7 @@
  */
 
 import { SQLiteDBConnection } from '@capacitor-community/sqlite';
+import { saveDownloadNative } from '@services/native/file-saver';
 
 export const CURRENT_SCHEMA_VERSION = 1;
 
@@ -114,7 +115,9 @@ export function createBackupArchive(tablesData: Record<string, any[]>): string {
   return JSON.stringify(archive, null, 2);
 }
 
-export function downloadBackup(filename: string, jsonContent: string) {
+export async function downloadBackup(filename: string, jsonContent: string) {
+  if (await saveDownloadNative(filename, jsonContent, 'application/json')) return;
+
   const blob = new Blob([jsonContent], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -208,7 +211,20 @@ export async function restoreBackupArchive(
       }
     }
 
-    if (hasTransaction) await (db as any).commitTransaction();
+    if (hasTransaction) {
+      try {
+        await (db as any).commitTransaction();
+      } catch (commitErr) {
+        // jeep-sqlite in WEB/WASM mode does not hold a BEGIN across separate
+        // run() calls: every write succeeded but COMMIT reports
+        // "cannot commit - no transaction is active" (found by the pass-18
+        // live P2P transfer test). Treat that specific case as committed;
+        // anything else is a real failure.
+        const msg = commitErr instanceof Error ? commitErr.message : String(commitErr);
+        if (!/no transaction is active/i.test(msg)) throw commitErr;
+        console.warn('restoreBackupArchive: connection does not keep an explicit transaction open; restore committed non-atomically.');
+      }
+    }
     return { ok: true, tables: [...BACKUP_TABLES], totalRows, errors: [] };
   } catch (err) {
     if (hasTransaction) {
