@@ -243,12 +243,6 @@
         </div>
     </div>
 
-    <!-- Top Left Quick Actions (opposite the Settings button) -->
-    <div class="sys-btn-left">
-        <button id="btn-open-journal">+ JOURNAL</button>
-        <button id="btn-open-manual">+ MANUAL</button>
-    </div>
-
     <!-- Main View Container -->
     <main id="main-container">
         <!-- Dashboard View -->
@@ -318,11 +312,15 @@
                         </div>
                     </div>
 
-                    <!-- Always-Visible Text Logging Bar -->
+                    <!-- Dashboard Logging Utilities (text bar + journal/manual) -->
                     <div class="card textbar-card">
                         <div class="text-bar">
                             <input type="text" id="dash-text-input" placeholder='What did you eat? e.g. "250g chicken breast, 100g rice"' autocomplete="off" enterkeyhint="done">
                             <button id="btn-dash-text-log">LOG</button>
+                        </div>
+                        <div class="textbar-utils">
+                            <button id="btn-open-journal">Journal</button>
+                            <button id="btn-open-manual">Manual</button>
                         </div>
                     </div>
                 </div>

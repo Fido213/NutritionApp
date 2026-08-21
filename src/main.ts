@@ -513,7 +513,10 @@ async function logTextInput(rawText: string) {
   const totalCal = results.reduce((sum, r) => sum + r.nutrition.calories, 0);
 
   const textInput = document.getElementById('dash-text-input') as HTMLInputElement | null;
-  if (textInput) textInput.value = '';
+  if (textInput) {
+    textInput.value = '';
+    textInput.closest('.text-bar')?.classList.remove('has-text');
+  }
 
   await refreshStateForDate(date);
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal`);
@@ -626,6 +629,11 @@ function setupJournalHandlers() {
 
 function setupDashboardTextBar() {
   const input = document.getElementById('dash-text-input') as HTMLInputElement | null;
+  const textBar = input?.closest('.text-bar') as HTMLElement | null;
+
+  const syncLogButton = () => {
+    textBar?.classList.toggle('has-text', (input?.value.trim().length ?? 0) > 0);
+  };
 
   const submit = async () => {
     const rawText = input?.value.trim();
@@ -635,6 +643,8 @@ function setupDashboardTextBar() {
     }
     await logTextInput(rawText);
   };
+
+  input?.addEventListener('input', syncLogButton);
 
   input?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {

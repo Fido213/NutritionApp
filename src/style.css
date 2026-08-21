@@ -39,7 +39,7 @@ body {
 }
 
 /* Layout Architecture */
-main { flex: 1; overflow-y: auto; position: relative; padding: max(64px, calc(env(safe-area-inset-top, 0px) + 64px)) 14px 80px; transition: transform 0.2s ease-out; }
+main { flex: 1; overflow-y: auto; position: relative; padding: max(76px, calc(env(safe-area-inset-top, 0px) + 76px)) 14px 80px; transition: transform 0.2s ease-out; }
 .view { display: none; height: 100%; flex-direction: column; gap: 12px; }
 .active-view { display: flex; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
@@ -51,33 +51,10 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(64px, calc(en
     padding-bottom: 16px; 
 }
 
-/* Top Left Quick Actions (opposite Settings) */
-.sys-btn-left {
-    position: fixed;
-    top: max(32px, calc(env(safe-area-inset-top, 0px) + 28px));
-    left: 14px;
-    z-index: 100;
-    display: flex;
-    gap: 8px;
-}
-.sys-btn-left button {
-    background: var(--surface-light);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 8px 12px;
-    border-radius: 20px;
-    font-weight: 700;
-    font-family: inherit;
-    font-size: 12px;
-    cursor: pointer;
-}
-.sys-btn-left #btn-open-journal { background: var(--accent-glow); color: #000; border: none; }
-.sys-btn-left #btn-open-manual { background: var(--pro); color: #fff; border: none; }
-
 /* System Button Top Right */
 .sys-btn-top {
     position: fixed;
-    top: max(32px, calc(env(safe-area-inset-top, 0px) + 28px));
+    top: max(44px, calc(env(safe-area-inset-top, 0px) + 40px));
     right: 16px;
     z-index: 100;
     background: var(--surface-light);
@@ -122,6 +99,7 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(64px, calc(en
 }
 .scan-btn {
     position: relative;
+    top: -7px;
     width: 64px;
     height: 64px;
     border-radius: 50%;
@@ -140,12 +118,11 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(64px, calc(en
 @media (min-width: 768px) {
     body { flex-direction: row; }
     .dock { width: 80px; height: 100vh; top: 0; flex-direction: column; border-top: none; border-right: 1px solid var(--border); justify-content: center; gap: 40px; padding: 0; }
-    .scan-btn { position: relative; bottom: auto; left: auto; transform: none; width: 50px; height: 50px; margin: 0 auto; }
+    .scan-btn { position: relative; top: auto; bottom: auto; left: auto; transform: none; width: 50px; height: 50px; margin: 0 auto; }
     .scan-wrapper { width: auto; height: auto; display: flex; justify-content: center; }
     main { padding-left: 100px; padding-bottom: 16px; max-width: 1200px; margin: 0 auto; }
     .grid-layout { display: grid; grid-template-columns: 350px 1fr; gap: 24px; align-items: start; padding-bottom: 0; }
     .sys-btn-top { top: 30px; right: 30px; }
-    .sys-btn-left { top: 30px; left: 100px; }
 
     /* Laptop: History — tabs + trend chart span both columns, heatmap and day logs sit side by side */
     #history.active-view { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
@@ -242,6 +219,23 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(64px, calc(en
     font-size: 13px;
     cursor: pointer;
     white-space: nowrap;
+    display: none;
+}
+.text-bar.has-text button { display: block; }
+
+/* Dashboard logging utilities (journal + manual, integrated under the text bar) */
+.textbar-utils { display: flex; gap: 8px; margin-top: 8px; }
+.textbar-utils button {
+    flex: 1;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 9px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
 }
 
 /* History Tabs */
