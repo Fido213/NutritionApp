@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-22
 **From:** ox-alpha, pass 18
-**Status:** Build + tests green (**247 tests, 18 files**). **Pass 18 implemented the §5b backlog (user authorized mid-pass) + water-log deletion + fixed three real bugs found by this pass's own verification.** New UI: tap-a-log expands it inline with Edit/Duplicate/Delete (action-hub modal deleted), edit is a full-screen view with ‹ Back, History-API layer stack makes Android BACK/swipe-back close modals and navigate in-app instead of exiting (zero new deps — no @capacitor/app), swipe between tabs works again, day-notes have UI (daily_records.note was data-only before), multi-select with Change Date/Duplicate/Delete (no bulk edit), combos create/log/delete from the Food Library, log notes render on items, and water entries are listed per-day with inline delete. Bugs fixed: **(1)** all-time export dropped the newest day — root cause is DST (midnight spring-forward carries +1h into every later Date; `datesBetween` now pure-UTC; regression tests lock it); **(2)** Android WebView silently dropped blob-anchor downloads — exports/backups never reached storage; new `SaveFilePlugin.kt` saves via MediaStore Downloads (no permissions) and both download helpers route through it natively; **(3)** backup restore failed on jeep-web at COMMIT ("no transaction is active") — tolerated for that specific case after a live P2P transfer caught it. **§5 item 1 closed: P2P verified end-to-end phone↔PC-Chrome** (pairing codes → WebRTC DataChannel over LAN → encrypted transfer → decrypt → restore on the receiving device). Export-modal click-throughs (all four scopes), laptop-layout screenshots, and the airplane-mode offline pass are done too — see §3. Passes 14–17 features unchanged and re-verified (pass-17 layout metrics reproduced exactly). **Not committed yet — awaiting user go-ahead.** §5b items 9–11 (AI model decision, ring-card pull-up, date+score header) remain recorded-only.
+**Status:** Build + tests green (**247 tests, 18 files**). **Pass 18 implemented the §5b backlog (user authorized mid-pass) + water-log deletion + fixed three real bugs found by this pass's own verification.** New UI: tap-a-log expands it inline with Edit/Duplicate/Delete (action-hub modal deleted), edit is a full-screen view with ‹ Back, History-API layer stack makes Android BACK/swipe-back close modals and navigate in-app instead of exiting (zero new deps — no @capacitor/app), swipe between tabs works again, day-notes have UI (daily_records.note was data-only before), multi-select with Change Date/Duplicate/Delete (no bulk edit), combos create/log/delete from the Food Library, log notes render on items, and water entries are listed per-day with inline delete. Bugs fixed: **(1)** all-time export dropped the newest day — root cause is DST (midnight spring-forward carries +1h into every later Date; `datesBetween` now pure-UTC; regression tests lock it); **(2)** Android WebView silently dropped blob-anchor downloads — exports/backups never reached storage; new `SaveFilePlugin.kt` saves via MediaStore Downloads (no permissions) and both download helpers route through it natively; **(3)** backup restore failed on jeep-web at COMMIT ("no transaction is active") — tolerated for that specific case after a live P2P transfer caught it. **§5 item 1 closed: P2P verified end-to-end phone↔PC-Chrome** (pairing codes → WebRTC DataChannel over LAN → encrypted transfer → decrypt → restore on the receiving device). Export-modal click-throughs (all four scopes), laptop-layout screenshots, and the airplane-mode offline pass are done too — see §3. Passes 14–17 features unchanged and re-verified (pass-17 layout metrics reproduced exactly). Committed + pushed after user go-ahead: `8b69c6d` (pass 18). **§5c records the user's pass-18 review decisions + new UI feedback (NOT yet implemented).**
 
 ---
 
@@ -230,9 +230,39 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 10. Pull the **calorie-ring card up** (ONLY that card + its box), opening visible space between it and the PRO/CARB/FAT bars card.
 11. If space allows after that: **date header + day score above the ring card** (agent-proposed, user approved the concept).
 
+## 5c. User requirements backlog — pass-18 review (2026-08-22, post-commit `8b69c6d`)
+
+> **Recorded only — nothing below is implemented yet.** Numbering follows the agent's 16-point "what's missing" scan; the user answered each point, then added new UI feedback (A–F).
+
+**Decisions on the gap scan:**
+1. **Food-image pipeline (spec §7.2)** — GO ("Yeah").
+2. **Gemma model file** — user still working on it (storage tradeoff); agent hands off.
+3. **Low-accuracy flag UI** — GO (set/show `daily_records.low_accuracy`).
+4. **Confidence metrics export column** — ADD the column(s). **PLUS an import fix (user-reported):** importing the legacy `exportexample.csv` collapses each day into ONE food log holding the day's total macros (documented pass-12 behavior) — user wants this fixed so imports don't fabricate a single mega-item per day.
+5. QR cross-device camera scan — "ok" (parked).
+6. ~~Bulk Change Date~~ — works, user-confirmed ✓.
+7. Hardware BACK/swipe — functionally works but UX is "meh" → improve with animation + better transition UX.
+8. Cross-network TURN pairing — DON'T (unneeded complexity); keep LAN-only focus.
+9. Offline deep pass — user handles.
+10. Service worker — consult spec first (§24 requires offline core workflows, which already work; sw.js was old-app PWA nicety). Low priority.
+11. **Bundle the Google Font locally** — GO (removes the only network touchpoint).
+12. **`btn-save-goals` new-goal-per-save** — fix if it's bad UX (it is): make save update the active goal / show goal history properly.
+13. **kJ-first label OCR quirk** — FIX it now; update the regression test alongside.
+14. jeep-web non-atomic restore — acknowledged, no action needed.
+15. **§5b items 10–11 (ring-card pull-up + date/score header above ring)** — GO.
+16. Dead `state.selectedLogForAction` field — clean up freely.
+
+**New UI feedback (screenshots reviewed):**
+A. **Edit screen layout broken:** content starts too high (‹ Back collides with the status-bar clock — missing safe-area padding), and it's not genuinely a dedicated screen — the dock (DASH/LOGS/scan) and settings gear are still visible while editing. Fix: proper full-screen edit view (hide dock + gear, correct top padding like other views), plus general visual polish.
+B. **Swipe-back exits the app** from any screen instead of navigating in-app — the History-API approach does NOT intercept the Android predictive-back gesture on this device. Needs real backButton handling (e.g. Capacitor App plugin or disabling predictive-back opt-in) — revisit the earlier decision to avoid @capacitor/app.
+C. **Combos rework:** user CANNOT create combos in practice (only delete works) — creation flow is broken/unusable; fix it. Combos should be saved AND viewed like screenshot #2: tapping a logged combo expands into a detail card ("NOURISHMENT BREAKDOWN") listing each ingredient with amount/macros/kcal and Close/Edit/Delete actions. Journal presentation of combos needs a redesign (current looks bad, doesn't work well).
+D. **Logs list redesign** (screenshot #3 = old-app journal style): chronological ordering with the **time shown next to each logged item**, day-group headers (weekday + date — running day total kcal), per-item kcal + P/C/F profile as in that mock.
+E. **Dashboard §5b items 10–11 (GO, see #15):** pull the calorie-ring card (only that card + its box) up; add date + day score in the space above it.
+F. **Day-note row UX:** the whole bar must be clickable to edit — not just the small ✎ button at the far right.
+
 ## 6. Before you start
 
-- **Pass 18 is NOT committed yet** — awaiting user go-ahead per governance §15. Pass-18 files: new `src/ui/nav.ts`, `src/ui/views/day-detail.ts`, `src/services/native/file-saver.ts`, `android/.../SaveFilePlugin.kt`; modified `src/main.ts` (large), `src/index.html`, `src/style.css`, `src/ui/views/history.ts`, `src/services/export/export-service.ts` + `.test.ts`, `src/services/export/csv-export.ts`, `src/services/backup/backup.ts`, `android/app/src/main/java/com/everydayfuel/app/MainActivity.java`. Earlier commits: pass 17 = `d632555`, handover hashes = `943d6b0`/`30808a7`; passes 14–16 batched as `94139e0`.
+- **Pass 18 committed + pushed after user go-ahead: `8b69c6d`.** Pass-18 files: new `src/ui/nav.ts`, `src/ui/views/day-detail.ts`, `src/services/native/file-saver.ts`, `android/.../SaveFilePlugin.kt`; modified `src/main.ts` (large), `src/index.html`, `src/style.css`, `src/ui/views/history.ts`, `src/services/export/export-service.ts` + `.test.ts`, `src/services/export/csv-export.ts`, `src/services/backup/backup.ts`, `android/app/src/main/java/com/everydayfuel/app/MainActivity.java`. Earlier commits: pass 17 = `d632555`, handover hashes = `943d6b0`/`30808a7`; passes 14–16 batched as `94139e0`.
 - **Committing cadence (user-confirmed, pass 13):** finish work → build/test/diff → **report and wait for explicit go-ahead** → commit (`feat(scope): ...`) + push; record hash in the pass log + here.
 - `vitest`: **247 tests / 18 files**. sql.js tests need no config; do not delete `src/types/sql-js.d.ts`.
 - AI logs live in `Ai Guidelines/ai logs/logs/` (git-ignored). Pass-18 log: `[ox-alpha][pass 18][2026-08-22].md`.
