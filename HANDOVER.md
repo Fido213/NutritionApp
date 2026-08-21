@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-21
 **From:** ox-alpha, pass 17
-**Status:** Build + tests green (**245 tests, 18 files**). **Pass 17 UI polish (user screenshot review):** scan button now floats 3.5 px above the dock line, whole UI pushed down 12 px (`main` env+76 / gear env+40), text-bar LOG button hidden until something is typed (Enter unaffected), and Journal/Manual moved out of the floating pills into an integrated `.textbar-utils` row inside the dashboard textbar card (same button IDs). All on-device verified via CDP on OPPO CPH2363. Pass-16 fixes (viewport-fit push-down, scan-in-dock, batched History queries, auto-updating heatmap) and pass-15 §5a items are unchanged. **§5a items 5–6 (scanning UX) remain deferred by design.** Pass-17 changes are **uncommitted until the user's go-ahead** (see §6). JDK 21 at `C:\Android\jdk-21\home` still required for gradle builds.
+**Status:** Build + tests green (**245 tests, 18 files**). **Pass 17 UI polish (user screenshot review):** scan button now floats 3.5 px above the dock line, whole UI pushed down 12 px (`main` env+76 / gear env+40), text-bar LOG button hidden until something is typed (Enter unaffected), and Journal/Manual moved out of the floating pills into an integrated `.textbar-utils` row inside the dashboard textbar card (same button IDs). All on-device verified via CDP on OPPO CPH2363. Pass-16 fixes (viewport-fit push-down, scan-in-dock, batched History queries, auto-updating heatmap) and pass-15 §5a items are unchanged. **§5a items 5–6 (scanning UX) remain deferred by design.** Committed + pushed: `d632555` (pass 17), `943d6b0` (handover hash). **New user backlog recorded in §5b (log interaction/navigation rework, combos/multi-select/day-notes UI, ring-card layout tweak) — explicitly NOT to be started until the user says so.** JDK 21 at `C:\Android\jdk-21\home` still required for gradle builds.
 
 ---
 
@@ -196,6 +196,27 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
 **Not-yet-developed notes (recorded for context)**
 - Gemma on-device inference still needs the model file pushed (deterministic fallback parsers are used until then).
 - Food-image analysis (spec §7.2 geometry/grams) is a separate later phase.
+
+## 5b. User requirements backlog — post-pass-17 review (2026-08-21)
+
+> **Recorded only — user said "don't act on it yet." Nothing below is implemented.**
+
+**Log interaction & navigation rework**
+1. Tapping a log should **expand it inline** with the actions shown right there — replace the action-hub modal (`#action-hub-modal`) entirely.
+2. **Edit opens a dedicated screen/view** (full view, not the current `#edit-modal` popup).
+3. **Android back button / swipe-back must navigate back inside the app** (to the previous view/state), never exit the app — implies Capacitor `backButton` handling + an in-app view stack.
+4. **Re-add swipe gestures between tabs** (DASH / LOGS / GOALS) — existed in spirit in the old app; `main` still carries a leftover `transition: transform` from it.
+5. **Day notes UI is missing** (QoL #5): daily_records note exists in data + export, but nothing in the UI writes/edits/shows it.
+6. **Multi-select for logs** — bulk actions limited to: **change date, delete, duplicate** (explicitly NO bulk edit).
+7. **Combos UI missing** (QoL #13): domain/repo support exists since pass 2 (`expandCombo`, combo repo), but there is no UI to create or apply combos.
+8. **Log/food notes don't render on log items** in the day lists — the note is editable in the edit modal but never displayed.
+
+**AI model (user-driven, in progress)**
+9. User is evaluating options for the Gemma model file — storage size is the concern ("a headache"). Deterministic fallback parsers remain active meanwhile; no agent action until the user lands on an approach.
+
+**Dashboard layout (user-approved proposal)**
+10. Pull the **calorie-ring card up** (ONLY that card + its box), opening visible space between it and the PRO/CARB/FAT bars card.
+11. If space allows after that: **date header + day score above the ring card** (agent-proposed, user approved the concept).
 
 ## 6. Before you start
 
