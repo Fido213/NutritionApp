@@ -11,7 +11,6 @@ export interface AppState {
   todayLogs: any[];
   currentScore: ScoreResult | null;
   activeModal: string | null;
-  selectedLogForAction: any | null;
 }
 
 const defaultState: AppState = {
@@ -35,8 +34,7 @@ const defaultState: AppState = {
   },
   todayLogs: [],
   currentScore: null,
-  activeModal: null,
-  selectedLogForAction: null
+  activeModal: null
 };
 
 type StateListener = (state: AppState) => void;

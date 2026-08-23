@@ -386,6 +386,20 @@ export function createFallbackConnection(store: FallbackTableStore): SQLiteDBCon
           Object.entries(sources).map(([source, total]) => ({ date, source, total }))
         ) };
       }
+      // Daily AVG/MIN food confidence (export) — join against the foods table.
+      if (statement.includes('AVG(f.confidence)') && statement.includes('GROUP BY')) {
+        const foods = store.getTable('foods');
+        const byDate: Record<string, { sum: number; count: number; min: number | null }> = {};
+        for (const row of rows) {
+          const conf = foods.find(f => f.id === row.food_id)?.confidence;
+          if (typeof conf !== 'number' || !Number.isFinite(conf)) continue;
+          const agg = byDate[row.date] || (byDate[row.date] = { sum: 0, count: 0, min: null });
+          agg.sum += conf;
+          agg.count++;
+          agg.min = agg.min === null ? conf : Math.min(agg.min, conf);
+        }
+        return { values: Object.entries(byDate).map(([date, a]) => ({ date, avg_confidence: a.sum / a.count, min_confidence: a.min })) };
+      }
       if (statement.includes('SUM(calories)')) {
         const sumCal = rows.reduce((acc, curr) => acc + (curr.calories || 0), 0);
         const sumPro = rows.reduce((acc, curr) => acc + (curr.protein_g || 0), 0);

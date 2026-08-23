@@ -1,3 +1,21 @@
+/* Outfit — bundled locally (§5c-11): removes the last network touchpoint (Google Fonts). */
+@font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 300 900;
+    font-display: swap;
+    src: url('/fonts/outfit-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 300 900;
+    font-display: swap;
+    src: url('/fonts/outfit-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 :root {
     --bg: #050505;
     --surface: #121212;
@@ -37,6 +55,20 @@ body {
     display: flex; 
     flex-direction: column; 
 }
+
+/* View transitions (§5c-7): direction-aware entrance animations */
+@keyframes viewEnterLeft { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+@keyframes viewEnterRight { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: none; } }
+@keyframes viewEnterUp { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
+.view-enter-left { animation: viewEnterLeft 0.22s ease-out; }
+.view-enter-right { animation: viewEnterRight 0.22s ease-out; }
+.view-enter-up { animation: viewEnterUp 0.22s ease-out; }
+
+/* Modal entrance polish */
+@keyframes modalBackdropIn { from { background: rgba(0,0,0,0); } to { background: rgba(0,0,0,0.85); } }
+@keyframes modalContentIn { from { opacity: 0; transform: scale(0.94) translateY(10px); } to { opacity: 1; transform: none; } }
+.modal.active { animation: modalBackdropIn 0.18s ease-out; }
+.modal.active .modal-content { animation: modalContentIn 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
 
 /* Layout Architecture */
 main { flex: 1; overflow-y: auto; position: relative; padding: max(76px, calc(env(safe-area-inset-top, 0px) + 76px)) 14px 80px; transition: transform 0.2s ease-out; }
@@ -115,6 +147,18 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(76px, calc(en
 }
 
 /* Desktop Responsive Layout */
+/* Edit screen = REAL full-screen view (§5c-A): dock + settings gear hidden */
+body.edit-open .dock,
+body.edit-open .sys-btn-top { display: none; }
+
+/* Dashboard day header above the ring card (§5b items 10–11) */
+.day-header { display: flex; justify-content: space-between; align-items: center; padding: 0 4px; }
+.dash-date { font-size: 15px; font-weight: 800; color: var(--text); }
+#dash-score-badge { font-weight: 800; }
+
+/* Ring-card pull-up (§5b item 10): only that card's box, opening space above the macro bars */
+.ring-card { margin-bottom: 30px; }
+
 @media (min-width: 768px) {
     body { flex-direction: row; }
     .dock { width: 80px; height: 100vh; top: 0; flex-direction: column; border-top: none; border-right: 1px solid var(--border); justify-content: center; gap: 40px; padding: 0; }
@@ -352,6 +396,42 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(76px, calc(en
 .edit-view .edit-header { display: flex; align-items: center; gap: 12px; }
 .edit-view .edit-header h2 { font-size: 20px; }
 .edit-back-btn { background: var(--surface-light); border: 1px solid var(--border); color: var(--text); padding: 8px 14px; border-radius: 10px; font-weight: 700; font-size: 14px; cursor: pointer; font-family: inherit; }
+
+/* Journal-style log list (§5c-D): day groups, times, kcal + macro profile */
+.journal-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.journal-group:last-of-type { border-bottom: none; }
+.journal-group.selected-day { background: rgba(34, 197, 94, 0.05); border-radius: 10px; padding: 8px; margin-left: -8px; margin-right: -8px; border-bottom: none; }
+.group-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; cursor: pointer; }
+.group-date { display: flex; flex-direction: column; min-width: 0; }
+.group-weekday { font-size: 13px; font-weight: 800; color: var(--text); text-transform: uppercase; letter-spacing: 0.5px; }
+.group-sub { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 62vw; }
+.journal-group.selected-day .group-weekday { color: var(--accent-glow); }
+.group-kcal { font-size: 13px; font-weight: 800; color: var(--accent-glow); white-space: nowrap; }
+.item-time { font-size: 11px; font-weight: 700; color: var(--text-dim); background: rgba(0,0,0,0.25); border-radius: 4px; padding: 2px 5px; white-space: nowrap; }
+.log-item .log-main { gap: 8px; }
+.log-item .log-main > .log-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.load-more-btn { width: 100%; background: transparent; border: 1px dashed var(--border); color: var(--text-dim); padding: 10px; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; font-family: inherit; margin-top: 4px; }
+
+/* Low-accuracy day flag (§5c-3) */
+.lowacc-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-light); border: 1px solid var(--border); color: var(--text-dim); padding: 5px 10px; border-radius: 999px; font-weight: 800; font-size: 11px; cursor: pointer; font-family: inherit; white-space: nowrap; }
+.lowacc-chip.active { background: rgba(251, 191, 36, 0.15); border-color: var(--fat); color: var(--fat); }
+
+/* Combo breakdown card (§5c-C): logged combos + library combos expand into it */
+.combo-row { background: var(--surface-light); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; }
+.combo-row.expanded { border-color: var(--pro); }
+.combo-breakdown { border-top: 1px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; cursor: default; }
+.combo-breakdown-title { font-size: 10px; font-weight: 900; letter-spacing: 1.5px; color: var(--text-dim); text-transform: uppercase; }
+.combo-ingredient { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 6px 10px; }
+.combo-ing-name { font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combo-ing-macros { font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+.combo-ing-kcal { font-size: 12px; font-weight: 700; color: var(--accent-glow); white-space: nowrap; }
+.combo-total-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 800; color: var(--text); padding: 2px 4px; }
+.combo-actions { display: flex; gap: 8px; }
+
+/* Combo builder (§5c-C creation fix) */
+.combo-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.combo-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-light); border: 1px solid var(--border); border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 600; color: var(--text); max-width: 100%; }
+.combo-chip button { background: transparent; border: none; color: var(--warn); font-weight: 900; cursor: pointer; font-family: inherit; font-size: 13px; padding: 0 2px; }
 
 /* Combos (journal modal) */
 .journal-combo-item { display: flex; justify-content: space-between; align-items: center; }

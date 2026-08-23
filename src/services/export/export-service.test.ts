@@ -273,6 +273,21 @@ describe('buildExportRows', () => {
     expect(rows[1].dailyNote).toBe('');
   });
 
+  it('carries the daily food confidence aggregates (avg/min)', async () => {
+    const { conn } = createRealDb();
+    const repos = await buildRepos(conn);
+    await seedTwoDayScenario(conn);
+
+    const rows = await buildExportRows(['2026-07-10', '2026-07-11', '2026-08-02'], repos);
+
+    // Day 1: only chicken (confidence 1.0). Day 2: only oats (0.8).
+    expect(rows[0].avgConfidence).toBeCloseTo(1.0, 5);
+    expect(rows[0].minConfidence).toBeCloseTo(1.0, 5);
+    expect(rows[1].avgConfidence).toBeCloseTo(0.8, 5);
+    expect(rows[1].minConfidence).toBeCloseTo(0.8, 5);
+    expect(rows[2].avgConfidence).toBeCloseTo(0.8, 5);
+  });
+
   it('skips days with no data and returns an empty list for an empty range', async () => {
     const { conn } = createRealDb();
     const repos = await buildRepos(conn);
@@ -284,7 +299,7 @@ describe('buildExportRows', () => {
     expect(await buildExportRows([], repos)).toEqual([]);
   });
 
-  it('export rows round-trip through generateCSV (locked 21-column format)', async () => {
+  it('export rows round-trip through generateCSV (locked 23-column format)', async () => {
     const { conn } = createRealDb();
     const repos = await buildRepos(conn);
     await seedTwoDayScenario(conn);
@@ -292,10 +307,15 @@ describe('buildExportRows', () => {
     const rows = await buildExportRows(datesBetween('2026-07-01', '2026-08-31'), repos);
     const csv = generateCSV(rows);
     const lines = csv.split('\n');
-    expect(lines[0].split(',')).toHaveLength(21);
+    // §5c-4: 21 legacy columns + Avg Confidence + Min Confidence.
+    expect(lines[0].split(',')).toHaveLength(23);
     expect(lines).toHaveLength(4); // header + 3 data days
     expect(csv).toContain('Cut');
     expect(csv).toContain('Bulk');
+    expect(csv).toContain('Avg Confidence');
+    expect(csv).toContain('Min Confidence');
+    // Day-1 row carries chicken's confidence at the tail of the line.
+    expect(lines[1].endsWith(',1,1')).toBe(true);
   });
 
   it('resolves the goal-for-date per phase across the range (no relabeling of history)', async () => {

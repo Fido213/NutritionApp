@@ -877,4 +877,74 @@ describe('Backup/restore round trip on a real SQLite database', () => {
     expect(data.water_logs).toEqual([]);
     expect(data.combo_items).toEqual([]);
   });
+
+  // §5c additions: journal range queries, confidence aggregates, in-place
+  // goal updates.
+  it('getLogsForRange joins display names; getWaterForRange lists entries in order', async () => {
+    const { conn } = createRealDb();
+    const foodRepo = new FoodRepository(conn);
+    const logRepo = new LogRepository(conn);
+    const waterRepo = new WaterRepository(conn);
+
+    const chicken = await foodRepo.insert(CHICKEN);
+    const oats = await foodRepo.insert(OATS);
+
+    await logRepo.insertFoodLog({ date: '2026-08-01', food_id: oats.id, amount_g: 100, calories: 389, protein_g: 13, carbs_g: 66, fat_g: 7 });
+    await logRepo.insertFoodLog({ date: '2026-08-02', food_id: chicken.id, amount_g: 200, calories: 330, protein_g: 62, carbs_g: 0, fat_g: 7.2 });
+    await waterRepo.insertWaterLog({ date: '2026-08-01', amount_ml: 500, source: 'explicit' });
+    await waterRepo.insertWaterLog({ date: '2026-08-03', amount_ml: 250, source: 'explicit' });
+
+    const logs = await logRepo.getLogsForRange('2026-08-01', '2026-08-02');
+    expect((logs as any[]).map(l => l.food_name)).toEqual(['Rolled Oats', 'Chicken Breast']);
+
+    const waters = await waterRepo.getWaterForRange('2026-08-01', '2026-08-02');
+    expect(waters.map(w => w.amount_ml)).toEqual([500]);
+    const allWaters = await waterRepo.getWaterForRange('2026-07-31', '2026-08-31');
+    expect(allWaters.map(w => w.amount_ml)).toEqual([500, 250]);
+  });
+
+  it('getDailyConfidenceForRange aggregates AVG/MIN per date', async () => {
+    const { conn } = createRealDb();
+    const foodRepo = new FoodRepository(conn);
+    const logRepo = new LogRepository(conn);
+
+    const chicken = await foodRepo.insert(CHICKEN); // 1.0
+    const oats = await foodRepo.insert(OATS);       // 0.8
+
+    await logRepo.insertFoodLog({ date: '2026-08-01', food_id: chicken.id, amount_g: 100, calories: 165, protein_g: 31, carbs_g: 0, fat_g: 3.6 });
+    await logRepo.insertFoodLog({ date: '2026-08-01', food_id: oats.id, amount_g: 100, calories: 389, protein_g: 13, carbs_g: 66, fat_g: 7 });
+    await logRepo.insertFoodLog({ date: '2026-08-02', food_id: oats.id, amount_g: 50, calories: 194.5, protein_g: 6.5, carbs_g: 33, fat_g: 3.5 });
+
+    const conf = await logRepo.getDailyConfidenceForRange('2026-08-01', '2026-08-31');
+    expect(conf['2026-08-01'].avgConfidence).toBeCloseTo(0.9, 5);
+    expect(conf['2026-08-01'].minConfidence).toBeCloseTo(0.8, 5);
+    expect(conf['2026-08-02'].avgConfidence).toBeCloseTo(0.8, 5);
+    expect(conf['2026-08-05']).toBeUndefined();
+  });
+
+  it('updateGoalTargets rewrites the active goal IN PLACE (no new phase per save)', async () => {
+    const { conn } = createRealDb();
+    const goalRepo = new GoalRepository(conn);
+
+    const goal = await goalRepo.createGoal({
+      name: 'Cut', start_date: '2026-08-01', end_date: null,
+      calories_target: 2000, protein_target: 140, carbs_target: 180, fat_target: 70, water_target: 3000
+    });
+    await goalRepo.createGoal({
+      name: 'Bulk', start_date: '2026-09-01', end_date: null,
+      calories_target: 2800, protein_target: 170, carbs_target: 320, fat_target: 90, water_target: 3500
+    });
+
+    const updated = await goalRepo.updateGoalTargets(goal.id, {
+      calories_target: 2100, protein_target: 145, carbs_target: 185, fat_target: 72, water_target: 3200
+    });
+
+    // Same row identity and dates preserved — history keeps resolving correctly.
+    expect(updated.id).toBe(goal.id);
+    expect(updated.start_date).toBe('2026-08-01');
+    expect(updated.calories_target).toBe(2100);
+    expect(await goalRepo.getGoalsHistory()).toHaveLength(2);
+    expect((await goalRepo.getGoalForDate('2026-08-15'))!.calories_target).toBe(2100);
+    expect((await goalRepo.getGoalForDate('2026-09-15'))!.name).toBe('Bulk');
+  });
 });

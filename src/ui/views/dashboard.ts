@@ -2,10 +2,22 @@ import { store } from '../state';
 import { renderCalorieRing } from '../components/ring';
 import { renderMacroBar } from '../components/macro-bar';
 import { formatWater } from '@utils/format';
+import { getScoreColorClass } from '@domain/scoring';
 
 export function renderDashboard() {
   const state = store.getState();
-  const { todayTotals, todayGoals, todayHydration } = state;
+  const { todayTotals, todayGoals, todayHydration, currentScore, selectedDate } = state;
+
+  // 0. Date + day-score header above the ring card (§5b items 10–11 / §5c-E)
+  const dateEl = document.getElementById('dash-date');
+  if (dateEl) dateEl.innerText = formatDashboardDate(selectedDate);
+
+  const scoreBadge = document.getElementById('dash-score-badge');
+  if (scoreBadge) {
+    const score = currentScore?.score ?? 0;
+    scoreBadge.innerText = `Score: ${score > 0 ? '+' : ''}${score}`;
+    scoreBadge.className = `score-badge ${getScoreColorClass(score).replace('--', '')}`;
+  }
 
   // 1. Calorie Ring
   renderCalorieRing(todayTotals.calories, todayGoals.caloriesTarget);
@@ -49,4 +61,17 @@ export function renderDashboard() {
       waterDeltaEl.classList.add('on-target');
     }
   }
+}
+
+/** "Today" / "Yesterday" / "Fri, Aug 22" for the dashboard header. */
+function formatDashboardDate(dateStr: string): string {
+  const today = new Date();
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  if (dateStr === iso) return 'Today';
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yIso = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+  if (dateStr === yIso) return 'Yesterday';
+  const d = new Date(dateStr + 'T00:00:00');
+  return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }

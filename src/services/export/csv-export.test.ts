@@ -22,7 +22,9 @@ const sampleRow: ExportRow = {
   scoreResult: 'Grey',
   scoreReason: 'Off target across the board (calories lower than goal, low protein, low hydration).',
   lowAccuracy: false,
-  dailyNote: ''
+  dailyNote: '',
+  avgConfidence: 0.85,
+  minConfidence: 0.7
 };
 
 describe('generateCSV', () => {
@@ -43,8 +45,23 @@ describe('generateCSV', () => {
     expect(header).toContain('Effective Water (ml)');
     expect(header).toContain('Low Accuracy Flag');
     expect(header).toContain('Daily Note');
+    expect(header).toContain('Avg Confidence');
+    expect(header).toContain('Min Confidence');
     expect(header).not.toContain('Exercise');
-    expect(header.split(',')).toHaveLength(21);
+    // §5c-4: confidence columns extend the locked format 21 -> 23.
+    expect(header.split(',')).toHaveLength(23);
+  });
+
+  it('renders confidence values at 2 decimals and empty when unknown', () => {
+    const line = generateCSV([sampleRow]).split('\n')[1];
+    expect(line.endsWith(',0.85,0.7')).toBe(true);
+
+    const unknown = generateCSV([{ ...sampleRow, avgConfidence: null, minConfidence: null }]).split('\n')[1];
+    // Empty confidence cells render as bare empty fields.
+    expect(unknown.endsWith(',"",,')).toBe(true);
+
+    const highPrecision = generateCSV([{ ...sampleRow, avgConfidence: 0.8333333, minConfidence: null }]).split('\n')[1];
+    expect(highPrecision).toContain(',0.83,');
   });
 
   it('rounds nutrition values to whole numbers', () => {

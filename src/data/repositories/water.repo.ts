@@ -30,6 +30,15 @@ export class WaterRepository {
     return (res.values as WaterLog[]) || [];
   }
 
+  /** All water entries in a range (journal view) — one batched query. */
+  async getWaterForRange(startDate: string, endDate: string): Promise<WaterLog[]> {
+    const res = await this.db.query(
+      `SELECT * FROM water_logs WHERE date >= ? AND date <= ? ORDER BY date ASC, created_at ASC`,
+      [startDate, endDate]
+    );
+    return (res.values as WaterLog[]) || [];
+  }
+
   async getFirstAndLastDate(): Promise<{ first: string | null; last: string | null }> {
     const res = await this.db.query(`SELECT MIN(date) as first_date, MAX(date) as last_date FROM water_logs`);
     const row = res.values?.[0];

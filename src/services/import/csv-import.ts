@@ -7,6 +7,13 @@
  *    per day with Target + Total columns, "Pure Water (ml)" and a "Logs"
  *    column). Total columns are preferred over Target columns so the actual
  *    values are imported, never the targets.
+ *
+ * §5c-4: a legacy day is NO LONGER collapsed into one aggregate mega-item.
+ * The "Logs" cell ("A | B | C") expands into one imported row per named food;
+ * the day's totals are split equally across the items (per-item breakdowns do
+ * not exist in the legacy format — nothing else is fabricated). Such rows are
+ * flagged `estimatedSplit` so the importer can mark those days low-accuracy,
+ * and only the first row of a day carries `waterMl` so water imports once.
  */
 
 export interface ParsedImportRow {
@@ -18,6 +25,8 @@ export interface ParsedImportRow {
   fatG: number;
   amountG?: number;
   waterMl?: number;
+  /** True when this row came from an equal-split of a legacy day aggregate. */
+  estimatedSplit?: boolean;
 }
 
 /** First header index matching the first key that matches any header (case-insensitive). */
@@ -37,10 +46,9 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
 
   const dateIdx = headers.findIndex(h => h.includes('date'));
   // Per-item exports name the food; the legacy daily export has no food column,
-  // so fall back to its "Logs" column (first food of the day's list).
-  let nameIdx = findColumn(headers, ['food', 'name', 'item']);
+  // only its "Logs" list ("A | B | C").
+  const nameIdx = findColumn(headers, ['food', 'name', 'item']);
   const logsIdx = headers.findIndex(h => h.trim() === 'logs');
-  if (nameIdx === -1) nameIdx = logsIdx;
   // Total/actual columns take precedence over Target columns (legacy export).
   const calIdx = findColumn(headers, ['total cal', 'cal']);
   const proIdx = findColumn(headers, ['total pro', 'pro']);
@@ -61,10 +69,11 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
     if (cols.length <= dateIdx) continue;
 
     const dateStr = cols[dateIdx];
-    let foodName = 'Imported Item';
-    if (nameIdx !== -1 && cols[nameIdx]) {
-      foodName = cols[nameIdx].split('|')[0].trim();
+    if (!dateStr || isNaN(new Date(dateStr).getTime())) {
+      errors.push(`Row ${i + 1}: Invalid date "${dateStr}"`);
+      continue;
     }
+
     const cal = parseFloat(cols[calIdx]) || 0;
     const pro = proIdx !== -1 ? parseFloat(cols[proIdx]) || 0 : 0;
     const carb = carbIdx !== -1 ? parseFloat(cols[carbIdx]) || 0 : 0;
@@ -72,23 +81,37 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
     const amt = amtIdx !== -1 ? parseFloat(cols[amtIdx]) || 100 : 100;
     const waterMl = waterIdx !== -1 ? parseFloat(cols[waterIdx]) || 0 : undefined;
 
-    if (!dateStr || isNaN(new Date(dateStr).getTime())) {
-      errors.push(`Row ${i + 1}: Invalid date "${dateStr}"`);
-      continue;
+    // Legacy daily-aggregate row: expand the Logs cell into one item per food.
+    let names = ['Imported Item'];
+    let isLegacyAggregate = false;
+    if (nameIdx === -1 && logsIdx !== -1) {
+      isLegacyAggregate = true;
+      const segments = (cols[logsIdx] || '')
+        .split('|')
+        .map(s => s.trim())
+        .filter(Boolean);
+      if (segments.length > 0) names = segments;
+    } else if (nameIdx !== -1 && cols[nameIdx]) {
+      names = [cols[nameIdx].split('|')[0].trim() || 'Imported Item'];
     }
 
-    const row: ParsedImportRow = {
-      date: dateStr,
-      foodName,
-      calories: cal,
-      proteinG: pro,
-      carbsG: carb,
-      fatG: fat,
-      amountG: amt
-    };
-    if (waterMl !== undefined) row.waterMl = waterMl;
-
-    rows.push(row);
+    // Equal split of the day totals across items (exact division — sums stay
+    // equal to the day's real totals). Water attaches to the first item only.
+    const shareCount = names.length;
+    for (let n = 0; n < shareCount; n++) {
+      const row: ParsedImportRow = {
+        date: dateStr,
+        foodName: names[n],
+        calories: cal / shareCount,
+        proteinG: pro / shareCount,
+        carbsG: carb / shareCount,
+        fatG: fat / shareCount,
+        amountG: amt
+      };
+      if (n === 0 && waterMl !== undefined) row.waterMl = waterMl;
+      if (isLegacyAggregate && shareCount > 1) row.estimatedSplit = true;
+      rows.push(row);
+    }
   }
 
   return { rows, errors };

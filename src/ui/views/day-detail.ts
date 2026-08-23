@@ -1,17 +1,22 @@
 /**
- * History "selected day" breakdown (HANDOVER §5b items 1, 5, 6, 8 + water deletion).
+ * History "Journal" list (§5c-D redesign of the old selected-day breakdown).
  *
- * - Tapping a food log expands it inline with its actions (Edit / Duplicate /
-   Delete) — replaces the old action-hub modal.
+ * Old-app journal style: chronological entries with the TIME shown per item,
+ * grouped under day headers (weekday + date + running day-total kcal) and a
+ * per-item kcal + P/C/F profile.
+ *
+ * - Tapping a food log expands it inline with Edit / Duplicate / Delete.
+ * - Logged combos (ingredient logs sharing one combo observation) render as
+ *   one collapsible row that expands into a NOURISHMENT BREAKDOWN card:
+ *   per-ingredient amount / macros / kcal totals + Close / Edit / Delete.
  * - Water entries are listed alongside food logs and can be deleted inline.
- * - Log notes render under the item name.
- * - A day-note row (daily_records.note) sits above the list; tap to edit.
+ * - Log notes render under the item name; day notes + the low-accuracy flag
+ *   are editable per group header (§5c-3 / §5c-F).
  * - Multi-select mode supports Change Date / Duplicate / Delete — explicitly
- *   NO bulk edit.
+ *   NO bulk edit. Selecting a combo selects all of its ingredient logs.
  */
-import { formatDisplayDate } from '@utils/dates';
 
-export interface DayDetailLog {
+export interface JournalFoodLog {
   id: string;
   date: string;
   food_id?: string | null;
@@ -24,45 +29,96 @@ export interface DayDetailLog {
   amount_g?: number | null;
   amount_ml?: number | null;
   note?: string | null;
-  kind: 'food';
+  created_at?: string;
+  observation_id?: string | null;
 }
 
-export interface DayDetailWater {
+export interface JournalWater {
   id: string;
   date: string;
   amount_ml: number;
   source: string;
   note?: string | null;
-  kind: 'water';
+  created_at?: string;
+}
+
+export interface ComboCluster {
+  kind: 'combo';
+  /** Unique render key (`combo:<observation_id>`). */
+  key: string;
+  comboId: string | null;
+  name: string;
+  logs: JournalFoodLog[];
+  totalCalories: number;
+  createdAt?: string;
+}
+
+export type JournalEntry =
+  | ({ kind: 'food' } & JournalFoodLog)
+  | ({ kind: 'water' } & JournalWater)
+  | ComboCluster;
+
+export interface JournalGroup {
+  date: string;
+  weekday: string;
+  displayDate: string;
+  isSelected: boolean;
+  totalKcal: number;
+  note: string | null;
+  lowAccuracy: boolean;
+  entries: JournalEntry[];
 }
 
 export interface DayDetailArgs {
   container: HTMLElement;
   selectedDate: string;
-  logs: DayDetailLog[];
-  waters: DayDetailWater[];
-  dayNote: string | null;
+  groups: JournalGroup[];
+  hasMoreDays: boolean;
   expandedLogId: string | null;
+  expandedComboKeys: Set<string>;
   selection: Set<string>;
   selectMode: boolean;
   onToggleExpand(logId: string): void;
-  onEdit(log: DayDetailLog): void;
-  onDuplicate(log: DayDetailLog): void;
-  onDeleteFood(log: DayDetailLog): void;
-  onDeleteWater(water: DayDetailWater): void;
-  onEditDayNote(): void;
+  onEdit(log: JournalFoodLog): void;
+  onDuplicate(log: JournalFoodLog): void;
+  onDeleteFood(log: JournalFoodLog): void;
+  onDeleteWater(water: JournalWater): void;
+  onEditDayNote(date: string): void;
+  onToggleLowAccuracy(date: string, current: boolean): void;
   onToggleSelectMode(): void;
   onToggleSelect(id: string): void;
+  onSelectMany(ids: string[]): void;
   onBulkChangeDate(ids: string[]): void;
   onBulkDuplicate(ids: string[]): void;
   onBulkDelete(ids: string[]): void;
+  onLoadMore(): void;
+  onToggleCombo(key: string): void;
+  onDeleteComboLogs(cluster: ComboCluster): void;
+  onEditComboTemplate(comboId: string): void;
+}
+
+/** Local HH:MM from a stored ISO timestamp ('' when unknown). */
+export function formatLogTime(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function entryTime(entry: JournalEntry): number {
+  const iso = entry.kind === 'combo' ? entry.createdAt : entry.created_at;
+  const t = iso ? new Date(iso).getTime() : NaN;
+  return isNaN(t) ? 0 : t;
 }
 
 export function renderDayDetail(args: DayDetailArgs) {
   const {
-    container, selectedDate, logs, waters, dayNote, expandedLogId, selection, selectMode,
+    container, groups, hasMoreDays, expandedLogId, expandedComboKeys,
+    selection, selectMode,
     onToggleExpand, onEdit, onDuplicate, onDeleteFood, onDeleteWater,
-    onEditDayNote, onToggleSelectMode, onToggleSelect, onBulkChangeDate, onBulkDuplicate, onBulkDelete
+    onEditDayNote, onToggleLowAccuracy, onToggleSelectMode, onToggleSelect, onSelectMany,
+    onBulkChangeDate, onBulkDuplicate, onBulkDelete, onLoadMore,
+    onToggleCombo, onDeleteComboLogs, onEditComboTemplate
   } = args;
 
   container.innerHTML = '';
@@ -70,7 +126,7 @@ export function renderDayDetail(args: DayDetailArgs) {
   const header = document.createElement('div');
   header.className = 'day-detail-header';
   const title = document.createElement('h3');
-  title.innerText = `Logs for ${formatDisplayDate(selectedDate)}`;
+  title.innerText = 'Journal';
   header.appendChild(title);
 
   const selectBtn = document.createElement('button');
@@ -80,37 +136,12 @@ export function renderDayDetail(args: DayDetailArgs) {
   header.appendChild(selectBtn);
   container.appendChild(header);
 
-  // Day note row (§5b item 5)
-  const noteRow = document.createElement('div');
-  noteRow.className = 'day-note-row';
-  const noteText = document.createElement('span');
-  noteText.className = 'day-note-text' + (dayNote ? '' : ' empty');
-  noteText.textContent = dayNote || '+ Add day note';
-  noteRow.appendChild(noteText);
-
-  if (!selectMode) {
-    const noteBtn = document.createElement('button');
-    noteBtn.className = 'day-note-btn';
-    noteBtn.textContent = '✎';
-    noteBtn.addEventListener('click', onEditDayNote);
-    noteRow.appendChild(noteBtn);
-  }
-  container.appendChild(noteRow);
-
-  type Row = DayDetailLog | DayDetailWater;
-  const rows: Row[] = [
-    ...logs,
-    ...waters.map<DayDetailWater>(w => ({ ...w, kind: 'water' }))
-  ];
-
   if (selectMode && selection.size > 0) {
     const bulkBar = document.createElement('div');
     bulkBar.className = 'bulk-bar';
 
     const ids = [...selection];
-    const selectedRows = rows.filter(r => selection.has(r.id));
-    const anyFood = selectedRows.some(r => r.kind === 'food');
-
+    // Water ids cannot move/duplicate — the callers filter them via journalWaters.
     const mkBtn = (label: string, enabled: boolean, fn: () => void, cls = '') => {
       const b = document.createElement('button');
       b.className = ('bulk-btn ' + cls).trim();
@@ -119,139 +150,320 @@ export function renderDayDetail(args: DayDetailArgs) {
       if (enabled) b.addEventListener('click', fn);
       bulkBar.appendChild(b);
     };
-    mkBtn('Change Date', anyFood, () => onBulkChangeDate(ids));
-    mkBtn('Duplicate', anyFood, () => onBulkDuplicate(ids));
+    mkBtn('Change Date', true, () => onBulkChangeDate(ids));
+    mkBtn('Duplicate', true, () => onBulkDuplicate(ids));
     mkBtn('Delete', true, () => onBulkDelete(ids), 'danger');
     container.appendChild(bulkBar);
   }
 
-  if (rows.length === 0) {
+  if (groups.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'day-detail-empty';
-    empty.textContent = 'No entries logged on this date.';
+    empty.textContent = 'Nothing logged in this period yet.';
     container.appendChild(empty);
-    return;
   }
 
-  const list = document.createElement('div');
-  list.className = 'log-list';
+  for (const group of groups) {
+    container.appendChild(buildGroup(group));
+  }
 
-  for (const row of rows) {
-    if (row.kind === 'water') {
-      list.appendChild(buildWaterRow(row, selectMode, selection.has(row.id), onToggleSelect, onDeleteWater));
-    } else {
-      list.appendChild(buildFoodRow(
-        row, selectMode, selection.has(row.id), row.id === expandedLogId,
-        onToggleSelect, onToggleExpand, onEdit, onDuplicate, onDeleteFood
-      ));
+  if (hasMoreDays) {
+    const more = document.createElement('button');
+    more.className = 'load-more-btn';
+    more.textContent = 'Load Older Days';
+    more.addEventListener('click', onLoadMore);
+    container.appendChild(more);
+  }
+
+  /* ---------- builders ---------- */
+
+  function buildGroup(group: JournalGroup): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'journal-group' + (group.isSelected ? ' selected-day' : '');
+
+    const head = document.createElement('div');
+    head.className = 'group-header';
+
+    const dateCol = document.createElement('div');
+    dateCol.className = 'group-date';
+    const weekday = document.createElement('span');
+    weekday.className = 'group-weekday';
+    weekday.textContent = group.weekday;
+    const sub = document.createElement('span');
+    sub.className = 'group-sub';
+    sub.textContent = group.note
+      ? `${group.displayDate} · 📝 ${group.note}`
+      : group.displayDate;
+    dateCol.append(weekday, sub);
+    head.appendChild(dateCol);
+
+    const right = document.createElement('div');
+    right.style.display = 'flex';
+    right.style.alignItems = 'center';
+    right.style.gap = '6px';
+
+    if (!selectMode) {
+      const lowacc = document.createElement('button');
+      lowacc.className = 'lowacc-chip' + (group.lowAccuracy ? ' active' : '');
+      lowacc.title = 'Marks this day as estimated / low accuracy (also shown in exports)';
+      lowacc.textContent = group.lowAccuracy ? '⚠ Low Accuracy' : '⚠';
+      lowacc.addEventListener('click', (e) => { e.stopPropagation(); onToggleLowAccuracy(group.date, group.lowAccuracy); });
+      right.appendChild(lowacc);
+
+      const noteBtn = document.createElement('button');
+      noteBtn.className = 'day-note-btn';
+      noteBtn.textContent = '✎';
+      noteBtn.title = 'Day note';
+      noteBtn.addEventListener('click', (e) => { e.stopPropagation(); onEditDayNote(group.date); });
+      right.appendChild(noteBtn);
     }
+
+    const kcal = document.createElement('span');
+    kcal.className = 'group-kcal';
+    kcal.textContent = `${Math.round(group.totalKcal)} kcal`;
+    right.appendChild(kcal);
+
+    head.appendChild(right);
+    wrap.appendChild(head);
+
+    const list = document.createElement('div');
+    list.className = 'log-list';
+
+    const sorted = [...group.entries].sort((a, b) => entryTime(a) - entryTime(b));
+    for (const entry of sorted) {
+      if (entry.kind === 'water') {
+        list.appendChild(buildWaterRow(entry, group.date));
+      } else if (entry.kind === 'combo') {
+        list.appendChild(buildComboRow(entry));
+      } else {
+        list.appendChild(buildFoodRow(entry));
+      }
+    }
+
+    if (sorted.length > 0) wrap.appendChild(list);
+    return wrap;
   }
 
-  container.appendChild(list);
-}
-
-function buildWaterRow(
-  w: DayDetailWater, selectMode: boolean, selected: boolean,
-  onToggleSelect: (id: string) => void, onDelete: (w: DayDetailWater) => void
-): HTMLElement {
-  const item = document.createElement('div');
-  item.className = 'log-item water-item' + (selected ? ' selected' : '');
-
-  if (selectMode) {
-    item.appendChild(buildCheckbox(selected, () => onToggleSelect(w.id)));
+  function appendCheckbox(item: HTMLElement, checked: boolean, onToggle: () => void) {
+    item.appendChild(buildCheckbox(checked, onToggle));
     item.classList.add('selectable');
   }
 
-  const main = document.createElement('div');
-  main.className = 'log-main';
-  const name = document.createElement('span');
-  name.className = 'log-name water-name';
-  name.textContent = `💧 Water (${w.source})`;
-  const amt = document.createElement('span');
-  amt.className = 'log-water';
-  amt.textContent = `${Math.round(w.amount_ml)} ml`;
-  main.append(name, amt);
-  item.appendChild(main);
+  function buildWaterRow(w: JournalWater, _date: string): HTMLElement {
+    const item = document.createElement('div');
+    item.className = 'log-item water-item' + (selection.has(w.id) ? ' selected' : '');
+    if (selectMode) appendCheckbox(item, selection.has(w.id), () => onToggleSelect(w.id));
 
-  if (!selectMode) {
-    const actions = document.createElement('div');
-    actions.className = 'log-actions';
-    const del = document.createElement('button');
-    del.className = 'log-action-btn danger';
-    del.textContent = 'Delete';
-    del.addEventListener('click', (e) => { e.stopPropagation(); onDelete(w); });
-    actions.appendChild(del);
-    item.appendChild(actions);
-  }
-  return item;
-}
+    const main = document.createElement('div');
+    main.className = 'log-main';
+    const name = document.createElement('span');
+    name.className = 'log-name water-name';
+    name.textContent = `💧 Water (${w.source})`;
+    main.appendChild(name);
 
-function buildFoodRow(
-  log: DayDetailLog, selectMode: boolean, selected: boolean, expanded: boolean,
-  onToggleSelect: (id: string) => void, onToggleExpand: (id: string) => void,
-  onEdit: (l: DayDetailLog) => void, onDuplicate: (l: DayDetailLog) => void, onDelete: (l: DayDetailLog) => void
-): HTMLElement {
-  const item = document.createElement('div');
-  item.className = 'log-item' + (expanded ? ' expanded' : '') + (selected ? ' selected' : '');
+    const right = document.createElement('div');
+    right.style.display = 'flex';
+    right.style.alignItems = 'center';
+    right.style.gap = '8px';
+    const time = formatLogTime(w.created_at);
+    if (time) {
+      const t = document.createElement('span');
+      t.className = 'item-time';
+      t.textContent = time;
+      right.appendChild(t);
+    }
+    const amt = document.createElement('span');
+    amt.className = 'log-water';
+    amt.textContent = `${Math.round(w.amount_ml)} ml`;
+    right.appendChild(amt);
+    main.appendChild(right);
+    item.appendChild(main);
 
-  if (selectMode) {
-    item.appendChild(buildCheckbox(selected, () => onToggleSelect(log.id)));
-    item.classList.add('selectable');
-  }
-
-  const main = document.createElement('div');
-  main.className = 'log-main';
-  const name = document.createElement('span');
-  name.className = 'log-name';
-  name.textContent = log.food_name || log.canonical_name || 'Logged Item';
-  const cal = document.createElement('span');
-  cal.className = 'log-cal';
-  cal.textContent = log.calories ? `${Math.round(log.calories)} kcal` : `${Math.round(log.amount_ml || log.amount_g || 0)} ml`;
-  main.append(name, cal);
-  item.appendChild(main);
-
-  if (log.note) {
-    const noteLine = document.createElement('div');
-    noteLine.className = 'log-note-line';
-    noteLine.textContent = log.note;
-    item.appendChild(noteLine);
+    if (!selectMode) {
+      const actions = document.createElement('div');
+      actions.className = 'log-actions';
+      const del = document.createElement('button');
+      del.className = 'log-action-btn danger';
+      del.textContent = 'Delete';
+      del.addEventListener('click', (e) => { e.stopPropagation(); onDeleteWater(w); });
+      actions.appendChild(del);
+      item.appendChild(actions);
+    }
+    return item;
   }
 
-  if (log.calories) {
-    const macros = document.createElement('div');
-    macros.className = 'log-macros';
-    macros.innerHTML = `
-      <span style="color: var(--pro);">P: ${Math.round(log.protein_g || 0)}g</span>
-      <span style="color: var(--carb);">C: ${Math.round(log.carbs_g || 0)}g</span>
-      <span style="color: var(--fat);">F: ${Math.round(log.fat_g || 0)}g</span>
-    `;
-    item.appendChild(macros);
+  function buildFoodRow(log: JournalFoodLog): HTMLElement {
+    const expanded = log.id === expandedLogId;
+    const item = document.createElement('div');
+    item.className = 'log-item' + (expanded ? ' expanded' : '') + (selection.has(log.id) ? ' selected' : '');
+    if (selectMode) appendCheckbox(item, selection.has(log.id), () => onToggleSelect(log.id));
+
+    const main = document.createElement('div');
+    main.className = 'log-main';
+    const time = formatLogTime(log.created_at);
+    if (time) {
+      const t = document.createElement('span');
+      t.className = 'item-time';
+      t.textContent = time;
+      main.appendChild(t);
+    }
+    const name = document.createElement('span');
+    name.className = 'log-name';
+    name.textContent = log.food_name || log.canonical_name || 'Logged Item';
+    main.appendChild(name);
+    const cal = document.createElement('span');
+    cal.className = 'log-cal';
+    cal.textContent = log.calories ? `${Math.round(log.calories)} kcal` : `${Math.round(log.amount_ml || log.amount_g || 0)} ml`;
+    main.appendChild(cal);
+    item.appendChild(main);
+
+    if (log.note) {
+      const noteLine = document.createElement('div');
+      noteLine.className = 'log-note-line';
+      noteLine.textContent = log.note;
+      item.appendChild(noteLine);
+    }
+
+    if (log.calories) {
+      const macros = document.createElement('div');
+      macros.className = 'log-macros';
+      macros.innerHTML = `
+        <span style="color: var(--pro);">P: ${Math.round(log.protein_g || 0)}g</span>
+        <span style="color: var(--carb);">C: ${Math.round(log.carbs_g || 0)}g</span>
+        <span style="color: var(--fat);">F: ${Math.round(log.fat_g || 0)}g</span>
+      `;
+      item.appendChild(macros);
+    }
+
+    if (expanded) {
+      const actions = document.createElement('div');
+      actions.className = 'log-actions';
+      const edit = document.createElement('button');
+      edit.className = 'log-action-btn';
+      edit.textContent = 'Edit';
+      edit.addEventListener('click', (e) => { e.stopPropagation(); onEdit(log); });
+      const dup = document.createElement('button');
+      dup.className = 'log-action-btn blue';
+      dup.textContent = 'Duplicate';
+      dup.addEventListener('click', (e) => { e.stopPropagation(); onDuplicate(log); });
+      const del = document.createElement('button');
+      del.className = 'log-action-btn danger';
+      del.textContent = 'Delete';
+      del.addEventListener('click', (e) => { e.stopPropagation(); onDeleteFood(log); });
+      actions.append(edit, dup, del);
+      item.appendChild(actions);
+    }
+
+    item.addEventListener('click', () => {
+      if (selectMode) onToggleSelect(log.id);
+      else onToggleExpand(log.id);
+    });
+    return item;
   }
 
-  if (expanded) {
-    const actions = document.createElement('div');
-    actions.className = 'log-actions';
-    const edit = document.createElement('button');
-    edit.className = 'log-action-btn';
-    edit.textContent = 'Edit';
-    edit.addEventListener('click', (e) => { e.stopPropagation(); onEdit(log); });
-    const dup = document.createElement('button');
-    dup.className = 'log-action-btn blue';
-    dup.textContent = 'Duplicate';
-    dup.addEventListener('click', (e) => { e.stopPropagation(); onDuplicate(log); });
-    const del = document.createElement('button');
-    del.className = 'log-action-btn danger';
-    del.textContent = 'Delete';
-    del.addEventListener('click', (e) => { e.stopPropagation(); onDelete(log); });
-    actions.append(edit, dup, del);
-    item.appendChild(actions);
-  }
+  function buildComboRow(cluster: ComboCluster): HTMLElement {
+    const expanded = expandedComboKeys.has(cluster.key);
+    const item = document.createElement('div');
+    item.className = 'combo-row' + (expanded ? ' expanded' : '');
+    if (selectMode) {
+      const memberIds = cluster.logs.map(l => l.id);
+      const allSelected = memberIds.every(id => selection.has(id)) && memberIds.length > 0;
+      appendCheckbox(item, allSelected, () => onSelectMany(memberIds));
+    }
 
-  item.addEventListener('click', () => {
-    if (selectMode) onToggleSelect(log.id);
-    else onToggleExpand(log.id);
-  });
-  return item;
+    const main = document.createElement('div');
+    main.className = 'log-main';
+    const time = formatLogTime(cluster.createdAt);
+    if (time) {
+      const t = document.createElement('span');
+      t.className = 'item-time';
+      t.textContent = time;
+      main.appendChild(t);
+    }
+    const name = document.createElement('span');
+    name.className = 'log-name';
+    name.textContent = `🍱 ${cluster.name}`;
+    main.appendChild(name);
+    const cal = document.createElement('span');
+    cal.className = 'log-cal';
+    cal.textContent = `${Math.round(cluster.totalCalories)} kcal`;
+    main.appendChild(cal);
+    item.appendChild(main);
+
+    const countLine = document.createElement('div');
+    countLine.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;';
+    countLine.textContent = `Combo · ${cluster.logs.length} items`;
+    item.appendChild(countLine);
+
+    if (expanded) {
+      const breakdown = document.createElement('div');
+      breakdown.className = 'combo-breakdown';
+
+      const title = document.createElement('div');
+      title.className = 'combo-breakdown-title';
+      title.textContent = 'Nourishment Breakdown';
+      breakdown.appendChild(title);
+
+      for (const log of cluster.logs) {
+        const row = document.createElement('div');
+        row.className = 'combo-ingredient';
+        const left = document.createElement('div');
+        left.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
+        const nm = document.createElement('span');
+        nm.className = 'combo-ing-name';
+        nm.textContent = log.food_name || log.canonical_name || 'Ingredient';
+        const mac = document.createElement('span');
+        mac.className = 'combo-ing-macros';
+        mac.textContent =
+          `${Math.round(log.amount_g ?? log.amount_ml ?? 0)}${log.amount_ml != null ? 'ml' : 'g'} · ` +
+          `P ${Math.round(log.protein_g || 0)} C ${Math.round(log.carbs_g || 0)} F ${Math.round(log.fat_g || 0)}`;
+        left.append(nm, mac);
+        const kcalEl = document.createElement('span');
+        kcalEl.className = 'combo-ing-kcal';
+        kcalEl.textContent = `${Math.round(log.calories || 0)} kcal`;
+        row.append(left, kcalEl);
+        breakdown.appendChild(row);
+      }
+
+      const totalRow = document.createElement('div');
+      totalRow.className = 'combo-total-row';
+      totalRow.innerHTML = `<span>Total</span><span style="color: var(--accent-glow);">${Math.round(cluster.totalCalories)} kcal</span>`;
+      breakdown.appendChild(totalRow);
+
+      if (!selectMode) {
+        const actions = document.createElement('div');
+        actions.className = 'combo-actions';
+        const close = document.createElement('button');
+        close.className = 'log-action-btn';
+        close.textContent = 'Close';
+        close.addEventListener('click', (e) => { e.stopPropagation(); onToggleCombo(cluster.key); });
+        actions.appendChild(close);
+        if (cluster.comboId) {
+          const editTpl = document.createElement('button');
+          editTpl.className = 'log-action-btn blue';
+          editTpl.textContent = 'Edit Combo';
+          editTpl.addEventListener('click', (e) => { e.stopPropagation(); onEditComboTemplate(cluster.comboId!); });
+          actions.appendChild(editTpl);
+        }
+        const del = document.createElement('button');
+        del.className = 'log-action-btn danger';
+        del.textContent = 'Delete All';
+        del.addEventListener('click', (e) => { e.stopPropagation(); onDeleteComboLogs(cluster); });
+        actions.appendChild(del);
+        breakdown.appendChild(actions);
+      }
+
+      item.appendChild(breakdown);
+    }
+
+    item.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('button')) return;
+      if (selectMode) return;
+      onToggleCombo(cluster.key);
+    });
+    return item;
+  }
 }
 
 function buildCheckbox(checked: boolean, onToggle: () => void): HTMLElement {
@@ -260,4 +472,30 @@ function buildCheckbox(checked: boolean, onToggle: () => void): HTMLElement {
   box.textContent = checked ? '✓' : '';
   box.addEventListener('click', (e) => { e.stopPropagation(); onToggle(); });
   return box;
+}
+
+/** Weekday label for a YYYY-MM-DD date (long form, e.g. "Saturday"). */
+export function weekdayLabel(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-US', { weekday: 'long' });
+}
+
+/** Group-header date label: Today / Yesterday / "Aug 22". */
+export function groupDateLabel(dateStr: string): string {
+  const today = getTodayLocal();
+  if (dateStr === today) return 'Today';
+  const yest = new Date();
+  yest.setDate(yest.getDate() - 1);
+  const yestIso = `${yest.getFullYear()}-${String(yest.getMonth() + 1).padStart(2, '0')}-${String(yest.getDate()).padStart(2, '0')}`;
+  if (dateStr === yestIso) return 'Yesterday';
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// Local import-free duplicate of getTodayDateString to keep this view pure DOM.
+function getTodayLocal(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }

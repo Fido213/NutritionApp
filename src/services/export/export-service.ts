@@ -91,6 +91,18 @@ async function perDateWater(dates: string[], repos: ExportRepos): Promise<Record
   return out;
 }
 
+/**
+ * Daily food-confidence aggregates with the same shim fallback strategy:
+ * degraded connections simply export empty confidence cells.
+ */
+async function batchedConfidence(dates: string[], repos: ExportRepos): Promise<Record<string, { avgConfidence: number | null; minConfidence: number | null }>> {
+  try {
+    return await repos.log.getDailyConfidenceForRange(dates[0], dates[dates.length - 1]);
+  } catch {
+    return {};
+  }
+}
+
 export interface ExportDateRange {
   startDate: string;
   endDate: string;
@@ -164,11 +176,12 @@ export async function buildExportRows(dates: string[], repos: ExportRepos): Prom
   const start = dates[0];
   const end = dates[dates.length - 1];
 
-  const [records, goalsForRange, totalsByDate, waterByDate] = await Promise.all([
+  const [records, goalsForRange, totalsByDate, waterByDate, confidenceByDate] = await Promise.all([
     repos.dailyRecord.getForRange(start, end),
     start === end ? repos.goal.getGoalForDate(start).then(g => (g ? [g] : [])) : repos.goal.getGoalsForRange(start, end),
     batchedTotals(dates, repos),
-    batchedWater(dates, repos)
+    batchedWater(dates, repos),
+    batchedConfidence(dates, repos)
   ]);
   const recordByDate = new Map(records.map(r => [r.date, r]));
 
@@ -212,7 +225,9 @@ export async function buildExportRows(dates: string[], repos: ExportRepos): Prom
       scoreResult: score.result,
       scoreReason: score.reason,
       lowAccuracy: record?.low_accuracy === 1,
-      dailyNote: record?.note ?? ''
+      dailyNote: record?.note ?? '',
+      avgConfidence: confidenceByDate[date]?.avgConfidence ?? null,
+      minConfidence: confidenceByDate[date]?.minConfidence ?? null
     });
   }
 

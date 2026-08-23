@@ -1,7 +1,7 @@
 export type NutritionBasis = 'per_100g' | 'per_100ml' | 'per_serving';
 export type SourceType = 'ai_estimate' | 'barcode' | 'nutrition_label' | 'user_entered' | 'imported';
 export type WaterSource = 'explicit' | 'drink' | 'food';
-export type ObservationSource = 'text' | 'image' | 'label_ocr' | 'barcode';
+export type ObservationSource = 'text' | 'image' | 'label_ocr' | 'barcode' | 'combo';
 
 export interface Food {
   id: string;

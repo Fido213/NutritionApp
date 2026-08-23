@@ -76,7 +76,7 @@ describe('parseCSV', () => {
       'Pure Water (ml)', 'Exercise Logged', 'Exercise Details'
     ].join(',');
 
-    it('reads ACTUAL totals, not Target columns', () => {
+    it('expands each legacy day into ONE ROW PER FOOD (no aggregate mega-item)', () => {
       const csv = [
         legacyHeader,
         '2026-04-05,Grey,score-0,"Off target.",2500,150,295,80,4000,"Air-fried Steakhouse Fries | Chips | Choco Pops",1282,65,181,30,0,No,None',
@@ -85,35 +85,55 @@ describe('parseCSV', () => {
 
       const { rows, errors } = parseCSV(csv);
       expect(errors).toEqual([]);
-      expect(rows).toHaveLength(2);
-      // BUG CHECK: before the fix these picked up Target Kcal/Pro/Carb/Fat (2500/150/295/80).
-      expect(rows[0]).toMatchObject({
-        date: '2026-04-05',
-        calories: 1282,
-        proteinG: 65,
-        carbsG: 181,
-        fatG: 30,
-        waterMl: 0,
-        amountG: 100
-      });
-      expect(rows[1]).toMatchObject({ calories: 1855, proteinG: 72, carbsG: 248, fatG: 66, waterMl: 2000 });
+      expect(rows).toHaveLength(5); // 3 + 2 items
+
+      // §5c-4 BUG CHECK: before the fix a whole day collapsed into ONE
+      // mega-item carrying all of the day's macros.
+      const day1 = rows.filter(r => r.date === '2026-04-05');
+      expect(day1.map(r => r.foodName)).toEqual(['Air-fried Steakhouse Fries', 'Chips', 'Choco Pops']);
+      const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+      expect(sum(day1.map(r => r.calories))).toBeCloseTo(1282, 5);
+      expect(sum(day1.map(r => r.proteinG))).toBeCloseTo(65, 5);
+      expect(sum(day1.map(r => r.carbsG))).toBeCloseTo(181, 5);
+      expect(sum(day1.map(r => r.fatG))).toBeCloseTo(30, 5);
+      day1.forEach(r => expect(r.amountG).toBe(100));
+
+      // Reads ACTUALS, never Target columns (regression from pass 12).
+      expect(sum(rows.filter(r => r.date === '2026-04-06').map(r => r.calories))).toBeCloseTo(1855, 5);
+
+      // Split days are marked as estimates.
+      day1.forEach(r => expect(r.estimatedSplit).toBe(true));
     });
 
-    it('names the item from the first food in the Logs column', () => {
+    it('attaches Pure Water to exactly one row per legacy day', () => {
+      const csv = [
+        legacyHeader,
+        '2026-04-05,Grey,score-0,"Off target.",2500,150,295,80,4000,"Air-fried Steakhouse Fries | Chips | Choco Pops",1282,65,181,30,0,No,None',
+        '2026-04-06,Red,score-neg-2,"Rough day.",2500,150,295,80,4000,"Snack | Banana",1855,72,248,66,2000,Yes,None'
+      ].join('\n');
+
+      const { rows } = parseCSV(csv);
+      const withWater = rows.filter(r => r.waterMl !== undefined && r.waterMl > 0);
+      expect(withWater).toHaveLength(1);
+      expect(withWater[0].date).toBe('2026-04-06');
+      expect(withWater[0].waterMl).toBe(2000);
+    });
+
+    it('names every item from its segment of the Logs column', () => {
       const csv = [
         legacyHeader,
         '2026-04-05,Grey,score-0,"x.",2500,150,295,80,4000,"Air-fried Steakhouse Fries | Chips | Choco Pops",1282,65,181,30,0,No,None'
       ].join('\n');
 
       const { rows } = parseCSV(csv);
-      expect(rows[0].foodName).toBe('Air-fried Steakhouse Fries');
+      expect(rows.map(r => r.foodName)).toEqual(['Air-fried Steakhouse Fries', 'Chips', 'Choco Pops']);
     });
   });
 
   describe('real old-app export file (exportexample.csv)', () => {
     const csv = readFileSync(new URL('../../../exportexample.csv', import.meta.url), 'utf8');
 
-    it('parses every day without errors', () => {
+    it('parses every day without errors and never fabricates an "Imported Item"', () => {
       const { rows, errors } = parseCSV(csv);
       expect(errors).toEqual([]);
       expect(rows.length).toBeGreaterThan(80);
@@ -124,25 +144,32 @@ describe('parseCSV', () => {
       });
     });
 
-    it('imports the day TOTALS, not the targets (bug check: 2026-04-05)', () => {
+    it('imports the day TOTALS across per-item rows, not the targets (bug check: 2026-04-05)', () => {
       const { rows } = parseCSV(csv);
-      const row = rows.find(r => r.date === '2026-04-05');
-      expect(row).toBeDefined();
-      // Before the fix this read "Target Kcal/Pro/Carb/Fat" = 2500/150/295/80.
-      expect(row!.calories).toBe(1282);
-      expect(row!.proteinG).toBe(65);
-      expect(row!.carbsG).toBe(181);
-      expect(row!.fatG).toBe(30);
-      expect(row!.waterMl).toBe(0);
+      // §5c-4 BUG CHECK (mega-item): the day expands into one row per named
+      // food whose SUM equals the real day totals (1282/65/181/30) — before
+      // this pass it was one aggregate item, and before pass 12 it read targets.
+      const day = rows.filter(r => r.date === '2026-04-05');
+      expect(day.length).toBeGreaterThan(1);
+      expect(day[0].foodName).toBe('Air-fried Steakhouse Fries');
+      expect(new Set(day.map(r => r.foodName)).size).toBe(day.length);
+      const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+      expect(sum(day.map(r => r.calories))).toBeCloseTo(1282, 5);
+      expect(sum(day.map(r => r.proteinG))).toBeCloseTo(65, 5);
+      expect(sum(day.map(r => r.carbsG))).toBeCloseTo(181, 5);
+      expect(sum(day.map(r => r.fatG))).toBeCloseTo(30, 5);
+      day.forEach(r => { expect(r.waterMl ?? 0).toBe(0); });
     });
 
-    it('picks up a day with exercise and water', () => {
+    it('picks up a day with exercise and water (single water row)', () => {
       const { rows } = parseCSV(csv);
-      const row = rows.find(r => r.date === '2026-04-06');
-      expect(row).toBeDefined();
-      expect(row!.calories).toBe(1855);
-      expect(row!.waterMl).toBe(2000);
-      expect(row!.foodName).toBe('Snack');
+      const dayRows = rows.filter(r => r.date === '2026-04-06');
+      const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+      expect(sum(dayRows.map(r => r.calories))).toBeCloseTo(1855, 5);
+      const waterRows = dayRows.filter(r => (r.waterMl ?? 0) > 0);
+      expect(waterRows).toHaveLength(1);
+      expect(waterRows[0].waterMl).toBe(2000);
+      expect(waterRows[0].foodName).toBe('Snack');
     });
   });
 });

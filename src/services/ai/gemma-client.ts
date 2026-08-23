@@ -163,7 +163,13 @@ export class GemmaClient {
   }
 
   /**
-   * Fallback deterministic regex parser for nutrition facts label OCR
+   * Fallback deterministic regex parser for nutrition facts label OCR.
+   *
+   * Energy resolution (§5c-13 — fixes the kJ-first quirk): EU labels lead
+   * with "Energy 1542 kJ / 368 kcal" and the old parser captured the first
+   * number after the keyword (the kJ value) as kcal. Now the explicit
+   * "<n> kcal" value on the energy line wins; a kJ-only line converts to
+   * kcal at 4.184 kJ/kcal (same rule as the online barcode lookup).
    */
   private fallbackParseNutritionLabel(rawText: string): InterpretedLabelOCR {
     const calMatch = rawText.match(/(?:calories|energy|kcal)[^\d]*(\d+(?:\.\d+)?)/i);
@@ -174,7 +180,8 @@ export class GemmaClient {
     return {
       rawText,
       foodName: this.extractLabelProductName(rawText),
-      caloriesPer100g: calMatch ? parseFloat(calMatch[1]) : 0,
+      caloriesPer100g: this.resolveEnergyKcal(rawText)
+        ?? (calMatch ? parseFloat(calMatch[1]) : 0),
       proteinPer100g: proMatch ? parseFloat(proMatch[1]) : 0,
       carbsPer100g: carbMatch ? parseFloat(carbMatch[1]) : 0,
       fatPer100g: fatMatch ? parseFloat(fatMatch[1]) : 0,
@@ -182,4 +189,28 @@ export class GemmaClient {
       confidence: 0.85
     };
   }
+
+  /** Resolve the energy value as kcal from the first energy-keyword line. */
+  private resolveEnergyKcal(rawText: string): number | null {
+    const lines = rawText.split(/\r?\n/).map(l => l.trim());
+    const energyLine = lines.find(l => /(?:^|\s)(?:calories?|energy)\b|\bkcal\b/i.test(l));
+    if (!energyLine) return null;
+
+    // Explicit kcal value on the line always wins (dual "kJ / kcal" labeling).
+    const kcal = energyLine.match(/(\d+(?:\.\d+)?)\s*kcal/i);
+    if (kcal) return round1(parseFloat(kcal[1]));
+
+    // kJ-only line: convert to kcal (÷4.184).
+    if (/\d\s*kJ\b/i.test(energyLine)) {
+      const kj = energyLine.match(/(\d+(?:\.\d+)?)\s*kJ/i);
+      if (kj) return round1(parseFloat(kj[1]) / KCAL_PER_KJ);
+    }
+    return null;
+  }
+}
+
+const KCAL_PER_KJ = 4.184;
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
 }

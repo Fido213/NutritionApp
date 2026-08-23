@@ -1,11 +1,19 @@
 /**
- * In-app navigation stack (HANDOVER §5b item 3).
+ * In-app navigation stack (HANDOVER §5b item 3, reworked §5c-B).
  *
- * The Android hardware back button / gesture drives WebView history. Every UI
- * layer (tab switch, edit screen, open modal) pushes exactly one history
- * entry, so BACK pops layers LIFO inside the app instead of exiting; only the
- * base layer exits (standard Android behaviour).
+ * Android hardware back / predictive-back swipe is intercepted by the
+ * @capacitor/app plugin's OnBackPressedCallback (Capacitor 8 core registers
+ * NO back handling of its own — the History-API approach alone let the
+ * gesture exit the app). When a `backButton` listener is registered the
+ * native callback fires our JS handler instead of the system default.
+ *
+ * The History-API layer stack remains for browser/web back support: every UI
+ * layer (tab switch, edit screen, open modal) pushes exactly one entry and
+ * BACK pops layers LIFO inside the app; only the base layer exits (standard
+ * Android behaviour).
  */
+import { App } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 
 export type ViewId = 'today' | 'history' | 'view-goals';
 
@@ -56,6 +64,26 @@ export function initNavStack() {
   setupPopHandler();
 }
 
+/**
+ * Native back-button wiring (§5c item 7 / §5c-B): with a listener registered,
+ * the plugin intercepts hardware back AND predictive-back swipes and hands
+ * them to the layer stack; at the base layer the app exits as usual.
+ */
+export async function initNativeBackButton() {
+  try {
+    if (!Capacitor.isNativePlatform()) return;
+    await App.addListener('backButton', () => {
+      if (layerStack.length > 0) {
+        closeLayer();
+      } else {
+        App.exitApp();
+      }
+    });
+  } catch (err) {
+    console.warn('Native backButton wiring failed:', err);
+  }
+}
+
 /* ---------------- Tab switching with swipe support ---------------- */
 
 export interface TabController {
@@ -67,6 +95,21 @@ export interface TabController {
 }
 
 const TAB_ORDER: ViewId[] = ['today', 'history', 'view-goals'];
+
+/** Direction-aware entrance animation for tab switches / screen changes (§5c-7). */
+export function animateViewIn(el: HTMLElement | null, direction: 'left' | 'right' | 'up') {
+  if (!el) return;
+  const cls = direction === 'left' ? 'view-enter-left' : direction === 'up' ? 'view-enter-up' : 'view-enter-right';
+  el.classList.remove('view-enter-left', 'view-enter-right', 'view-enter-up');
+  // Force a reflow so re-applying the class restarts the animation.
+  void el.offsetWidth;
+  el.classList.add(cls);
+  window.setTimeout(() => el.classList.remove(cls), 260);
+}
+
+export function tabDirection(from: ViewId, to: ViewId): 'left' | 'right' {
+  return TAB_ORDER.indexOf(to) > TAB_ORDER.indexOf(from) ? 'left' : 'right';
+}
 
 export function setupTabNavigation(
   switchTabInternal: (viewId: ViewId) => void,
@@ -104,6 +147,7 @@ export function setupTabNavigation(
       (e: TouchEvent) => {
         if (e.touches.length !== 1) { tracking = false; return; }
         if (document.querySelector('.modal.active')) { tracking = false; return; }
+        if (document.body.classList.contains('edit-open')) { tracking = false; return; }
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
         tracking = true;

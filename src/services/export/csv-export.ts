@@ -25,6 +25,15 @@ export interface ExportRow {
   scoreReason: string;
   lowAccuracy: boolean;
   dailyNote: string;
+  /** Avg/MIN of the day's logged foods' confidence (null when no foods or unknown). */
+  avgConfidence: number | null;
+  minConfidence: number | null;
+}
+
+/** Confidence cell: 2-decimal value, or empty when unknown (no foods that day). */
+function formatConfidence(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '';
+  return String(Math.round(value * 100) / 100);
 }
 
 export function generateCSV(rows: ExportRow[]): string {
@@ -49,7 +58,9 @@ export function generateCSV(rows: ExportRow[]): string {
     'Score Result',
     'Score Reason',
     'Low Accuracy Flag',
-    'Daily Note'
+    'Daily Note',
+    'Avg Confidence',
+    'Min Confidence'
   ];
 
   const lines = [headers.join(',')];
@@ -76,7 +87,9 @@ export function generateCSV(rows: ExportRow[]): string {
       escapeCSV(r.scoreResult),
       escapeCSV(r.scoreReason),
       r.lowAccuracy ? 'YES' : 'NO',
-      escapeCSV(r.dailyNote)
+      escapeCSV(r.dailyNote),
+      formatConfidence(r.avgConfidence),
+      formatConfidence(r.minConfidence)
     ].join(',');
     lines.push(rowStr);
   });

@@ -396,4 +396,49 @@ describe('createFallbackConnection', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].canonical_name).toBe('Chicken Breast');
   });
+
+  // §5c additions: journal + export queries must survive fallback mode.
+  it('aggregates daily AVG/MIN food confidence across a JOIN', async () => {
+    const store = createStore();
+    const db = createFallbackConnection(store);
+
+    store.setTable('foods', [
+      { id: 'f1', canonical_name: 'Chicken', normalized_name: 'chicken', confidence: 1.0 },
+      { id: 'f2', canonical_name: 'Oats', normalized_name: 'oats', confidence: 0.8 }
+    ]);
+    store.setTable('food_logs', [
+      { id: 'l1', date: '2026-08-01', food_id: 'f1', calories: 165 },
+      { id: 'l2', date: '2026-08-01', food_id: 'f2', calories: 389 },
+      { id: 'l3', date: '2026-08-02', food_id: 'f2', calories: 194 }
+    ]);
+
+    const rows = await queryValues(db,
+      `SELECT fl.date, AVG(f.confidence) AS avg_confidence, MIN(f.confidence) AS min_confidence
+       FROM food_logs fl JOIN foods f ON f.id = fl.food_id
+       WHERE fl.date >= ? AND fl.date <= ? GROUP BY fl.date`,
+      ['2026-08-01', '2026-08-31']
+    );
+    expect(rows).toHaveLength(2);
+    const day1 = rows.find(r => r.date === '2026-08-01');
+    expect(day1.avg_confidence).toBeCloseTo(0.9, 5);
+    expect(day1.min_confidence).toBeCloseTo(0.8, 5);
+    expect(rows.find(r => r.date === '2026-08-02').avg_confidence).toBeCloseTo(0.8, 5);
+  });
+
+  it('lists water logs for a range in date order (journal)', async () => {
+    const store = createStore();
+    const db = createFallbackConnection(store);
+
+    store.setTable('water_logs', [
+      { id: 'w2', date: '2026-08-02', amount_ml: 250, source: 'explicit', created_at: 'a' },
+      { id: 'w1', date: '2026-08-01', amount_ml: 500, source: 'explicit', created_at: 'b' },
+      { id: 'w3', date: '2026-08-03', amount_ml: 1000, source: 'drink', created_at: 'c' }
+    ]);
+
+    const rows = await queryValues(db,
+      `SELECT * FROM water_logs WHERE date >= ? AND date <= ? ORDER BY date ASC, created_at ASC`,
+      ['2026-07-31', '2026-08-02']
+    );
+    expect(rows.map(r => r.id)).toEqual(['w1', 'w2']);
+  });
 });

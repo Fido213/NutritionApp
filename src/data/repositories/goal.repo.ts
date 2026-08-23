@@ -60,6 +60,25 @@ export class GoalRepository {
     return res.values![0] as Goal;
   }
 
+  /**
+   * Update the active goal's targets in place (§5c-12): saving the goals form
+   * no longer closes the current phase and opens a new one on every save.
+   * start/end dates and the name are preserved, so historical days keep
+   * resolving to the same goal record.
+   */
+  async updateGoalTargets(
+    id: string,
+    targets: { calories_target: number; protein_target: number; carbs_target: number; fat_target: number; water_target: number }
+  ): Promise<Goal> {
+    await this.db.run(
+      `UPDATE goals SET calories_target = ?, protein_target = ?, carbs_target = ?, fat_target = ?, water_target = ? WHERE id = ?`,
+      [targets.calories_target, targets.protein_target, targets.carbs_target, targets.fat_target, targets.water_target, id]
+    );
+    const res = await this.db.query(`SELECT * FROM goals WHERE id = ?`, [id]);
+    if (!res.values || res.values.length === 0) throw new Error('Goal not found after update');
+    return res.values[0] as Goal;
+  }
+
   async getGoalsHistory(): Promise<Goal[]> {
     const res = await this.db.query(`SELECT * FROM goals ORDER BY start_date DESC`);
     return (res.values as Goal[]) || [];

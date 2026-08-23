@@ -13,16 +13,19 @@ import { Food } from '@data/types';
 import { store } from './ui/state';
 import { renderDashboard } from './ui/views/dashboard';
 import { renderHistory, HistoryViewMode } from './ui/views/history';
-import { renderDayDetail } from './ui/views/day-detail';
-import type { DayDetailLog } from './ui/views/day-detail';
+import {
+  renderDayDetail,
+  type JournalGroup, type JournalEntry, type JournalFoodLog, type JournalWater, type ComboCluster
+} from './ui/views/day-detail';
+import { weekdayLabel, groupDateLabel } from './ui/views/day-detail';
 import { renderGoals, readGoalsForm } from './ui/views/goals';
-import { setupTabNavigation, pushLayer, closeLayer, initNavStack, ViewId } from './ui/nav';
+import { setupTabNavigation, pushLayer, closeLayer, initNavStack, initNativeBackButton, animateViewIn, tabDirection, ViewId } from './ui/nav';
 import { showToast } from './ui/components/toast';
 import { calculateEffectiveHydration, classifyWaterSource } from '@domain/hydration';
 import { calculateScore } from '@domain/scoring';
 import { calculateNutrition } from '@domain/nutrition';
 import { normalizeFoodName, expandCombo } from '@domain/logging';
-import { getTodayDateString, formatDateISO } from '@utils/dates';
+import { getTodayDateString, formatDateISO, shiftDate } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
 import { buildExportRows, datesBetween, goalPhaseRange, resolveExportDateRange, ExportRepos } from '@services/export/export-service';
 import { parseCSV } from '@services/import/csv-import';
@@ -64,14 +67,29 @@ let historyWindowKey = '';
 let dataVersion = 0;
 let numpadBuffer = '';
 
-// Day-detail UI state (§5b: inline expand, multi-select, day note, water rows)
-let dayWaters: any[] = [];
-let dayNoteText: string | null = null;
+// Day-detail UI state (§5b: inline expand, multi-select; §5c: journal groups,
+// combo breakdowns, low-accuracy chip, per-group day notes)
+let journalWaters: JournalWater[] = [];
 let expandedLogId: string | null = null;
+const expandedComboKeys = new Set<string>();
 let selectMode = false;
 const selection = new Set<string>();
+let journalDaysBack = 14;
+const JOURNAL_PAGE_DAYS = 14;
+let journalRenderGen = 0;
 let currentViewId: ViewId = 'today';
 let tabController: ReturnType<typeof setupTabNavigation> | null = null;
+
+// Combo builder state (§5c-C): survives modal close so a draft isn't lost.
+let builderActive = false;
+let editingComboId: string | null = null;
+let pendingComboFoodIds: string[] = [];
+/** Library combo whose breakdown card is expanded (§5c-C). */
+let comboBreakdownOpenId: string | null = null;
+/** Generation counters: a slower in-flight render must never overwrite a
+ *  newer one (the stale-list race seen on device during §5c verification). */
+let comboListGen = 0;
+let comboBuilderGen = 0;
 
 /**
  * Modal ↔ navigation-layer bridge: opening a modal pushes one history entry,
@@ -178,6 +196,7 @@ async function initApp() {
 
     // 5. Setup UI Event Listeners & Navigation
     setupNavigation();
+    initNativeBackButton();
     setupModals();
     setupDialogModals();
     setupExportHandlers();
@@ -221,9 +240,7 @@ async function refreshStateForDate(dateStr: string) {
   const score = calculateScore(totals, goal, hydration);
 
   const logs = await logRepo.getLogsForDate(dateStr);
-  dayWaters = await waterRepo.getWaterForDate(dateStr);
-  const [dayRecord] = await dailyRecordRepo.getForRange(dateStr, dateStr);
-  dayNoteText = dayRecord?.note ?? null;
+  journalWaters = await waterRepo.getWaterForDate(dateStr);
 
   // 1-Tap Recents query (HANDOVER §5a): kept as an agent-only debug hook.
   // Not shown anywhere in the UI — visible via WebView DevTools CDP console.
@@ -278,7 +295,7 @@ function renderHistoryView() {
     anchor: historyAnchor,
     selectedDate: state.selectedDate
   });
-  renderDayDetailIfVisible();
+  renderJournalIfVisible();
 }
 
 function shiftHistoryAnchor(delta: number) {
@@ -308,19 +325,26 @@ function setupNavigation() {
   const goalsView = document.getElementById('view-goals');
 
   function switchTabInternal(viewId: ViewId) {
+    const previousView = currentViewId;
     [todayView, historyView, goalsView].forEach(v => v?.classList.remove('active-view'));
     [dashBtn, logsBtn].forEach(b => b?.classList.remove('active'));
 
+    let target: HTMLElement | null = null;
     if (viewId === 'today') {
       todayView?.classList.add('active-view');
       dashBtn?.classList.add('active');
+      target = todayView;
     } else if (viewId === 'history') {
       historyView?.classList.add('active-view');
       logsBtn?.classList.add('active');
+      target = historyView;
       ensureHistoryWindow().then(() => renderHistoryView());
     } else if (viewId === 'view-goals') {
       goalsView?.classList.add('active-view');
+      target = goalsView;
     }
+    // Direction-aware entrance animation for tab swipes / dock taps (§5c-7).
+    if (target && previousView !== viewId) animateViewIn(target, tabDirection(previousView, viewId));
     currentViewId = viewId;
   }
 
@@ -363,14 +387,7 @@ function setupModals() {
   document.getElementById('numpad-close')?.addEventListener('click', () => closeModal('numpad-modal'));
 
   document.getElementById('btn-open-journal')?.addEventListener('click', () => {
-    pendingComboFoodIds = [];
-    updateComboBar();
-    openModalLayer('journal-modal');
-    renderComboList();
-    const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
-    if (searchInput && !searchInput.value.trim()) {
-      foodRepo.fuzzySearch('', 20).then(renderJournalResults);
-    }
+    openLibraryModal();
   });
   document.getElementById('btn-close-journal')?.addEventListener('click', () => closeModalLayer('journal-modal'));
 
@@ -385,6 +402,17 @@ function setupModals() {
 }
 
 // ---------- Export (spec §21: all-time / date range / goal phase) ----------
+
+/** Open the Food Library modal (journal search + combos). Builder state survives close/reopen. */
+function openLibraryModal() {
+  openModalLayer('journal-modal');
+  renderComboList();
+  renderComboBuilder();
+  const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
+  if (searchInput && !searchInput.value.trim()) {
+    foodRepo.fuzzySearch('', 20).then(renderJournalResults);
+  }
+}
 
 async function openExportModal() {
   const select = document.getElementById('export-goal-phase') as HTMLSelectElement | null;
@@ -479,16 +507,30 @@ function setupExportHandlers() {
 function setupActionHandlers() {
   document.getElementById('btn-save-goals')?.addEventListener('click', async () => {
     const newGoals = readGoalsForm();
-    await goalRepo.createGoal({
-      name: 'Updated Goal',
-      start_date: getTodayDateString(),
-      end_date: null,
-      calories_target: newGoals.caloriesTarget,
-      protein_target: newGoals.proteinTarget,
-      carbs_target: newGoals.carbsTarget,
-      fat_target: newGoals.fatTarget,
-      water_target: newGoals.waterTarget
-    });
+    // §5c-12: saving updates the ACTIVE goal in place instead of closing it
+    // and creating a fresh phase on every save (start/end dates and history
+    // stay intact; the goal list no longer fills with "Updated Goal" rows).
+    const current = await goalRepo.getCurrentGoal();
+    if (current) {
+      await goalRepo.updateGoalTargets(current.id, {
+        calories_target: newGoals.caloriesTarget,
+        protein_target: newGoals.proteinTarget,
+        carbs_target: newGoals.carbsTarget,
+        fat_target: newGoals.fatTarget,
+        water_target: newGoals.waterTarget
+      });
+    } else {
+      await goalRepo.createGoal({
+        name: 'Initial Goal',
+        start_date: getTodayDateString(),
+        end_date: null,
+        calories_target: newGoals.caloriesTarget,
+        protein_target: newGoals.proteinTarget,
+        carbs_target: newGoals.carbsTarget,
+        fat_target: newGoals.fatTarget,
+        water_target: newGoals.waterTarget
+      });
+    }
     await refreshStateForDate(store.getState().selectedDate);
     showToast('Goal configuration saved!');
   });
@@ -545,7 +587,8 @@ function setupActionHandlers() {
   });
 
   window.addEventListener('select-history-date', (e: any) => {
-    const dateStr = e.detail;
+    const dateStr = e.detail as string;
+    if (dateStr !== store.getState().selectedDate) journalDaysBack = JOURNAL_PAGE_DAYS;
     refreshStateForDate(dateStr);
   });
 }
@@ -574,7 +617,7 @@ async function logTextInput(rawText: string) {
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal`);
 }
 
-// ---------- Journal Search & Quick-Log ----------
+// ---------- Journal Search & Quick-Log (builder-aware, §5c-C) ----------
 
 function renderJournalResults(foods: Food[]) {
   const container = document.getElementById('journal-results');
@@ -587,9 +630,18 @@ function renderJournalResults(foods: Food[]) {
     empty.style.fontSize = '13px';
     empty.style.padding = '10px';
     empty.style.textAlign = 'center';
-    empty.innerText = 'No foods found in your library. Use the text bar on the dashboard to log meals by description.';
+    empty.innerText = builderActive
+      ? 'No matching foods. Try another search.'
+      : 'No foods found in your library. Use the text bar on the dashboard to log meals by description.';
     container.appendChild(empty);
     return;
+  }
+
+  if (builderActive) {
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:12px;color:var(--pro);padding:2px 10px 8px;';
+    hint.textContent = 'Builder active — tap items to ADD them to the combo (nothing gets logged).';
+    container.appendChild(hint);
   }
 
   foods.forEach(food => {
@@ -612,21 +664,15 @@ function renderJournalResults(foods: Food[]) {
     main.appendChild(cal);
     item.appendChild(main);
 
-    // §5b item 7: collect foods into a reusable combo template
-    const addCombo = document.createElement('button');
-    addCombo.className = 'log-action-btn';
-    addCombo.style.marginTop = '4px';
-    addCombo.style.width = 'fit-content';
-    addCombo.textContent = pendingComboFoodIds.includes(food.id) ? '✓ In Combo' : '+ Combo';
-    if (!pendingComboFoodIds.includes(food.id)) {
-      addCombo.addEventListener('click', (e) => {
-        e.stopPropagation();
-        pendingComboFoodIds.push(food.id);
-        updateComboBar();
-        renderJournalResults(foods);
-      });
+    // Builder state indicator on already-added items.
+    if (builderActive && pendingComboFoodIds.includes(food.id)) {
+      const badge = document.createElement('span');
+      badge.className = 'combo-chip';
+      badge.style.marginTop = '4px';
+      badge.style.width = 'fit-content';
+      badge.textContent = '✓ In Combo';
+      item.appendChild(badge);
     }
-    item.appendChild(addCombo);
 
     container.appendChild(item);
   });
@@ -687,78 +733,262 @@ function setupJournalHandlers() {
   document.getElementById('journal-results')?.addEventListener('click', (e) => {
     const target = (e.target as HTMLElement).closest('.log-item') as HTMLElement | null;
     if (!target?.dataset.foodId) return;
+    const foodId = target.dataset.foodId;
+
+    // §5c-C: while the combo builder is active, tapping a result ADDS it to
+    // the builder instead of quick-logging + closing (the old flow lost the
+    // draft whenever a food was tapped — creation was unusable in practice).
+    if (builderActive) {
+      addToComboBuilder(foodId);
+      return;
+    }
+
     document.getElementById('journal-modal')?.classList.remove('active');
     const input = document.getElementById('journal-search') as HTMLInputElement | null;
     if (input) input.value = '';
-    quickLogFood(target.dataset.foodId);
+    quickLogFood(foodId);
   });
 }
 
-// ---------- Combos (§5b item 7 — domain/repo support exists since pass 2) ----------
+async function addToComboBuilder(foodId: string) {
+  if (!pendingComboFoodIds.includes(foodId)) pendingComboFoodIds.push(foodId);
+  await renderComboBuilder();
+  const query = (document.getElementById('journal-search') as HTMLInputElement | null)?.value.trim() || '';
+  renderJournalResults(await foodRepo.fuzzySearch(query, 20));
+}
 
-let pendingComboFoodIds: string[] = [];
+// ---------- Combos (§5b item 7 → §5c-C rebuild) ----------
 
+/** Combo builder panel: chips of chosen items + name + Save/Cancel.
+ *  Renders through a detached fragment so concurrent calls can't interleave
+ *  and duplicate chips (each row awaits a food lookup). */
+async function renderComboBuilder() {
+  const box = document.getElementById('combo-builder');
+  const itemsEl = document.getElementById('combo-builder-items');
+  const title = document.getElementById('combo-builder-title');
+  if (!box || !itemsEl || !title) return;
+
+  const gen = ++comboBuilderGen;
+  box.style.display = builderActive ? '' : 'none';
+  if (!builderActive) return;
+  title.textContent = editingComboId ? 'EDIT COMBO' : 'NEW COMBO';
+
+  const frag = document.createDocumentFragment();
+  if (pendingComboFoodIds.length === 0) {
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:12px;color:var(--text-dim);padding:2px 4px;';
+    hint.textContent = 'No items yet — tap library results above to add them.';
+    frag.appendChild(hint);
+  } else {
+    for (const foodId of pendingComboFoodIds) {
+      const food = await foodRepo.findById(foodId);
+      const chip = document.createElement('div');
+      chip.className = 'combo-chip';
+      const label = document.createElement('span');
+      label.textContent = food?.canonical_name || 'Unknown item';
+      const remove = document.createElement('button');
+      remove.textContent = '×';
+      remove.title = 'Remove from combo';
+      remove.addEventListener('click', () => {
+        pendingComboFoodIds = pendingComboFoodIds.filter(id => id !== foodId);
+        renderComboBuilder();
+        const query = (document.getElementById('journal-search') as HTMLInputElement | null)?.value.trim() || '';
+        foodRepo.fuzzySearch(query, 20).then(renderJournalResults);
+      });
+      chip.append(label, remove);
+      frag.appendChild(chip);
+    }
+  }
+  if (gen !== comboBuilderGen) return; // superseded by a newer render
+  itemsEl.innerHTML = '';
+  itemsEl.appendChild(frag);
+}
+
+function enterComboBuilder(editComboId: string | null, prefillName = '') {
+  builderActive = true;
+  editingComboId = editComboId;
+  pendingComboFoodIds = [];
+  const nameInput = document.getElementById('combo-name-input') as HTMLInputElement | null;
+  if (nameInput) nameInput.value = prefillName;
+  renderComboBuilder();
+  const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.focus();
+  }
+  foodRepo.fuzzySearch('', 20).then(renderJournalResults);
+}
+
+function exitComboBuilder() {
+  builderActive = false;
+  editingComboId = null;
+  pendingComboFoodIds = [];
+  renderComboBuilder();
+}
+
+/** Saved-combos list; tapping a combo expands its nourishment breakdown card.
+ *  Renders through a detached fragment (rows await food lookups — concurrent
+ *  calls must not interleave). */
 async function renderComboList() {
   const listEl = document.getElementById('combo-list');
   if (!listEl) return;
-  listEl.innerHTML = '';
 
+  const gen = ++comboListGen;
   const combos = await comboRepo.getAllCombos();
+  const frag = document.createDocumentFragment();
+
   if (combos.length === 0) {
     const empty = document.createElement('div');
-    empty.style.color = 'var(--text-dim)';
-    empty.style.fontSize = '12px';
-    empty.style.padding = '6px 10px';
-    empty.textContent = 'No combos yet. Search above, tap "+ Combo" on results, then save.';
-    listEl.appendChild(empty);
-    return;
+    empty.style.cssText = 'color:var(--text-dim);font-size:12px;padding:4px;';
+    empty.textContent = 'No combos yet — tap "+ New Combo" and pick ingredients above.';
+    frag.appendChild(empty);
   }
 
-  for (const combo of combos) {
-    const item = document.createElement('div');
-    item.className = 'log-item journal-combo-item';
+  const buildRow = async (combo: Awaited<ReturnType<ComboRepository['getAllCombos']>>[number]) => {
+    // Resolve ingredient foods once per render (amounts default to 100 g/ml).
+    const ingredients: Array<{ name: string; ref: any; amountG: number | null; amountMl: number | null }> = [];
+    let totalKcal = 0;
+    for (const ci of combo.items) {
+      const food = await foodRepo.findById(ci.food_id);
+      if (!food) continue;
+      const ref = foodRepo.toFoodReference(food);
+      const nutrition = calculateNutrition(ref, ci.amount_g ?? ci.amount_ml ?? 100);
+      totalKcal += nutrition.calories;
+      ingredients.push({ name: food.canonical_name, ref, amountG: ci.amount_g, amountMl: ci.amount_ml });
+    }
+
+    const expanded = comboBreakdownOpenId === combo.id;
+    const row = document.createElement('div');
+    row.className = 'combo-row' + (expanded ? ' expanded' : '');
 
     const main = document.createElement('div');
     main.className = 'log-main';
     const name = document.createElement('span');
     name.className = 'log-name';
-    name.textContent = combo.name;
-    const count = document.createElement('span');
-    count.className = 'log-cal';
-    count.style.fontSize = '12px';
-    count.textContent = `${combo.items.length} item(s)`;
-    main.append(name, count);
-    item.appendChild(main);
+    name.textContent = `🍱 ${combo.name}`;
+    const cal = document.createElement('span');
+    cal.className = 'log-cal';
+    cal.style.fontSize = '13px';
+    cal.textContent = `${Math.round(totalKcal)} kcal`;
+    main.append(name, cal);
+    row.appendChild(main);
 
-    const actions = document.createElement('div');
-    actions.style.display = 'flex';
-    actions.style.gap = '8px';
+    const countLine = document.createElement('div');
+    countLine.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;';
+    countLine.textContent = `${combo.items.length} item(s) · tap for breakdown`;
+    row.appendChild(countLine);
 
-    const logBtn = document.createElement('button');
-    logBtn.className = 'log-action-btn blue';
-    logBtn.textContent = 'Log All';
-    logBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await logCombo(combo);
+    if (expanded) {
+      const breakdown = document.createElement('div');
+      breakdown.className = 'combo-breakdown';
+
+      const title = document.createElement('div');
+      title.className = 'combo-breakdown-title';
+      title.textContent = 'Nourishment Breakdown';
+      breakdown.appendChild(title);
+
+      for (const ing of ingredients) {
+        const nutrition = calculateNutrition(ing.ref, ing.amountG ?? ing.amountMl ?? 100);
+        const line = document.createElement('div');
+        line.className = 'combo-ingredient';
+        const left = document.createElement('div');
+        left.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
+        const nm = document.createElement('span');
+        nm.className = 'combo-ing-name';
+        nm.textContent = ing.name;
+        const mac = document.createElement('span');
+        mac.className = 'combo-ing-macros';
+        mac.textContent =
+          `${Math.round(ing.amountG ?? ing.amountMl ?? 100)}${ing.amountMl != null ? 'ml' : 'g'} · ` +
+          `P ${Math.round(nutrition.proteinG)} C ${Math.round(nutrition.carbsG)} F ${Math.round(nutrition.fatG)}`;
+        left.append(nm, mac);
+        const kcalEl = document.createElement('span');
+        kcalEl.className = 'combo-ing-kcal';
+        kcalEl.textContent = `${Math.round(nutrition.calories)} kcal`;
+        line.append(left, kcalEl);
+        breakdown.appendChild(line);
+      }
+
+      const totalRow = document.createElement('div');
+      totalRow.className = 'combo-total-row';
+      totalRow.innerHTML = `<span>Total</span><span style="color: var(--accent-glow);">${Math.round(totalKcal)} kcal</span>`;
+      breakdown.appendChild(totalRow);
+
+      const actions = document.createElement('div');
+      actions.className = 'combo-actions';
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'log-action-btn';
+      closeBtn.textContent = 'Close';
+      closeBtn.addEventListener('click', (e) => { e.stopPropagation(); comboBreakdownOpenId = null; renderComboList(); });
+      actions.appendChild(closeBtn);
+
+      const logBtn = document.createElement('button');
+      logBtn.className = 'log-action-btn blue';
+      logBtn.textContent = 'Log All';
+      logBtn.addEventListener('click', async (e) => { e.stopPropagation(); await logCombo(combo); });
+      actions.appendChild(logBtn);
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'log-action-btn blue';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        enterComboBuilder(combo.id, combo.name);
+        // Prefill the item chips with the saved template.
+        pendingComboFoodIds = combo.items.map(i => i.food_id);
+        renderComboBuilder();
+      });
+      actions.appendChild(editBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'log-action-btn danger';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await comboRepo.deleteCombo(combo.id);
+        comboBreakdownOpenId = null;
+        await renderComboList();
+        showToast(`Deleted combo "${combo.name}"`);
+      });
+      actions.appendChild(delBtn);
+
+      breakdown.appendChild(actions);
+      row.appendChild(breakdown);
+    }
+
+    row.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('button')) return;
+      comboBreakdownOpenId = comboBreakdownOpenId === combo.id ? null : combo.id;
+      renderComboList();
     });
 
-    const delBtn = document.createElement('button');
-    delBtn.className = 'combo-del';
-    delBtn.textContent = 'Delete';
-    delBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await comboRepo.deleteCombo(combo.id);
-      await renderComboList();
-      showToast(`Deleted combo "${combo.name}"`);
-    });
+    return row;
+  };
 
-    actions.append(logBtn, delBtn);
-    item.appendChild(actions);
-    listEl.appendChild(item);
-  }
+  const rows = await Promise.all(combos.map(buildRow));
+  rows.forEach(row => frag.appendChild(row));
+  if (gen !== comboListGen) return; // superseded by a newer render
+  listEl.innerHTML = '';
+  listEl.appendChild(frag);
 }
 
-/** Expand a combo through the deterministic domain path and log every ingredient. */
+/** Open the Food Library with the combo editor prefilled (journal "Edit Combo"). */
+async function openEditComboTemplate(comboId: string) {
+  const combo = await comboRepo.getCombo(comboId).catch(() => null);
+  if (!combo) {
+    showToast('That combo no longer exists');
+    return;
+  }
+  openLibraryModal();
+  enterComboBuilder(combo.id, combo.name);
+  pendingComboFoodIds = combo.items.map(i => i.food_id);
+  await renderComboBuilder();
+}
+
+/** Expand a combo through the deterministic domain path and log every ingredient.
+ *  All ingredient logs share ONE combo observation so the journal can collapse
+ *  them into a single expandable breakdown card. */
 async function logCombo(combo: Awaited<ReturnType<ComboRepository['getAllCombos']>>[number]) {
   const date = store.getState().selectedDate;
   const items: Array<{ foodId: string; food: any; amountG: number | null; amountMl: number | null }> = [];
@@ -772,6 +1002,18 @@ async function logCombo(combo: Awaited<ReturnType<ComboRepository['getAllCombos'
     return;
   }
 
+  const markerObservation = await observationRepo.insert({
+    food_id: null,
+    source_type: 'combo',
+    estimated_amount: null,
+    final_amount: null,
+    amount_unit: 'g',
+    confidence: null,
+    raw_input: combo.name,
+    interpretation_json: JSON.stringify({ kind: 'combo', comboId: combo.id, comboName: combo.name }),
+    user_corrected: 0
+  });
+
   const template = { id: combo.id, name: combo.name, items };
   const entries = expandCombo(template, date);
   let totalCal = 0;
@@ -781,6 +1023,7 @@ async function logCombo(combo: Awaited<ReturnType<ComboRepository['getAllCombos'
     const log = await logRepo.insertFoodLog({
       date,
       food_id: entry.foodId,
+      observation_id: markerObservation.id,
       amount_g: entry.amountG,
       amount_ml: entry.amountMl,
       calories: nutrition.calories,
@@ -805,6 +1048,8 @@ async function logCombo(combo: Awaited<ReturnType<ComboRepository['getAllCombos'
 }
 
 function setupComboHandlers() {
+  document.getElementById('btn-new-combo')?.addEventListener('click', () => enterComboBuilder(null));
+
   document.getElementById('btn-save-combo')?.addEventListener('click', async () => {
     const nameInput = document.getElementById('combo-name-input') as HTMLInputElement | null;
     const name = nameInput?.value.trim() || '';
@@ -812,26 +1057,34 @@ function setupComboHandlers() {
       showToast('Pick a name and at least one food first');
       return;
     }
-    await comboRepo.createCombo(
-      name,
-      pendingComboFoodIds.map(food_id => ({ food_id, amount_g: 100, amount_ml: null }))
-    );
-    pendingComboFoodIds = [];
-    if (nameInput) nameInput.value = '';
-    updateComboBar();
-    await renderComboList();
-    showToast(`Saved combo "${name}"`);
+    try {
+      if (editingComboId) {
+        await comboRepo.updateCombo(
+          editingComboId,
+          name,
+          pendingComboFoodIds.map(food_id => ({ food_id, amount_g: 100, amount_ml: null }))
+        );
+        showToast(`Updated combo "${name}"`);
+      } else {
+        await comboRepo.createCombo(
+          name,
+          pendingComboFoodIds.map(food_id => ({ food_id, amount_g: 100, amount_ml: null }))
+        );
+        showToast(`Saved combo "${name}"`);
+      }
+      exitComboBuilder();
+      await renderComboList();
+    } catch (err) {
+      console.error('Combo save failed:', err);
+      showToast('Could not save the combo — try again');
+    }
   });
 
   document.getElementById('btn-cancel-combo')?.addEventListener('click', () => {
-    pendingComboFoodIds = [];
-    updateComboBar();
+    exitComboBuilder();
+    const query = (document.getElementById('journal-search') as HTMLInputElement | null)?.value.trim() || '';
+    foodRepo.fuzzySearch(query, 20).then(renderJournalResults);
   });
-}
-
-function updateComboBar() {
-  const bar = document.getElementById('journal-combo-bar');
-  if (bar) bar.style.display = pendingComboFoodIds.length > 0 ? '' : 'none';
 }
 
 // ---------- Dashboard Text Bar (always-visible text logging, HANDOVER §5a item 2) ----------
@@ -1421,107 +1674,244 @@ function setupScannerHandlers() {
   });
 }
 
-// ---------- Day detail (inline expand / multi-select / day note / water delete) ----------
+// ---------- Journal (§5c-D: day-grouped log list with times + totals) ----------
 
-function renderDayDetailIfVisible() {
+/**
+ * Build the journal groups for the window ending at the selected date.
+ * Four batched range queries (logs, water, totals, daily records); logged
+ * combos (ingredient logs sharing one combo observation) collapse into a
+ * single expandable row per group.
+ */
+async function renderJournalIfVisible() {
   if (currentViewId !== 'history') return;
   const container = document.getElementById('day-view-container');
   if (!container) return;
 
-  renderDayDetail({
-    container,
-    selectedDate: store.getState().selectedDate,
-    logs: (store.getState().todayLogs as any[]).map(l => ({ ...l, kind: 'food' as const })),
-    waters: dayWaters,
-    dayNote: dayNoteText,
-    expandedLogId,
-    selection,
-    selectMode,
-    onToggleExpand(id) {
-      expandedLogId = expandedLogId === id ? null : id;
-      renderDayDetailIfVisible();
-    },
-    onEdit: openEditView,
-    onDuplicate: async (log) => {
-      const date = log.date;
-      await logRepo.duplicateLog(log.id, date);
-      expandedLogId = null;
-      await refreshStateForDate(date);
-      showToast('Log duplicated');
-    },
-    onDeleteFood: async (log) => {
-      const ok = await requestConfirmation('Delete Log', `Delete "${log.food_name || 'this entry'}" from ${log.date}?`);
-      if (!ok) return;
-      await logRepo.deleteLog(log.id);
-      expandedLogId = null;
-      await refreshStateForDate(store.getState().selectedDate);
-      showToast('Log deleted');
-    },
-    onDeleteWater: async (water) => {
-      await waterRepo.deleteWaterLog(water.id);
-      await refreshStateForDate(store.getState().selectedDate);
-      showToast(`Deleted ${Math.round(water.amount_ml)}ml water entry`);
-    },
-    onEditDayNote: openDayNoteModal,
-    onToggleSelectMode() {
-      selectMode = !selectMode;
-      if (!selectMode) selection.clear();
-      renderDayDetailIfVisible();
-    },
-    onToggleSelect(id) {
-      if (selection.has(id)) selection.delete(id);
-      else selection.add(id);
-      renderDayDetailIfVisible();
-    },
-    onBulkChangeDate(ids) {
-      const input = document.getElementById('bulk-date-input') as HTMLInputElement | null;
-      const countEl = document.getElementById('bulk-date-count');
-      if (input) input.value = store.getState().selectedDate;
-      if (countEl) countEl.textContent = `${ids.length} item(s) will move to a different date.`;
-      pendingBulkIds = ids.filter(id => !dayWaters.some(w => w.id === id));
-      openModalLayer('bulk-date-modal');
-    },
-    onBulkDuplicate: async (ids) => {
-      const foodIds = ids.filter(id => !dayWaters.some(w => w.id === id));
-      const date = store.getState().selectedDate;
-      for (const id of foodIds) {
-        await logRepo.duplicateLog(id, date);
-      }
-      selectMode = false;
-      selection.clear();
-      await refreshStateForDate(date);
-      showToast(`Duplicated ${foodIds.length} item(s)`);
-    },
-    onBulkDelete: async (ids) => {
-      const ok = await requestConfirmation('Delete Items', `Delete ${ids.length} selected item(s)? This cannot be undone.`);
-      if (!ok) return;
-      for (const id of ids) {
-        if (dayWaters.some(w => w.id === id)) await waterRepo.deleteWaterLog(id);
-        else await logRepo.deleteLog(id);
-      }
-      selectMode = false;
-      selection.clear();
-      expandedLogId = null;
-      await refreshStateForDate(store.getState().selectedDate);
-      showToast(`Deleted ${ids.length} item(s)`);
+  const gen = ++journalRenderGen;
+  const selDate = store.getState().selectedDate;
+  const start = shiftDate(selDate, -(journalDaysBack - 1));
+
+  try {
+    const [logs, waters, totalsByDate, records] = await Promise.all([
+      logRepo.getLogsForRange(start, selDate),
+      waterRepo.getWaterForRange(start, selDate),
+      logRepo.getDailyTotalsForRange(start, selDate),
+      dailyRecordRepo.getForRange(start, selDate)
+    ]);
+    journalWaters = waters.map(w => ({ ...w }));
+
+    const recordByDate = new Map(records.map(r => [r.date, r]));
+    const logsByDate = new Map<string, JournalFoodLog[]>();
+    journalLogsById = new Map();
+    for (const log of logs as unknown as JournalFoodLog[]) {
+      const arr = logsByDate.get(log.date) || [];
+      arr.push(log);
+      logsByDate.set(log.date, arr);
+      journalLogsById.set(log.id, log);
     }
-  });
+
+    // Combo clusters: ≥2 logs sharing an observation_id whose observation is
+    // a combo marker (duplicated single items share ids too — verify first).
+    const candidateGroups = new Map<string, JournalFoodLog[]>();
+    for (const log of logs) {
+      if (!log.observation_id) continue;
+      const arr = candidateGroups.get(log.observation_id) || [];
+      arr.push(log);
+      candidateGroups.set(log.observation_id, arr);
+    }
+    const comboByObsId = new Map<string, ComboCluster>();
+    for (const [obsId, members] of candidateGroups) {
+      if (members.length < 2) continue;
+      const obs = await observationRepo.findById(obsId);
+      if (!obs || obs.source_type !== 'combo') continue;
+      let meta: { comboId?: string; comboName?: string } = {};
+      try { meta = JSON.parse(obs.interpretation_json || '{}'); } catch { /* unparseable */ }
+      let name = String(meta.comboName || '').trim();
+      if (!name && meta.comboId) {
+        const tpl = await comboRepo.getCombo(meta.comboId).catch(() => null);
+        name = tpl?.name || 'Combo';
+      }
+      if (!name) name = 'Combo';
+      comboByObsId.set(obsId, {
+        kind: 'combo',
+        key: `combo:${obsId}`,
+        comboId: meta.comboId ?? null,
+        name,
+        logs: [...members].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '')),
+        totalCalories: members.reduce((sum, l) => sum + (l.calories || 0), 0),
+        createdAt: members[0]?.created_at
+      });
+    }
+
+    // Groups newest-first; entries chronological within the day.
+    const datesDesc = Array.from(new Set([...logsByDate.keys(), ...waters.map(w => w.date)])).sort((a, b) => b.localeCompare(a));
+    const groups: JournalGroup[] = [];
+    for (const date of datesDesc) {
+      const dayLogs = logsByDate.get(date) || [];
+      const entries: JournalEntry[] = [];
+      for (const log of dayLogs) {
+        const cluster = log.observation_id ? comboByObsId.get(log.observation_id) : null;
+        if (cluster) continue; // represented by the combo row
+        entries.push({ ...log, kind: 'food' });
+      }
+      for (const cluster of comboByObsId.values()) {
+        if (cluster.logs.some(l => l.date === date)) entries.push(cluster);
+      }
+      const dayWaters = waters.filter(w => w.date === date);
+      for (const w of dayWaters) entries.push({ ...w, kind: 'water' });
+
+      groups.push({
+        date,
+        weekday: weekdayLabel(date),
+        displayDate: groupDateLabel(date),
+        isSelected: date === selDate,
+        totalKcal: totalsByDate[date]?.calories ?? dayLogs.reduce((s, l) => s + (l.calories || 0), 0),
+        note: recordByDate.get(date)?.note ?? null,
+        lowAccuracy: recordByDate.get(date)?.low_accuracy === 1,
+        entries
+      });
+    }
+
+    if (gen !== journalRenderGen) return; // a newer render superseded this one
+
+    renderDayDetail({
+      container,
+      selectedDate: selDate,
+      groups,
+      hasMoreDays: datesDesc.length > 0 || journalDaysBack > JOURNAL_PAGE_DAYS,
+      expandedLogId,
+      expandedComboKeys,
+      selection,
+      selectMode,
+      onToggleExpand(id) {
+        expandedLogId = expandedLogId === id ? null : id;
+        renderJournalIfVisible();
+      },
+      onEdit: openEditView,
+      onDuplicate: async (log) => {
+        await logRepo.duplicateLog(log.id, log.date);
+        expandedLogId = null;
+        await refreshStateForDate(store.getState().selectedDate);
+        showToast('Log duplicated');
+      },
+      onDeleteFood: async (log) => {
+        const ok = await requestConfirmation('Delete Log', `Delete "${log.food_name || 'this entry'}" from ${log.date}?`);
+        if (!ok) return;
+        await logRepo.deleteLog(log.id);
+        expandedLogId = null;
+        await refreshStateForDate(store.getState().selectedDate);
+        showToast('Log deleted');
+      },
+      onDeleteWater: async (water) => {
+        await waterRepo.deleteWaterLog(water.id);
+        await refreshStateForDate(store.getState().selectedDate);
+        showToast(`Deleted ${Math.round(water.amount_ml)}ml water entry`);
+      },
+      onEditDayNote: (date) => openDayNoteModal(date),
+      onToggleLowAccuracy: async (date, current) => {
+        await dailyRecordRepo.setLowAccuracy(date, !current);
+        dataVersion++;
+        await renderJournalIfVisible();
+        showToast(!current ? 'Day flagged low accuracy' : 'Low-accuracy flag cleared');
+      },
+      onToggleSelectMode() {
+        selectMode = !selectMode;
+        if (!selectMode) selection.clear();
+        renderJournalIfVisible();
+      },
+      onToggleSelect(id) {
+        if (selection.has(id)) selection.delete(id);
+        else selection.add(id);
+        renderJournalIfVisible();
+      },
+      onSelectMany(ids) {
+        const allSelected = ids.every(id => selection.has(id));
+        for (const id of ids) {
+          if (allSelected) selection.delete(id);
+          else selection.add(id);
+        }
+        renderJournalIfVisible();
+      },
+      onBulkChangeDate(ids) {
+        const input = document.getElementById('bulk-date-input') as HTMLInputElement | null;
+        const countEl = document.getElementById('bulk-date-count');
+        if (input) input.value = store.getState().selectedDate;
+        if (countEl) countEl.textContent = `${ids.length} item(s) will move to a different date.`;
+        pendingBulkIds = ids.filter(id => !journalWaters.some(w => w.id === id));
+        openModalLayer('bulk-date-modal');
+      },
+      onBulkDuplicate: async (ids) => {
+        const foodIds = ids.filter(id => !journalWaters.some(w => w.id === id));
+        const date = store.getState().selectedDate;
+        for (const id of foodIds) {
+          const target = journalLogsById.get(id)?.date ?? date;
+          await logRepo.duplicateLog(id, target);
+        }
+        selectMode = false;
+        selection.clear();
+        await refreshStateForDate(date);
+        showToast(`Duplicated ${foodIds.length} item(s)`);
+      },
+      onBulkDelete: async (ids) => {
+        const ok = await requestConfirmation('Delete Items', `Delete ${ids.length} selected item(s)? This cannot be undone.`);
+        if (!ok) return;
+        for (const id of ids) {
+          if (journalWaters.some(w => w.id === id)) await waterRepo.deleteWaterLog(id);
+          else await logRepo.deleteLog(id);
+        }
+        selectMode = false;
+        selection.clear();
+        expandedLogId = null;
+        await refreshStateForDate(store.getState().selectedDate);
+        showToast(`Deleted ${ids.length} item(s)`);
+      },
+      onLoadMore() {
+        journalDaysBack += JOURNAL_PAGE_DAYS;
+        renderJournalIfVisible();
+      },
+      onToggleCombo(key) {
+        if (expandedComboKeys.has(key)) expandedComboKeys.delete(key);
+        else expandedComboKeys.add(key);
+        renderJournalIfVisible();
+      },
+      onDeleteComboLogs: async (cluster) => {
+        const ok = await requestConfirmation(
+          'Delete Combo',
+          `Delete all ${cluster.logs.length} items of "${cluster.name}" from the journal?`
+        );
+        if (!ok) return;
+        for (const log of cluster.logs) await logRepo.deleteLog(log.id);
+        expandedComboKeys.delete(cluster.key);
+        await refreshStateForDate(store.getState().selectedDate);
+        showToast(`Deleted combo "${cluster.name}"`);
+      },
+      onEditComboTemplate: (comboId) => {
+        openEditComboTemplate(comboId);
+      }
+    });
+  } catch (err) {
+    console.error('Journal render failed:', err);
+  }
 }
+
+/** Log-id → log map for the last fetched journal window (bulk duplicate targets). */
+let journalLogsById = new Map<string, JournalFoodLog>();
 
 let pendingBulkIds: string[] = [];
 
-/** Day notes (§5b item 5): daily_records.note exists in data + export; this is its UI. */
+/** Day notes (§5b item 5 / §5c-F): editable per journal day-group header. */
 function setupDayNoteHandlers() {
   document.getElementById('btn-note-ok')?.addEventListener('click', async () => {
     const input = document.getElementById('day-note-input') as HTMLTextAreaElement | null;
     if (!input) return;
     const noteDate = noteTargetDate;
-    dayNoteText = input.value.trim() || null;
-    await dailyRecordRepo.setNote(noteDate, dayNoteText);
+    await dailyRecordRepo.setNote(noteDate, input.value.trim() || null);
     closeModalLayer('note-modal');
+    dataVersion++;
     if (store.getState().selectedDate === noteDate) {
-      dataVersion++;
-      renderDayDetailIfVisible();
+      await refreshStateForDate(noteDate);
+    } else {
+      await renderJournalIfVisible();
     }
     showToast('Day note saved');
   });
@@ -1531,12 +1921,15 @@ function setupDayNoteHandlers() {
 
 let noteTargetDate = getTodayDateString();
 
-function openDayNoteModal() {
-  noteTargetDate = store.getState().selectedDate;
+function openDayNoteModal(date: string) {
+  noteTargetDate = date;
   const input = document.getElementById('day-note-input') as HTMLTextAreaElement | null;
-  if (input) input.value = dayNoteText || '';
+  if (input) input.value = '';
   openModalLayer('note-modal');
-  input?.focus();
+  dailyRecordRepo.getForRange(date, date).then(([rec]) => {
+    if (input) input.value = rec?.note || '';
+    input?.focus();
+  });
 }
 
 function setupBulkDateHandlers() {
@@ -1562,9 +1955,9 @@ function setupBulkDateHandlers() {
   });
 }
 
-// ---------- Edit screen (§5b item 2 — dedicated full view, not a popup) ----------
+// ---------- Edit screen (§5b item 2 — dedicated view; §5c-A real full-screen) ----------
 
-async function openEditView(log: DayDetailLog) {
+async function openEditView(log: JournalFoodLog) {
   const food = log.food_id ? await foodRepo.findById(log.food_id) : null;
   const baseAmount = log.amount_g ?? log.amount_ml ?? 100;
 
@@ -1595,10 +1988,14 @@ async function openEditView(log: DayDetailLog) {
   pushLayer(() => switchToBaseView(previousView));
   [document.getElementById('today'), document.getElementById('history'), document.getElementById('view-goals')]
     .forEach(v => v?.classList.remove('active-view'));
+  // §5c-A: genuinely full-screen — dock + settings gear hidden, slide-up entrance.
+  document.body.classList.add('edit-open');
   editView.classList.add('active-view');
+  animateViewIn(editView, 'up');
 }
 
 function switchToBaseView(viewId: ViewId) {
+  document.body.classList.remove('edit-open');
   document.getElementById('view-edit')?.classList.remove('active-view');
   tabController?.switchTabDirect(viewId);
 }
@@ -1706,6 +2103,7 @@ function setupImportHandlers() {
     }
 
     let inserted = 0;
+    const splitDays = new Set<string>();
     for (const row of rows) {
       const date = formatDateISO(row.date);
       const normalized = normalizeFoodName(row.foodName);
@@ -1723,7 +2121,7 @@ function setupImportHandlers() {
           water_per_100g: 0,
           nutrition_basis: 'per_100g',
           source_type: 'imported',
-          confidence: 1.0
+          confidence: row.estimatedSplit ? 0.5 : 1.0
         });
       }
 
@@ -1747,7 +2145,15 @@ function setupImportHandlers() {
         });
       }
 
+      // §5c-4: days reconstructed from equal-split legacy aggregates are
+      // estimates — flag them so the new low-accuracy UI/export shows it.
+      if (row.estimatedSplit) splitDays.add(date);
+
       inserted++;
+    }
+
+    for (const date of splitDays) {
+      await dailyRecordRepo.setLowAccuracy(date, true);
     }
 
     await importRepo.recordImport({

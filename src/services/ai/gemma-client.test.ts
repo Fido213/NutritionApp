@@ -112,11 +112,20 @@ describe('GemmaClient fallback label OCR parser', () => {
     expect(parsed.fatPer100g).toBe(0);
   });
 
-  it('documents the preserved old-app behavior for kJ-first EU energy lines', async () => {
-    // The regex is preserved from old_app/api/index.py and captures the first
-    // number after the energy keyword — for EU labels that is the kJ value.
+  it('prefers the kcal value on dual kJ/kcal EU energy lines (kJ-first quirk fixed)', async () => {
+    // §5c-13: EU labels lead with kJ; the old parser captured 1542 as kcal.
     const parsed = await new GemmaClient().parseNutritionLabel('Energy 1542 kJ / 368 kcal\nFat 8g');
-    expect(parsed.caloriesPer100g).toBe(1542);
+    expect(parsed.caloriesPer100g).toBe(368);
+  });
+
+  it('converts a kJ-only energy line to kcal', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel('Energy 1542 kJ\nFat 8g');
+    expect(parsed.caloriesPer100g).toBe(368.5); // 1542 / 4.184
+  });
+
+  it('still parses plain keyword-led energy lines without units', async () => {
+    const parsed = await new GemmaClient().parseNutritionLabel('Energy 250\nFat 8g');
+    expect(parsed.caloriesPer100g).toBe(250);
   });
 });
 

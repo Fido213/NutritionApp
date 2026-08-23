@@ -53,12 +53,37 @@ export class LogRepository {
     return (res.values as FoodLog[]) || [];
   }
 
+  /** All logs in a range with display names (journal view) — one batched query. */
   async getLogsForRange(startDate: string, endDate: string): Promise<FoodLog[]> {
     const res = await this.db.query(
-      `SELECT * FROM food_logs WHERE date >= ? AND date <= ? ORDER BY date ASC, created_at ASC`,
+      `SELECT fl.*, f.canonical_name AS food_name FROM food_logs fl JOIN foods f ON f.id = fl.food_id
+       WHERE fl.date >= ? AND fl.date <= ? ORDER BY fl.date ASC, fl.created_at ASC`,
       [startDate, endDate]
     );
     return (res.values as FoodLog[]) || [];
+  }
+
+  /**
+   * Per-date AVG/MIN of the logged foods' confidence for a range — one query.
+   * Dates without food logs (or with all-NULL confidences) are absent / null.
+   */
+  async getDailyConfidenceForRange(startDate: string, endDate: string): Promise<Record<string, { avgConfidence: number | null; minConfidence: number | null }>> {
+    const res = await this.db.query(
+      `SELECT fl.date,
+              AVG(f.confidence) AS avg_confidence,
+              MIN(f.confidence) AS min_confidence
+       FROM food_logs fl JOIN foods f ON f.id = fl.food_id
+       WHERE fl.date >= ? AND fl.date <= ? GROUP BY fl.date`,
+      [startDate, endDate]
+    );
+    const out: Record<string, { avgConfidence: number | null; minConfidence: number | null }> = {};
+    for (const row of res.values || []) {
+      out[row.date] = {
+        avgConfidence: typeof row.avg_confidence === 'number' ? row.avg_confidence : null,
+        minConfidence: typeof row.min_confidence === 'number' ? row.min_confidence : null
+      };
+    }
+    return out;
   }
 
   async deleteLog(id: string): Promise<void> {
