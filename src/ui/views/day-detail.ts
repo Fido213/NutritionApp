@@ -5,9 +5,9 @@
  * headers (weekday + date + running day-total kcal) and a per-item kcal +
  * P/C/F profile.
  *
- * - §5d: ONLY the selected date's group renders by default — picking Saturday
- *   never shows Friday below it. A header toggle sorts day groups
- *   Newest-first / Oldest-first, and "Load Older Days" pages the window back.
+ * - §5d: ONLY the selected date's group renders — picking Saturday never
+ *   shows Friday below it, and there is no multi-day paging. A header toggle
+ *   sorts day groups Newest-first / Oldest-first.
  * - Tapping a food log expands it inline with Edit / Duplicate / Delete.
  * - §5d: Water entries share the exact same UI — tap expands inline with
  *   Duplicate / Edit (amount + date ONLY) / Delete.
@@ -77,7 +77,6 @@ export interface DayDetailArgs {
   container: HTMLElement;
   selectedDate: string;
   groups: JournalGroup[];
-  hasMoreDays: boolean;
   /** Day-group ordering: 'desc' = newest first (default), 'asc' = oldest first (§5d). */
   dayOrder: 'desc' | 'asc';
   expandedLogId: string | null;
@@ -100,7 +99,6 @@ export interface DayDetailArgs {
   onBulkChangeDate(ids: string[]): void;
   onBulkDuplicate(ids: string[]): void;
   onBulkDelete(ids: string[]): void;
-  onLoadMore(): void;
   onToggleCombo(key: string): void;
   onDeleteComboLogs(cluster: ComboCluster): void;
   onEditComboTemplate(comboId: string): void;
@@ -122,12 +120,12 @@ function entryTime(entry: JournalEntry): number {
 
 export function renderDayDetail(args: DayDetailArgs) {
   const {
-    container, groups, hasMoreDays, dayOrder, expandedLogId, expandedComboKeys,
+    container, groups, dayOrder, expandedLogId, expandedComboKeys,
     selection, selectMode,
     onToggleExpand, onEdit, onDuplicate, onDeleteFood, onDeleteWater,
     onDuplicateWater, onEditWater, onToggleDayOrder,
     onEditDayNote, onToggleLowAccuracy, onToggleSelectMode, onToggleSelect, onSelectMany,
-    onBulkChangeDate, onBulkDuplicate, onBulkDelete, onLoadMore,
+    onBulkChangeDate, onBulkDuplicate, onBulkDelete,
     onToggleCombo, onDeleteComboLogs, onEditComboTemplate
   } = args;
 
@@ -194,14 +192,6 @@ export function renderDayDetail(args: DayDetailArgs) {
 
   for (const group of ordered) {
     container.appendChild(buildGroup(group));
-  }
-
-  if (hasMoreDays) {
-    const more = document.createElement('button');
-    more.className = 'load-more-btn';
-    more.textContent = 'Load Older Days';
-    more.addEventListener('click', onLoadMore);
-    container.appendChild(more);
   }
 
   /* ---------- builders ---------- */

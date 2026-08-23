@@ -162,6 +162,12 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - **Dashboard header:** score moved from the right edge to sit directly NEXT to the date (`.day-header` flex-start + 12px gap, baseline-aligned).
   - **Imports:** CSV import no longer auto-sets `daily_records.low_accuracy` on split/reconstructed days (the 0.5 library confidence on split rows remains as the estimate marker); existing flags untouched.
 
+- **Pass 20 follow-up 2 — second user feedback round (installed via adb, no on-app testing):**
+  - **Dock reverted to DASH · scan · LOGS** (user chose option B after two rounds: Index lives on the DASH view next to Manual; swipe today↔index↔history still works). Grid experiment removed.
+  - **Score badge:** border removed entirely (bare tier-colored number), day-header lifted 8px off the ring card so nothing touches the circle.
+  - **Gradient ring:** first-lap stroke is now a two-stop SVG linearGradient driven by how the day is going — deep red <50%, amber 50–85%, light→deep green in the 85–115% band, amber→red over 115% (`ring.ts` `ringGradientColors` + create-once `ensureRingGradient`); multi-lap over-target laps keep their class colors.
+  - **Logs:** "Load Older Days" removed entirely (strictly the selected day; `journalDaysShown` paging machinery deleted, `DayDetailArgs` lost `hasMoreDays`/`onLoadMore`).
+
 ## 3. Verification status
 
 | Check | Result |

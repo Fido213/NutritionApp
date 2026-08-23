@@ -5,6 +5,40 @@
 
 const CIRCUMFERENCE = 314.159;
 
+/**
+ * Gradient stops for the ring stroke based on how the day is going (§5d):
+ * deep red while barely eating, amber approaching the target band, a green
+ * sweep inside 85–115%, amber→red once over.
+ */
+function ringGradientColors(ratio: number): [string, string] {
+  if (ratio > 1.15) return ['var(--fat)', 'var(--warn)'];
+  if (ratio >= 0.85) return ['var(--score-pos-2)', 'var(--score-pos-5)'];
+  if (ratio >= 0.5) return ['#d97706', 'var(--fat)'];
+  return ['#b91c1c', 'var(--score-neg-2)'];
+}
+
+/** Create-once the SVG <linearGradient> backing the ring stroke. */
+function ensureRingGradient(svg: SVGSVGElement): SVGLinearGradientElement | null {
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  let defs = svg.querySelector('defs');
+  if (!defs) {
+    defs = document.createElementNS(SVG_NS, 'defs');
+    svg.prepend(defs);
+  }
+  let grad = defs.querySelector('#ring-gradient') as SVGLinearGradientElement | null;
+  if (!grad) {
+    grad = document.createElementNS(SVG_NS, 'linearGradient');
+    grad.id = 'ring-gradient';
+    for (const offset of ['0%', '100%']) {
+      const stop = document.createElementNS(SVG_NS, 'stop');
+      stop.setAttribute('offset', offset);
+      grad.appendChild(stop);
+    }
+    defs.appendChild(grad);
+  }
+  return grad;
+}
+
 export function renderCalorieRing(current: number, target: number) {
   const fillEl = document.getElementById('cal-ring') as SVGCircleElement | null;
   const bgEl = document.getElementById('cal-ring-bg') as SVGCircleElement | null;
@@ -44,6 +78,22 @@ export function renderCalorieRing(current: number, target: number) {
 
   fillEl.style.strokeDasharray = `${CIRCUMFERENCE}`;
   fillEl.style.strokeDashoffset = `${strokeDashoffset}`;
+
+  // Gradient stroke while on the first lap (how the day is going); multi-lap
+  // over-target states keep their dedicated class colors instead.
+  if (lap === 0) {
+    const svg = fillEl.ownerSVGElement;
+    const grad = svg ? ensureRingGradient(svg) : null;
+    if (grad) {
+      const stops = grad.querySelectorAll('stop');
+      const [from, to] = ringGradientColors(ratio);
+      stops[0].setAttribute('stop-color', from);
+      stops[1].setAttribute('stop-color', to);
+      fillEl.style.stroke = 'url(#ring-gradient)';
+    }
+  } else {
+    fillEl.style.stroke = ''; // class color takes over (lap-over-1/2/3)
+  }
 
   fillEl.className.baseVal = 'ring-fill';
   if (bgEl) bgEl.className.baseVal = 'ring-bg';

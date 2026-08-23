@@ -25,7 +25,7 @@ import { calculateEffectiveHydration, classifyWaterSource } from '@domain/hydrat
 import { calculateScore, getScoreColorClass } from '@domain/scoring';
 import { calculateNutrition } from '@domain/nutrition';
 import { normalizeFoodName, expandCombo } from '@domain/logging';
-import { getTodayDateString, formatDateISO, shiftDate } from '@utils/dates';
+import { getTodayDateString, formatDateISO } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
 import { buildExportRows, datesBetween, goalPhaseRange, resolveExportDateRange, ExportRepos } from '@services/export/export-service';
 import { parseCSV } from '@services/import/csv-import';
@@ -98,10 +98,7 @@ let expandedLogId: string | null = null;
 const expandedComboKeys = new Set<string>();
 let selectMode = false;
 const selection = new Set<string>();
-/** §5d: ONLY the selected day by default — no more scrolling into other days. */
-let journalDaysShown = 1;
-const JOURNAL_PAGE_DAYS = 14;
-/** §5d: day-group ordering (Newest first ▾ / Oldest first ▴). */
+/** §5d: the logs list shows ONLY the selected day — no multi-day paging. */
 let journalDayOrder: 'desc' | 'asc' = 'desc';
 let journalRenderGen = 0;
 let currentViewId: ViewId = 'today';
@@ -660,9 +657,7 @@ function setupActionHandlers() {
   });
 
   window.addEventListener('select-history-date', (e: any) => {
-    const dateStr = e.detail as string;
-    if (dateStr !== store.getState().selectedDate) journalDaysShown = 1; // §5d: one day at a time
-    refreshStateForDate(dateStr);
+    refreshStateForDate(e.detail as string);
   });
 }
 
@@ -2225,8 +2220,7 @@ function setupScannerHandlers() {
 
 /**
  * Build the log groups for the visible window. §5d: the window is JUST the
- * selected date by default — picking Saturday never shows Friday below it —
- * and "Load Older Days" pages the window back 14 days at a time.
+ * selected date — picking Saturday never shows Friday below it.
  */
 async function renderJournalIfVisible() {
   if (currentViewId !== 'history') return;
@@ -2235,7 +2229,7 @@ async function renderJournalIfVisible() {
 
   const gen = ++journalRenderGen;
   const selDate = store.getState().selectedDate;
-  const start = shiftDate(selDate, -(journalDaysShown - 1));
+  const start = selDate;
 
   try {
     const [logs, waters, totalsByDate, records] = await Promise.all([
@@ -2324,7 +2318,6 @@ async function renderJournalIfVisible() {
       container,
       selectedDate: selDate,
       groups,
-      hasMoreDays: true,
       dayOrder: journalDayOrder,
       expandedLogId,
       expandedComboKeys,
@@ -2373,8 +2366,7 @@ async function renderJournalIfVisible() {
       onToggleDayOrder() {
         journalDayOrder = journalDayOrder === 'desc' ? 'asc' : 'desc';
         renderJournalIfVisible();
-      },
-      onEditDayNote: (date) => openDayNoteModal(date),
+      },      onEditDayNote: (date) => openDayNoteModal(date),
       onToggleLowAccuracy: async (date, current) => {
         await dailyRecordRepo.setLowAccuracy(date, !current);
         dataVersion++;
@@ -2431,10 +2423,6 @@ async function renderJournalIfVisible() {
         expandedLogId = null;
         await refreshStateForDate(store.getState().selectedDate);
         showToast(`Deleted ${ids.length} item(s)`);
-      },
-      onLoadMore() {
-        journalDaysShown += JOURNAL_PAGE_DAYS;
-        renderJournalIfVisible();
       },
       onToggleCombo(key) {
         if (expandedComboKeys.has(key)) expandedComboKeys.delete(key);

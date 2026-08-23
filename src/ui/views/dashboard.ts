@@ -17,10 +17,8 @@ export function renderDashboard() {
   if (scoreBadge) {
     const score = currentScore?.score ?? 0;
     scoreBadge.innerText = `${score > 0 ? '+' : ''}${score}`;
-    // Tier colour drives both the text and its border; background stays clean.
-    const tierColor = `var(${getScoreColorClass(score)})`;
-    scoreBadge.style.color = tierColor;
-    scoreBadge.style.borderColor = tierColor;
+    // Tier colour drives the text; no border (§5d feedback).
+    scoreBadge.style.color = `var(${getScoreColorClass(score)})`;
   }
 
   // 1. Calorie Ring
