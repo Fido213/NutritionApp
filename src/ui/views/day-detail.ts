@@ -1,15 +1,19 @@
 /**
- * History "Journal" list (§5c-D redesign of the old selected-day breakdown).
+ * History "Logs" list (§5c-D redesign; §5d selected-day isolation).
  *
- * Old-app journal style: chronological entries with the TIME shown per item,
- * grouped under day headers (weekday + date + running day-total kcal) and a
- * per-item kcal + P/C/F profile.
+ * Chronological entries with the TIME shown per item, grouped under day
+ * headers (weekday + date + running day-total kcal) and a per-item kcal +
+ * P/C/F profile.
  *
+ * - §5d: ONLY the selected date's group renders by default — picking Saturday
+ *   never shows Friday below it. A header toggle sorts day groups
+ *   Newest-first / Oldest-first, and "Load Older Days" pages the window back.
  * - Tapping a food log expands it inline with Edit / Duplicate / Delete.
+ * - §5d: Water entries share the exact same UI — tap expands inline with
+ *   Duplicate / Edit (amount + date ONLY) / Delete.
  * - Logged combos (ingredient logs sharing one combo observation) render as
- *   one collapsible row that expands into a NOURISHMENT BREAKDOWN card:
- *   per-ingredient amount / macros / kcal totals + Close / Edit / Delete.
- * - Water entries are listed alongside food logs and can be deleted inline.
+ *   one collapsible row that expands into a NOURISHMENT BREAKDOWN card;
+ *   "Edit Combo" opens the full-screen combo builder.
  * - Log notes render under the item name; day notes + the low-accuracy flag
  *   are editable per group header (§5c-3 / §5c-F).
  * - Multi-select mode supports Change Date / Duplicate / Delete — explicitly
@@ -74,6 +78,8 @@ export interface DayDetailArgs {
   selectedDate: string;
   groups: JournalGroup[];
   hasMoreDays: boolean;
+  /** Day-group ordering: 'desc' = newest first (default), 'asc' = oldest first (§5d). */
+  dayOrder: 'desc' | 'asc';
   expandedLogId: string | null;
   expandedComboKeys: Set<string>;
   selection: Set<string>;
@@ -83,6 +89,9 @@ export interface DayDetailArgs {
   onDuplicate(log: JournalFoodLog): void;
   onDeleteFood(log: JournalFoodLog): void;
   onDeleteWater(water: JournalWater): void;
+  onDuplicateWater(water: JournalWater): void;
+  onEditWater(water: JournalWater): void;
+  onToggleDayOrder(): void;
   onEditDayNote(date: string): void;
   onToggleLowAccuracy(date: string, current: boolean): void;
   onToggleSelectMode(): void;
@@ -113,9 +122,10 @@ function entryTime(entry: JournalEntry): number {
 
 export function renderDayDetail(args: DayDetailArgs) {
   const {
-    container, groups, hasMoreDays, expandedLogId, expandedComboKeys,
+    container, groups, hasMoreDays, dayOrder, expandedLogId, expandedComboKeys,
     selection, selectMode,
     onToggleExpand, onEdit, onDuplicate, onDeleteFood, onDeleteWater,
+    onDuplicateWater, onEditWater, onToggleDayOrder,
     onEditDayNote, onToggleLowAccuracy, onToggleSelectMode, onToggleSelect, onSelectMany,
     onBulkChangeDate, onBulkDuplicate, onBulkDelete, onLoadMore,
     onToggleCombo, onDeleteComboLogs, onEditComboTemplate
@@ -126,14 +136,28 @@ export function renderDayDetail(args: DayDetailArgs) {
   const header = document.createElement('div');
   header.className = 'day-detail-header';
   const title = document.createElement('h3');
-  title.innerText = 'Journal';
+  title.innerText = 'Logs';
   header.appendChild(title);
+
+  const headerBtns = document.createElement('div');
+  headerBtns.style.cssText = 'display:flex;gap:6px;align-items:center;';
+
+  // §5d: day-group ordering — newest first (default) or oldest first.
+  const orderBtn = document.createElement('button');
+  orderBtn.className = 'day-order-btn' + (dayOrder === 'asc' ? ' active' : '');
+  orderBtn.title = dayOrder === 'desc'
+    ? 'Showing newest days first — tap to sort oldest first'
+    : 'Showing oldest days first — tap to sort newest first';
+  orderBtn.textContent = dayOrder === 'desc' ? 'Newest ▾' : 'Oldest ▴';
+  orderBtn.addEventListener('click', onToggleDayOrder);
+  headerBtns.appendChild(orderBtn);
 
   const selectBtn = document.createElement('button');
   selectBtn.className = 'day-detail-select-btn' + (selectMode ? ' active' : '');
   selectBtn.textContent = selectMode ? 'Cancel' : 'Select';
   selectBtn.addEventListener('click', onToggleSelectMode);
-  header.appendChild(selectBtn);
+  headerBtns.appendChild(selectBtn);
+  header.appendChild(headerBtns);
   container.appendChild(header);
 
   if (selectMode && selection.size > 0) {
@@ -163,7 +187,12 @@ export function renderDayDetail(args: DayDetailArgs) {
     container.appendChild(empty);
   }
 
-  for (const group of groups) {
+  // §5d: honour the day ordering — newest-first (default) or oldest-first.
+  const ordered = [...groups].sort((a, b) =>
+    dayOrder === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)
+  );
+
+  for (const group of ordered) {
     container.appendChild(buildGroup(group));
   }
 
@@ -249,46 +278,61 @@ export function renderDayDetail(args: DayDetailArgs) {
     item.classList.add('selectable');
   }
 
+  /** Water rows share the exact food-log UI (§5d): tap to expand inline with
+   *  Duplicate / Edit (amount + date only) / Delete. */
   function buildWaterRow(w: JournalWater, _date: string): HTMLElement {
+    const expanded = w.id === expandedLogId;
     const item = document.createElement('div');
-    item.className = 'log-item water-item' + (selection.has(w.id) ? ' selected' : '');
+    item.className = 'log-item water-item' + (expanded ? ' expanded' : '') + (selection.has(w.id) ? ' selected' : '');
     if (selectMode) appendCheckbox(item, selection.has(w.id), () => onToggleSelect(w.id));
 
     const main = document.createElement('div');
     main.className = 'log-main';
-    const name = document.createElement('span');
-    name.className = 'log-name water-name';
-    name.textContent = `💧 Water (${w.source})`;
-    main.appendChild(name);
-
-    const right = document.createElement('div');
-    right.style.display = 'flex';
-    right.style.alignItems = 'center';
-    right.style.gap = '8px';
     const time = formatLogTime(w.created_at);
     if (time) {
       const t = document.createElement('span');
       t.className = 'item-time';
       t.textContent = time;
-      right.appendChild(t);
+      main.appendChild(t);
     }
+    const name = document.createElement('span');
+    name.className = 'log-name water-name';
+    name.textContent = '💧 Water';
+    main.appendChild(name);
     const amt = document.createElement('span');
     amt.className = 'log-water';
     amt.textContent = `${Math.round(w.amount_ml)} ml`;
-    right.appendChild(amt);
-    main.appendChild(right);
+    main.appendChild(amt);
     item.appendChild(main);
 
-    if (!selectMode) {
+    const srcLine = document.createElement('div');
+    srcLine.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;';
+    srcLine.textContent = `Source: ${w.source}`;
+    item.appendChild(srcLine);
+
+    if (expanded && !selectMode) {
       const actions = document.createElement('div');
       actions.className = 'log-actions';
+      const dup = document.createElement('button');
+      dup.className = 'log-action-btn blue';
+      dup.textContent = 'Duplicate';
+      dup.addEventListener('click', (e) => { e.stopPropagation(); onDuplicateWater(w); });
+      const edit = document.createElement('button');
+      edit.className = 'log-action-btn';
+      edit.textContent = 'Edit';
+      edit.addEventListener('click', (e) => { e.stopPropagation(); onEditWater(w); });
       const del = document.createElement('button');
       del.className = 'log-action-btn danger';
       del.textContent = 'Delete';
       del.addEventListener('click', (e) => { e.stopPropagation(); onDeleteWater(w); });
-      actions.appendChild(del);
+      actions.append(dup, edit, del);
       item.appendChild(actions);
     }
+
+    item.addEventListener('click', () => {
+      if (selectMode) onToggleSelect(w.id);
+      else onToggleExpand(w.id);
+    });
     return item;
   }
 

@@ -54,31 +54,21 @@
         </div>
     </div>
 
-    <!-- Food Journal Search Modal -->
-    <div id="journal-modal" class="modal">
-        <div class="modal-content form-body" style="max-width: 420px;">
-            <h3 style="text-align: center; color: var(--accent-glow); margin-bottom: 15px;">Food Library</h3>
-            <input type="text" id="journal-search" placeholder="Search foods or aliases..." style="width: 100%; margin-bottom: 10px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
-            <div id="journal-results" class="log-list" style="max-height: 300px; overflow-y: auto;"></div>
-            <!-- Combo builder (§5c-C): explicit mode — adding results never quick-logs while building -->
-            <div id="combo-builder" style="display: none; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;">
-                <div style="font-size: 12px; color: var(--pro); font-weight: 800; margin-bottom: 6px;" id="combo-builder-title">NEW COMBO</div>
-                <div id="combo-builder-items" class="log-list" style="max-height: 140px; overflow-y: auto; margin-bottom: 8px;"></div>
-                <input type="text" id="combo-name-input" placeholder="Combo name (e.g. Breakfast)" style="width: 100%; margin-bottom: 8px; background: var(--surface-light); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 8px; outline: none;">
-                <div style="display: flex; gap: 8px;">
-                    <button id="btn-save-combo" class="btn-primary" style="margin-top: 0;">Save Combo</button>
-                    <button id="btn-cancel-combo" class="btn-close" style="width: auto; padding: 12px 18px;">Cancel</button>
-                </div>
-            </div>
-            <!-- Saved combos (§5c-C): tap a combo to expand its nourishment breakdown -->
-            <div id="combos-section" style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <span style="font-size: 13px; color: var(--text-dim); font-weight: 700;">Combos</span>
-                    <button id="btn-new-combo" class="log-action-btn blue" style="flex: none; width: auto; padding: 6px 12px;">+ New Combo</button>
-                </div>
-                <div id="combo-list" class="log-list"></div>
-            </div>
-            <button id="btn-close-journal" class="btn-close" style="margin-top: 15px;">Cancel</button>
+    <!-- Combo Detail Modal (clean breakdown — image-2 layout: name + big kcal,
+         macro line, per-ingredient rows with inline expansion, totals, actions) -->
+    <div id="combo-detail-modal" class="modal">
+        <div class="modal-content combo-detail-box" id="combo-detail-box"></div>
+    </div>
+
+    <!-- Water Edit Modal (amount + date only) -->
+    <div id="water-edit-modal" class="modal">
+        <div class="modal-content" style="max-width: 320px;">
+            <h3 style="margin-bottom: 12px; text-align: center; color: var(--accent-glow);">Edit Water Entry</h3>
+            <input type="hidden" id="water-edit-id">
+            <div class="input-row"><label>Amount (ml)</label><input type="number" id="water-edit-amount" min="1" step="any"></div>
+            <div class="input-row"><label>Date</label><input type="date" id="water-edit-date" style="text-align: right; background: transparent; color: #fff; border: none; font-family: inherit;"></div>
+            <button id="btn-water-edit-ok" class="btn-primary" style="margin-top: 12px;">Save Changes</button>
+            <button id="btn-water-edit-cancel" class="btn-close" style="width: 100%; margin-top: 10px;">Cancel</button>
         </div>
     </div>
 
@@ -136,6 +126,18 @@
             <div id="name-error" style="font-size: 12px; color: #ef4444; min-height: 16px; margin-bottom: 6px;"></div>
             <button id="btn-name-ok" class="btn-primary" style="width: 100%; margin-bottom: 10px;">Save Name</button>
             <button id="btn-name-cancel" class="btn-close" style="width: 100%;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Daily Score Explanation Modal (tap the dashboard score) -->
+    <div id="score-modal" class="modal">
+        <div class="modal-content" style="max-width: 340px; text-align: center;">
+            <h3 style="margin-bottom: 4px; color: var(--accent-glow);">Daily Score</h3>
+            <div id="score-modal-value" style="font-size: 44px; font-weight: 900; line-height: 1.2;"></div>
+            <p id="score-modal-reason" style="font-size: 13px; color: var(--text); margin: 8px 0 14px;"></p>
+            <div id="score-components" style="display: flex; flex-direction: column; gap: 6px; text-align: left; margin-bottom: 12px;"></div>
+            <p style="font-size: 11px; color: var(--text-dim); line-height: 1.6; margin-bottom: 14px;">How it's calculated: +1 when calories are within 85–115% of your target (−1 above it), +1 when protein reaches ≥90%, ±1 for carbs and fat in the same band, +1 when hydration reaches ≥80%. The total is clamped between −3 and +5.</p>
+            <button id="btn-score-close" class="btn-close">Got it</button>
         </div>
     </div>
 
@@ -275,6 +277,64 @@
             </div>
         </section>
 
+        <!-- Index Screen (former Journal modal → dedicated screen: Foods / Combos,
+             fuzzy search, sort by date / kcal / macros / confidence) -->
+        <section id="view-index" class="view scroller">
+            <header class="view-header index-header">
+                <h2>INDEX</h2>
+                <div class="index-subtitle">Nourishment Library</div>
+            </header>
+
+            <div class="index-searchbar">
+                <input type="text" id="index-search" placeholder="Search entries..." autocomplete="off">
+            </div>
+
+            <div class="index-toolbar">
+                <div class="tabs" id="index-tabs">
+                    <button id="btn-index-foods" class="active">Foods</button>
+                    <button id="btn-index-combos">Combos</button>
+                </div>
+                <select id="index-sort" class="index-sort"></select>
+            </div>
+
+            <div id="index-list" class="log-list"></div>
+        </section>
+
+        <!-- Combo Builder (full-screen remake: name, live totals, searchable
+             ingredient adding with per-item amounts, Save) -->
+        <section id="view-combo-builder" class="view scroller edit-view">
+            <header class="view-header edit-header">
+                <button id="btn-combo-back" class="edit-back-btn">‹ Back</button>
+                <h2 id="combo-builder-title">New Combo</h2>
+            </header>
+
+            <div class="card form-body combo-totals-card">
+                <input type="text" id="combo-name-input" placeholder="Combo name (e.g. Mexican bowl)" style="width: 100%;">
+                <div class="combo-totals">
+                    <div class="combo-totals-left">
+                        <span id="combo-total-kcal">0</span><span class="combo-totals-unit">KCAL</span>
+                    </div>
+                    <span id="combo-total-macros" class="combo-totals-macros">
+                        <span style="color: var(--pro);">P: 0g</span> ·
+                        <span style="color: var(--carb);">C: 0g</span> ·
+                        <span style="color: var(--fat);">F: 0g</span>
+                    </span>
+                </div>
+            </div>
+
+            <div class="card form-body">
+                <div class="combo-builder-label">ADD INGREDIENTS</div>
+                <input type="text" id="combo-item-search" placeholder="Search foods..." autocomplete="off" style="width: 100%;">
+                <div id="combo-search-results" class="log-list" style="max-height: 220px; overflow-y: auto; margin-top: 8px;"></div>
+            </div>
+
+            <div class="card form-body">
+                <div class="combo-builder-label" id="combo-items-label">INGREDIENTS</div>
+                <div id="combo-builder-items" class="log-list" style="margin-top: 8px;"></div>
+                <button id="btn-save-combo" class="btn-primary">Save Combo</button>
+            </div>
+        </section>
+
         <!-- Dashboard View -->
         <section id="today" class="view active-view">
             <div class="grid-layout">
@@ -354,7 +414,7 @@
                             <button id="btn-dash-text-log">LOG</button>
                         </div>
                         <div class="textbar-utils">
-                            <button id="btn-open-journal">Journal</button>
+                            <button id="btn-open-index">Index</button>
                             <button id="btn-open-manual">Manual</button>
                         </div>
                     </div>
@@ -416,7 +476,7 @@
             <div class="card form-body settings-grid" style="margin-top: 16px;">
                 <h3 style="color: var(--accent-glow); margin-bottom: 5px;">Data & Backup Tools</h3>
                 <button id="btn-export-csv" class="btn-primary" style="background: #3b82f6; color: #fff;">Export Data to CSV</button>
-                <button id="btn-import-csv" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Import Tracker CSV</button>
+                <button id="btn-import-csv" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Import Data</button>
                 <input type="file" id="csv-file-input" accept=".csv" style="display: none;">
                 <button id="btn-backup" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Encrypted Backup Archive</button>
                 <button id="btn-restore" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Restore from Backup Archive</button>
@@ -426,6 +486,12 @@
                 <button id="btn-p2p-receive" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Receive Backup (P2P Transfer)</button>
                 <button id="btn-p2p-send" class="btn-primary" style="background: var(--surface-light); color: #fff; border: 1px solid var(--border);">Send Backup (P2P Transfer)</button>
                 <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">Pair the two devices by exchanging the pairing codes shown in the dialog.</div>
+            </div>
+
+            <div class="card form-body settings-grid" style="margin-top: 16px; border-color: rgba(239, 68, 68, 0.35);">
+                <h3 style="color: #ef4444; margin-bottom: 5px;">Danger Zone</h3>
+                <div style="font-size: 12px; color: var(--text-dim); line-height: 1.6;">Permanently erases every food, log, water entry, combo, goal and setting on this device. This cannot be undone — export a backup first.</div>
+                <button id="btn-delete-all" class="btn-primary" style="background: #ef4444; color: #fff; margin-top: 0;">Delete All Data</button>
             </div>
         </section>
     </main>
@@ -438,6 +504,7 @@
     <!-- Bottom Navigation Dock -->
     <nav class="dock">
         <button id="nav-btn-dash" class="nav-btn active">DASH</button>
+        <button id="nav-btn-index" class="nav-btn">INDEX</button>
         <div class="scan-wrapper">
             <button id="scan-btn" class="scan-btn">
                 <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg>

@@ -15,7 +15,7 @@ import { ComboRepository } from './combo.repo';
 import { InsertFood } from '../types';
 import { ComboTemplate, expandCombo } from '../../domain/logging';
 import { calculateNutrition } from '../../domain/nutrition';
-import { createBackupArchive, parseBackupArchive, restoreBackupArchive, collectAllTables, BACKUP_TABLES } from '../../services/backup/backup';
+import { createBackupArchive, parseBackupArchive, restoreBackupArchive, collectAllTables, wipeAllData, BACKUP_TABLES } from '../../services/backup/backup';
 
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>;
 type SqlDatabase = InstanceType<SqlJsStatic['Database']>;
@@ -946,5 +946,76 @@ describe('Backup/restore round trip on a real SQLite database', () => {
     expect(await goalRepo.getGoalsHistory()).toHaveLength(2);
     expect((await goalRepo.getGoalForDate('2026-08-15'))!.calories_target).toBe(2100);
     expect((await goalRepo.getGoalForDate('2026-09-15'))!.name).toBe('Bulk');
+  });
+
+  // §5d additions: Index screen + water edit + Delete All Data.
+  it('getAllFoods returns every library food newest-first', async () => {
+    const { conn } = createRealDb();
+    const foodRepo = new FoodRepository(conn);
+
+    await foodRepo.insert(CHICKEN);
+    await foodRepo.insert(OATS);
+    await foodRepo.insert(MILK);
+
+    const foods = await foodRepo.getAllFoods();
+    expect(foods).toHaveLength(3);
+    // created_at has second-level ties at best — assert set membership and
+    // that ordering is descending (ties allowed).
+    expect(new Set(foods.map(f => f.canonical_name)))
+      .toEqual(new Set(['Chicken Breast', 'Rolled Oats', 'Whole Milk']));
+    for (let i = 1; i < foods.length; i++) {
+      expect(foods[i - 1].created_at >= foods[i].created_at).toBe(true);
+    }
+  });
+
+  it('updateWaterLog edits ONLY amount and date; getWaterById fetches the row', async () => {
+    const { conn } = createRealDb();
+    const waterRepo = new WaterRepository(conn);
+
+    const log = await waterRepo.insertWaterLog({ date: '2026-08-20', amount_ml: 250, source: 'explicit' });
+    await waterRepo.updateWaterLog(log.id, { amount_ml: 750, date: '2026-08-22' });
+
+    const edited = await waterRepo.getWaterById(log.id);
+    expect(edited).not.toBeNull();
+    expect(edited!.amount_ml).toBe(750);
+    expect(edited!.date).toBe('2026-08-22');
+    expect(edited!.source).toBe('explicit'); // untouched
+
+    // Date-only move.
+    await waterRepo.updateWaterLog(log.id, { date: '2026-08-25' });
+    expect((await waterRepo.getWaterById(log.id))!.date).toBe('2026-08-25');
+    expect((await waterRepo.getWaterById(log.id))!.amount_ml).toBe(750);
+
+    // No-op update is a safe no-op.
+    await waterRepo.updateWaterLog(log.id, {});
+    expect((await waterRepo.getWaterById(log.id))!.amount_ml).toBe(750);
+  });
+
+  it('wipeAllData clears every backup table in FK-safe order (Delete All Data)', async () => {
+    const { conn } = createRealDb();
+    const foodRepo = new FoodRepository(conn);
+    const logRepo = new LogRepository(conn);
+    const waterRepo = new WaterRepository(conn);
+    const comboRepo = new ComboRepository(conn);
+    const goalRepo = new GoalRepository(conn);
+
+    const chicken = await foodRepo.insert(CHICKEN);
+    await logRepo.insertFoodLog({ date: '2026-08-20', food_id: chicken.id, amount_g: 100, calories: 165, protein_g: 31, carbs_g: 0, fat_g: 3.6 });
+    await waterRepo.insertWaterLog({ date: '2026-08-20', amount_ml: 500, source: 'explicit' });
+    const combo = await comboRepo.createCombo('Test Combo', [{ food_id: chicken.id, amount_g: 100, amount_ml: null }]);
+    await goalRepo.createGoal({
+      name: 'Cut', start_date: '2026-08-01', end_date: null,
+      calories_target: 2000, protein_target: 140, carbs_target: 180, fat_target: 70, water_target: 3000
+    });
+
+    await wipeAllData(conn);
+
+    for (const table of BACKUP_TABLES) {
+      const res = await conn.query(`SELECT * FROM ${table}`);
+      expect(res.values, `table ${table} must be empty`).toHaveLength(0);
+    }
+    // The wiped database stays usable (FK constraints intact).
+    expect((await comboRepo.getAllCombos())).toHaveLength(0);
+    void combo;
   });
 });

@@ -48,6 +48,17 @@ export function renderHistory(args: HistoryRenderArgs) {
     return block;
   };
 
+  /** Weekday initial letter cell (S M T W T F S) shared by the month + week grids. */
+  const buildWeekdayHeader = (letter: string): HTMLElement => {
+    const header = document.createElement('div');
+    header.style.textAlign = 'center';
+    header.style.fontSize = '12px';
+    header.style.color = 'var(--text-dim)';
+    header.style.fontWeight = '800';
+    header.textContent = letter;
+    return header;
+  };
+
   if (calendarEl) {
     calendarEl.innerHTML = '';
 
@@ -81,22 +92,25 @@ export function renderHistory(args: HistoryRenderArgs) {
     calendarEl.appendChild(grid);
 
     if (view === 'week') {
+      // §5d: weekday initial letters above each square, same as the month grid.
+      const weekDates: string[] = [];
       for (let i = 6; i >= 0; i--) {
         const d = new Date(anchorDate);
         d.setDate(d.getDate() - i);
-        grid.appendChild(createBlock(formatDateISO(d)));
+        weekDates.push(formatDateISO(d));
+      }
+      for (const dateStr of weekDates) {
+        const letter = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'narrow' });
+        grid.appendChild(buildWeekdayHeader(letter));
+      }
+      for (const dateStr of weekDates) {
+        grid.appendChild(createBlock(dateStr));
       }
     } else if (view === 'month') {
       const year = anchorDate.getFullYear();
       const month = anchorDate.getMonth();
       ['S', 'M', 'T', 'W', 'T', 'F', 'S'].forEach(day => {
-        const header = document.createElement('div');
-        header.style.textAlign = 'center';
-        header.style.fontSize = '12px';
-        header.style.color = 'var(--text-dim)';
-        header.style.fontWeight = '800';
-        header.textContent = day;
-        grid.appendChild(header);
+        grid.appendChild(buildWeekdayHeader(day));
       });
       const firstDay = getFirstDayOfMonthOffset(year, month);
       for (let i = 0; i < firstDay; i++) grid.appendChild(document.createElement('div'));

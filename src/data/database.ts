@@ -511,6 +511,9 @@ export function createFallbackConnection(store: FallbackTableStore): SQLiteDBCon
         } else if (comboMatch) {
           const comboId = values?.[0];
           filtered = rows.filter(r => r.combo_id !== comboId);
+        } else {
+          // DELETE FROM <table> with no WHERE: wipe every row (Delete All Data).
+          filtered = [];
         }
         store.setTable(table, filtered);
         store.save();

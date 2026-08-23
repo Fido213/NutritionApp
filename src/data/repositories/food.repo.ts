@@ -46,6 +46,12 @@ export class FoodRepository {
     return res.values && res.values.length > 0 ? (res.values[0] as Food) : null;
   }
 
+  /** Every library food (Index screen) — newest first; sorted in the UI layer. */
+  async getAllFoods(limit: number = 500): Promise<Food[]> {
+    const res = await this.db.query(`SELECT * FROM foods ORDER BY created_at DESC LIMIT ?`, [limit]);
+    return (res.values as Food[]) || [];
+  }
+
   async fuzzySearch(query: string, limit: number = 20): Promise<Food[]> {
     const searchTerm = `%${query}%`;
     const res = await this.db.query(

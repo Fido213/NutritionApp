@@ -161,6 +161,16 @@ export function validateBackupArchive(archive: unknown): string[] {
 }
 
 /**
+ * Permanently erase every table (Settings "Delete All Data").
+ * Children before parents (FK constraints), same order as a restore-clear.
+ */
+export async function wipeAllData(db: SQLiteDBConnection): Promise<void> {
+  for (const table of CLEAR_ORDER) {
+    await db.run(`DELETE FROM ${table}`);
+  }
+}
+
+/**
  * Restore a full backup archive into the database.
  *
  * A restore is a complete replacement: every backup table is cleared and

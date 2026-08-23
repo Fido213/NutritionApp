@@ -8,15 +8,19 @@ export function renderDashboard() {
   const state = store.getState();
   const { todayTotals, todayGoals, todayHydration, currentScore, selectedDate } = state;
 
-  // 0. Date + day-score header above the ring card (§5b items 10–11 / §5c-E)
+  // 0. Date + day-score header above the ring card (§5b items 10–11 / §5c-E / §5d:
+  //    the real date instead of "Today", and the bare tier-colored score number).
   const dateEl = document.getElementById('dash-date');
   if (dateEl) dateEl.innerText = formatDashboardDate(selectedDate);
 
   const scoreBadge = document.getElementById('dash-score-badge');
   if (scoreBadge) {
     const score = currentScore?.score ?? 0;
-    scoreBadge.innerText = `Score: ${score > 0 ? '+' : ''}${score}`;
-    scoreBadge.className = `score-badge ${getScoreColorClass(score).replace('--', '')}`;
+    scoreBadge.innerText = `${score > 0 ? '+' : ''}${score}`;
+    // Tier colour drives both the text and its border; background stays clean.
+    const tierColor = `var(${getScoreColorClass(score)})`;
+    scoreBadge.style.color = tierColor;
+    scoreBadge.style.borderColor = tierColor;
   }
 
   // 1. Calorie Ring
@@ -63,15 +67,8 @@ export function renderDashboard() {
   }
 }
 
-/** "Today" / "Yesterday" / "Fri, Aug 22" for the dashboard header. */
+/** The actual date, always: "Sat, Aug 23" (§5d — no more "Today" label). */
 function formatDashboardDate(dateStr: string): string {
-  const today = new Date();
-  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  if (dateStr === iso) return 'Today';
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yIso = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-  if (dateStr === yIso) return 'Yesterday';
   const d = new Date(dateStr + 'T00:00:00');
   return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }

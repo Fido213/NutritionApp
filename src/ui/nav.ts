@@ -15,7 +15,7 @@
 import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 
-export type ViewId = 'today' | 'history' | 'view-goals';
+export type ViewId = 'today' | 'index' | 'history' | 'view-goals';
 
 interface Layer {
   close: () => void;
@@ -94,7 +94,7 @@ export interface TabController {
   currentView(): ViewId;
 }
 
-const TAB_ORDER: ViewId[] = ['today', 'history', 'view-goals'];
+const TAB_ORDER: ViewId[] = ['today', 'index', 'history'];
 
 /** Direction-aware entrance animation for tab switches / screen changes (§5c-7). */
 export function animateViewIn(el: HTMLElement | null, direction: 'left' | 'right' | 'up') {
@@ -148,6 +148,7 @@ export function setupTabNavigation(
         if (e.touches.length !== 1) { tracking = false; return; }
         if (document.querySelector('.modal.active')) { tracking = false; return; }
         if (document.body.classList.contains('edit-open')) { tracking = false; return; }
+        if (document.body.classList.contains('builder-open')) { tracking = false; return; }
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
         tracking = true;

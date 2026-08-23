@@ -22,14 +22,14 @@ import { renderGoals, readGoalsForm } from './ui/views/goals';
 import { setupTabNavigation, pushLayer, closeLayer, initNavStack, initNativeBackButton, animateViewIn, tabDirection, ViewId } from './ui/nav';
 import { showToast } from './ui/components/toast';
 import { calculateEffectiveHydration, classifyWaterSource } from '@domain/hydration';
-import { calculateScore } from '@domain/scoring';
+import { calculateScore, getScoreColorClass } from '@domain/scoring';
 import { calculateNutrition } from '@domain/nutrition';
 import { normalizeFoodName, expandCombo } from '@domain/logging';
 import { getTodayDateString, formatDateISO, shiftDate } from '@utils/dates';
 import { generateCSV, downloadCSV } from '@services/export/csv-export';
 import { buildExportRows, datesBetween, goalPhaseRange, resolveExportDateRange, ExportRepos } from '@services/export/export-service';
 import { parseCSV } from '@services/import/csv-import';
-import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive, collectAllTables } from '@services/backup/backup';
+import { createBackupArchive, downloadBackup, parseBackupArchive, restoreBackupArchive, validateBackupArchive, collectAllTables, wipeAllData } from '@services/backup/backup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from '@services/backup/encryption';
 import { GemmaClient, DEFAULT_LABEL_PRODUCT_NAME } from '@services/ai/gemma-client';
 import { FoodService } from '@services/food/food-service';
@@ -46,6 +46,20 @@ import type { ScanHandle } from '@services/vision/vision-client';
 import { lookupBarcodeOnline } from '@services/barcode/online-lookup';
 
 let dbManager: DatabaseManager;
+
+/** Index sort keys (§5d): date created, kcal, every macro, confidence — both directions. */
+type FoodSortKey =
+  | 'created-desc' | 'created-asc'
+  | 'kcal-desc' | 'kcal-asc'
+  | 'protein-desc' | 'protein-asc'
+  | 'carbs-desc' | 'carbs-asc'
+  | 'fat-desc' | 'fat-asc'
+  | 'confidence-desc' | 'confidence-asc';
+
+type ComboSortKey =
+  | 'created-desc' | 'created-asc'
+  | 'kcal-desc' | 'kcal-asc'
+  | 'items-desc' | 'name-asc';
 let foodRepo: FoodRepository;
 let logRepo: LogRepository;
 let goalRepo: GoalRepository;
@@ -67,29 +81,39 @@ let historyWindowKey = '';
 let dataVersion = 0;
 let numpadBuffer = '';
 
-// Day-detail UI state (§5b: inline expand, multi-select; §5c: journal groups,
-// combo breakdowns, low-accuracy chip, per-group day notes)
+// Index screen state (§5d: the Journal modal became a dedicated INDEX tab):
+// Foods / Combos sub-views, sort keys, fuzzy query, inline-expanded food row.
+let indexTab: 'foods' | 'combos' = 'foods';
+let indexSortFoods: FoodSortKey = 'created-desc';
+let indexSortCombos: ComboSortKey = 'created-desc';
+let indexRenderGen = 0;
+let expandedIndexFoodId: string | null = null;
+/** Library combo whose detail modal is open (§5d clean modal, image-2 layout). */
+let openComboDetailId: string | null = null;
+
+// Day-detail UI state (§5b: inline expand, multi-select; §5c/§5d: day groups,
+// combo breakdowns, low-accuracy chip, per-group day notes, day ordering).
 let journalWaters: JournalWater[] = [];
 let expandedLogId: string | null = null;
 const expandedComboKeys = new Set<string>();
 let selectMode = false;
 const selection = new Set<string>();
-let journalDaysBack = 14;
+/** §5d: ONLY the selected day by default — no more scrolling into other days. */
+let journalDaysShown = 1;
 const JOURNAL_PAGE_DAYS = 14;
+/** §5d: day-group ordering (Newest first ▾ / Oldest first ▴). */
+let journalDayOrder: 'desc' | 'asc' = 'desc';
 let journalRenderGen = 0;
 let currentViewId: ViewId = 'today';
 let tabController: ReturnType<typeof setupTabNavigation> | null = null;
 
-// Combo builder state (§5c-C): survives modal close so a draft isn't lost.
-let builderActive = false;
-let editingComboId: string | null = null;
-let pendingComboFoodIds: string[] = [];
-/** Library combo whose breakdown card is expanded (§5c-C). */
-let comboBreakdownOpenId: string | null = null;
-/** Generation counters: a slower in-flight render must never overwrite a
- *  newer one (the stale-list race seen on device during §5c verification). */
-let comboListGen = 0;
-let comboBuilderGen = 0;
+// Combo builder state (§5d remake): full-screen editor with per-item amounts
+// and live totals; a draft survives only while the view stays open.
+let builderComboId: string | null = null;
+let builderItems: Array<{ foodId: string; amountG: number }> = [];
+const builderFoodCache = new Map<string, Food>();
+let builderSearchGen = 0;
+let builderTotalsGen = 0;
 
 /**
  * Modal ↔ navigation-layer bridge: opening a modal pushes one history entry,
@@ -201,8 +225,10 @@ async function initApp() {
     setupDialogModals();
     setupExportHandlers();
     setupActionHandlers();
-    setupJournalHandlers();
-    setupComboHandlers();
+    setupIndexHandlers();
+    setupComboBuilderHandlers();
+    setupWaterEditHandlers();
+    setupDeleteAllHandler();
     setupDashboardTextBar();
     setupNumpadHandlers();
     setupScannerHandlers();
@@ -317,23 +343,30 @@ function setHistoryView(view: HistoryViewMode) {
 
 function setupNavigation() {
   const dashBtn = document.getElementById('nav-btn-dash');
+  const indexBtn = document.getElementById('nav-btn-index');
   const logsBtn = document.getElementById('nav-btn-logs');
   const sysBtn = document.getElementById('sys-btn-top');
 
   const todayView = document.getElementById('today');
+  const indexView = document.getElementById('view-index');
   const historyView = document.getElementById('history');
   const goalsView = document.getElementById('view-goals');
 
   function switchTabInternal(viewId: ViewId) {
     const previousView = currentViewId;
-    [todayView, historyView, goalsView].forEach(v => v?.classList.remove('active-view'));
-    [dashBtn, logsBtn].forEach(b => b?.classList.remove('active'));
+    [todayView, indexView, historyView, goalsView].forEach(v => v?.classList.remove('active-view'));
+    [dashBtn, indexBtn, logsBtn].forEach(b => b?.classList.remove('active'));
 
     let target: HTMLElement | null = null;
     if (viewId === 'today') {
       todayView?.classList.add('active-view');
       dashBtn?.classList.add('active');
       target = todayView;
+    } else if (viewId === 'index') {
+      indexView?.classList.add('active-view');
+      indexBtn?.classList.add('active');
+      target = indexView;
+      renderIndex();
     } else if (viewId === 'history') {
       historyView?.classList.add('active-view');
       logsBtn?.classList.add('active');
@@ -343,15 +376,19 @@ function setupNavigation() {
       goalsView?.classList.add('active-view');
       target = goalsView;
     }
+    // Assign BEFORE the data loads below — renderIndex/renderJournalIfVisible
+    // guard on currentViewId.
+    currentViewId = viewId;
+    if (viewId === 'index') renderIndex();
     // Direction-aware entrance animation for tab swipes / dock taps (§5c-7).
     if (target && previousView !== viewId) animateViewIn(target, tabDirection(previousView, viewId));
-    currentViewId = viewId;
   }
 
   initNavStack();
   tabController = setupTabNavigation(switchTabInternal, () => currentViewId);
 
   dashBtn?.addEventListener('click', () => tabController!.switchTab('today'));
+  indexBtn?.addEventListener('click', () => tabController!.switchTab('index'));
   logsBtn?.addEventListener('click', () => tabController!.switchTab('history'));
   sysBtn?.addEventListener('click', () => tabController!.switchTab('view-goals'));
 
@@ -386,10 +423,10 @@ function setupModals() {
   document.getElementById('btn-water-custom')?.addEventListener('click', () => openModal('numpad-modal'));
   document.getElementById('numpad-close')?.addEventListener('click', () => closeModal('numpad-modal'));
 
-  document.getElementById('btn-open-journal')?.addEventListener('click', () => {
-    openLibraryModal();
+  // §5d: "Journal" is now the dedicated INDEX screen — switch to it as a tab.
+  document.getElementById('btn-open-index')?.addEventListener('click', () => {
+    tabController?.switchTab('index');
   });
-  document.getElementById('btn-close-journal')?.addEventListener('click', () => closeModalLayer('journal-modal'));
 
   document.getElementById('btn-open-manual')?.addEventListener('click', () => openModal('manual-log-modal'));
   document.getElementById('btn-close-manual')?.addEventListener('click', () => closeModal('manual-log-modal'));
@@ -397,22 +434,58 @@ function setupModals() {
   document.getElementById('scan-btn')?.addEventListener('click', () => openModal('scanner-modal'));
   document.getElementById('btn-close-scanner')?.addEventListener('click', () => closeModal('scanner-modal'));
 
+  // §5d: tapping the dashboard score explains what it is and how it's computed.
+  document.getElementById('dash-score-badge')?.addEventListener('click', () => {
+    const state = store.getState();
+    const valueEl = document.getElementById('score-modal-value');
+    const reasonEl = document.getElementById('score-modal-reason');
+    const compEl = document.getElementById('score-components');
+    const score = state.currentScore;
+    if (valueEl) {
+      const s = score?.score ?? 0;
+      valueEl.innerText = `${s > 0 ? '+' : ''}${s}`;
+      valueEl.style.color = `var(${getScoreColorClass(s)})`;
+    }
+    if (reasonEl) reasonEl.innerText = score?.reason || 'Nothing logged for this day yet.';
+    if (compEl) {
+      compEl.innerHTML = '';
+      const c = score?.components;
+      const rows: Array<[string, number]> = c ? [
+        ['Calories in 85–115% of target (−1 above)', c.calories],
+        ['Protein at ≥90% of target', c.protein],
+        ['Carbs in 85–115% of target (−1 above)', c.carbs],
+        ['Fat in 85–115% of target (−1 above)', c.fat],
+        ['Hydration at ≥80% of target', c.hydration]
+      ] : [];
+      for (const [label, val] of rows) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;gap:8px;background:var(--surface-light);border-radius:8px;padding:7px 10px;font-size:12px;';
+        const name = document.createElement('span');
+        name.style.color = 'var(--text-dim)';
+        name.textContent = label;
+        const pts = document.createElement('span');
+        pts.style.fontWeight = '800';
+        pts.style.color = val > 0 ? 'var(--accent-glow)' : val < 0 ? 'var(--warn)' : 'var(--text-dim)';
+        pts.textContent = `${val > 0 ? '+' : ''}${val}`;
+        row.append(name, pts);
+        compEl.appendChild(row);
+      }
+      if (!c) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:12px;color:var(--text-dim);text-align:center;padding:4px;';
+        empty.textContent = 'Log something to see the breakdown.';
+        compEl.appendChild(empty);
+      }
+    }
+    openModalLayer('score-modal');
+  });
+  document.getElementById('btn-score-close')?.addEventListener('click', () => closeModalLayer('score-modal'));
+
   setupDayNoteHandlers();
   setupBulkDateHandlers();
 }
 
 // ---------- Export (spec §21: all-time / date range / goal phase) ----------
-
-/** Open the Food Library modal (journal search + combos). Builder state survives close/reopen. */
-function openLibraryModal() {
-  openModalLayer('journal-modal');
-  renderComboList();
-  renderComboBuilder();
-  const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
-  if (searchInput && !searchInput.value.trim()) {
-    foodRepo.fuzzySearch('', 20).then(renderJournalResults);
-  }
-}
 
 async function openExportModal() {
   const select = document.getElementById('export-goal-phase') as HTMLSelectElement | null;
@@ -588,7 +661,7 @@ function setupActionHandlers() {
 
   window.addEventListener('select-history-date', (e: any) => {
     const dateStr = e.detail as string;
-    if (dateStr !== store.getState().selectedDate) journalDaysBack = JOURNAL_PAGE_DAYS;
+    if (dateStr !== store.getState().selectedDate) journalDaysShown = 1; // §5d: one day at a time
     refreshStateForDate(dateStr);
   });
 }
@@ -617,82 +690,18 @@ async function logTextInput(rawText: string) {
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal`);
 }
 
-// ---------- Journal Search & Quick-Log (builder-aware, §5c-C) ----------
+// ---------- Quick-log helpers (shared by the Index screen) ----------
 
-function renderJournalResults(foods: Food[]) {
-  const container = document.getElementById('journal-results');
-  if (!container) return;
-  container.innerHTML = '';
-
-  if (!foods || foods.length === 0) {
-    const empty = document.createElement('div');
-    empty.style.color = 'var(--text-dim)';
-    empty.style.fontSize = '13px';
-    empty.style.padding = '10px';
-    empty.style.textAlign = 'center';
-    empty.innerText = builderActive
-      ? 'No matching foods. Try another search.'
-      : 'No foods found in your library. Use the text bar on the dashboard to log meals by description.';
-    container.appendChild(empty);
-    return;
-  }
-
-  if (builderActive) {
-    const hint = document.createElement('div');
-    hint.style.cssText = 'font-size:12px;color:var(--pro);padding:2px 10px 8px;';
-    hint.textContent = 'Builder active — tap items to ADD them to the combo (nothing gets logged).';
-    container.appendChild(hint);
-  }
-
-  foods.forEach(food => {
-    const item = document.createElement('div');
-    item.className = 'log-item';
-    item.dataset.foodId = food.id;
-
-    const main = document.createElement('div');
-    main.className = 'log-main';
-
-    const name = document.createElement('span');
-    name.className = 'log-name';
-    name.innerText = food.canonical_name;
-
-    const cal = document.createElement('span');
-    cal.className = 'log-cal';
-    cal.innerText = food.calories_per_100g ? `${Math.round(food.calories_per_100g)} kcal/100g` : 'no data';
-
-    main.appendChild(name);
-    main.appendChild(cal);
-    item.appendChild(main);
-
-    // Builder state indicator on already-added items.
-    if (builderActive && pendingComboFoodIds.includes(food.id)) {
-      const badge = document.createElement('span');
-      badge.className = 'combo-chip';
-      badge.style.marginTop = '4px';
-      badge.style.width = 'fit-content';
-      badge.textContent = '✓ In Combo';
-      item.appendChild(badge);
-    }
-
-    container.appendChild(item);
-  });
-}
-
-async function quickLogFood(foodId: string) {
-  const food = await foodRepo.findById(foodId);
-  if (!food) {
-    showToast('Food not found in library');
-    return;
-  }
-
+/** Log a library food at an exact gram amount on the selected date. */
+async function logFoodAtAmount(food: Food, grams: number) {
   const ref = foodRepo.toFoodReference(food);
-  const nutrition = calculateNutrition(ref, 100);
+  const nutrition = calculateNutrition(ref, grams);
   const date = store.getState().selectedDate;
 
   const log = await logRepo.insertFoodLog({
     date,
     food_id: food.id,
-    amount_g: 100,
+    amount_g: grams,
     calories: nutrition.calories,
     protein_g: nutrition.proteinG,
     carbs_g: nutrition.carbsG,
@@ -713,277 +722,835 @@ async function quickLogFood(foodId: string) {
   showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
 }
 
-function setupJournalHandlers() {
-  const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
+/** One-tap log at 100 g (the classic library quick-log, kept intact). */
+async function quickLogFood(foodId: string) {
+  const food = await foodRepo.findById(foodId);
+  if (!food) {
+    showToast('Food not found in library');
+    return;
+  }
+  await logFoodAtAmount(food, 100);
+}
 
-  searchInput?.addEventListener('input', async () => {
-    const query = searchInput.value.trim();
-    const results = await foodRepo.fuzzySearch(query, 20);
-    renderJournalResults(results);
-  });
+// ---------- Index screen (§5d: the Journal modal became a dedicated tab) ----------
+//
+// Two sub-views — FOODS (the library) and COMBOS — behind one fuzzy search bar
+// and a sort selector covering date created, kcal, every macro and confidence,
+// each in both directions ("highest and lowest of x, or newest/oldest").
 
-  searchInput?.addEventListener('keydown', async (e) => {
+const FOOD_SORT_OPTIONS: Array<{ value: FoodSortKey; label: string }> = [
+  { value: 'created-desc', label: 'Newest first' },
+  { value: 'created-asc', label: 'Oldest first' },
+  { value: 'kcal-desc', label: 'Highest kcal' },
+  { value: 'kcal-asc', label: 'Lowest kcal' },
+  { value: 'protein-desc', label: 'Highest protein' },
+  { value: 'protein-asc', label: 'Lowest protein' },
+  { value: 'carbs-desc', label: 'Highest carbs' },
+  { value: 'carbs-asc', label: 'Lowest carbs' },
+  { value: 'fat-desc', label: 'Highest fat' },
+  { value: 'fat-asc', label: 'Lowest fat' },
+  { value: 'confidence-desc', label: 'Highest confidence' },
+  { value: 'confidence-asc', label: 'Lowest confidence' }
+];
+
+const COMBO_SORT_OPTIONS: Array<{ value: ComboSortKey; label: string }> = [
+  { value: 'created-desc', label: 'Newest first' },
+  { value: 'created-asc', label: 'Oldest first' },
+  { value: 'kcal-desc', label: 'Highest kcal' },
+  { value: 'kcal-asc', label: 'Lowest kcal' },
+  { value: 'items-desc', label: 'Most ingredients' },
+  { value: 'name-asc', label: 'Name (A–Z)' }
+];
+
+function populateIndexSort() {
+  const select = document.getElementById('index-sort') as HTMLSelectElement | null;
+  if (!select) return;
+  const options = indexTab === 'foods' ? FOOD_SORT_OPTIONS : COMBO_SORT_OPTIONS;
+  const current = indexTab === 'foods' ? indexSortFoods : indexSortCombos;
+  select.innerHTML = '';
+  for (const opt of options) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = opt.label;
+    select.appendChild(o);
+  }
+  select.value = current;
+}
+
+function setIndexTab(tab: 'foods' | 'combos') {
+  indexTab = tab;
+  document.getElementById('btn-index-foods')?.classList.toggle('active', tab === 'foods');
+  document.getElementById('btn-index-combos')?.classList.toggle('active', tab === 'combos');
+  expandedIndexFoodId = null;
+  populateIndexSort();
+  renderIndex();
+}
+
+function setupIndexHandlers() {
+  document.getElementById('btn-index-foods')?.addEventListener('click', () => setIndexTab('foods'));
+  document.getElementById('btn-index-combos')?.addEventListener('click', () => setIndexTab('combos'));
+  populateIndexSort();
+
+  // Fuzzy search retained (§5d) — semantic matching stays a future upgrade.
+  const search = document.getElementById('index-search') as HTMLInputElement | null;
+  search?.addEventListener('input', () => renderIndex());
+  search?.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
-    const text = searchInput.value.trim();
-    if (!text) return;
-    const results = await foodRepo.fuzzySearch(text, 20);
-    renderJournalResults(results);
+    e.preventDefault();
+    renderIndex();
   });
 
-  document.getElementById('journal-results')?.addEventListener('click', (e) => {
-    const target = (e.target as HTMLElement).closest('.log-item') as HTMLElement | null;
-    if (!target?.dataset.foodId) return;
-    const foodId = target.dataset.foodId;
+  (document.getElementById('index-sort') as HTMLSelectElement | null)?.addEventListener('change', (e) => {
+    const val = (e.target as HTMLSelectElement).value;
+    if (indexTab === 'foods') indexSortFoods = val as FoodSortKey;
+    else indexSortCombos = val as ComboSortKey;
+    renderIndex();
+  });
 
-    // §5c-C: while the combo builder is active, tapping a result ADDS it to
-    // the builder instead of quick-logging + closing (the old flow lost the
-    // draft whenever a food was tapped — creation was unusable in practice).
-    if (builderActive) {
-      addToComboBuilder(foodId);
-      return;
-    }
-
-    document.getElementById('journal-modal')?.classList.remove('active');
-    const input = document.getElementById('journal-search') as HTMLInputElement | null;
-    if (input) input.value = '';
-    quickLogFood(foodId);
+  // Inline opening of individual foods (same interaction as the day logs).
+  document.getElementById('index-list')?.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button')) return;
+    const row = target.closest('[data-index-food-id]') as HTMLElement | null;
+    if (!row?.dataset.indexFoodId) return;
+    expandedIndexFoodId = expandedIndexFoodId === row.dataset.indexFoodId ? null : row.dataset.indexFoodId;
+    renderIndex();
   });
 }
 
-async function addToComboBuilder(foodId: string) {
-  if (!pendingComboFoodIds.includes(foodId)) pendingComboFoodIds.push(foodId);
-  await renderComboBuilder();
-  const query = (document.getElementById('journal-search') as HTMLInputElement | null)?.value.trim() || '';
-  renderJournalResults(await foodRepo.fuzzySearch(query, 20));
+async function renderIndex() {
+  if (currentViewId !== 'index') return;
+  if (indexTab === 'foods') await renderIndexFoods();
+  else await renderIndexCombos();
 }
 
-// ---------- Combos (§5b item 7 → §5c-C rebuild) ----------
+/* ----- Foods sub-view ----- */
 
-/** Combo builder panel: chips of chosen items + name + Save/Cancel.
- *  Renders through a detached fragment so concurrent calls can't interleave
- *  and duplicate chips (each row awaits a food lookup). */
-async function renderComboBuilder() {
-  const box = document.getElementById('combo-builder');
-  const itemsEl = document.getElementById('combo-builder-items');
-  const title = document.getElementById('combo-builder-title');
-  if (!box || !itemsEl || !title) return;
-
-  const gen = ++comboBuilderGen;
-  box.style.display = builderActive ? '' : 'none';
-  if (!builderActive) return;
-  title.textContent = editingComboId ? 'EDIT COMBO' : 'NEW COMBO';
-
-  const frag = document.createDocumentFragment();
-  if (pendingComboFoodIds.length === 0) {
-    const hint = document.createElement('div');
-    hint.style.cssText = 'font-size:12px;color:var(--text-dim);padding:2px 4px;';
-    hint.textContent = 'No items yet — tap library results above to add them.';
-    frag.appendChild(hint);
-  } else {
-    for (const foodId of pendingComboFoodIds) {
-      const food = await foodRepo.findById(foodId);
-      const chip = document.createElement('div');
-      chip.className = 'combo-chip';
-      const label = document.createElement('span');
-      label.textContent = food?.canonical_name || 'Unknown item';
-      const remove = document.createElement('button');
-      remove.textContent = '×';
-      remove.title = 'Remove from combo';
-      remove.addEventListener('click', () => {
-        pendingComboFoodIds = pendingComboFoodIds.filter(id => id !== foodId);
-        renderComboBuilder();
-        const query = (document.getElementById('journal-search') as HTMLInputElement | null)?.value.trim() || '';
-        foodRepo.fuzzySearch(query, 20).then(renderJournalResults);
-      });
-      chip.append(label, remove);
-      frag.appendChild(chip);
-    }
-  }
-  if (gen !== comboBuilderGen) return; // superseded by a newer render
-  itemsEl.innerHTML = '';
-  itemsEl.appendChild(frag);
+function numericCmp(get: (f: Food) => number | null, dir: 'desc' | 'asc'): (a: Food, b: Food) => number {
+  return (a: Food, b: Food): number => {
+    const av = get(a);
+    const bv = get(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; // entries without data always sink to the bottom
+    if (bv == null) return -1;
+    return dir === 'desc' ? bv - av : av - bv;
+  };
 }
 
-function enterComboBuilder(editComboId: string | null, prefillName = '') {
-  builderActive = true;
-  editingComboId = editComboId;
-  pendingComboFoodIds = [];
-  const nameInput = document.getElementById('combo-name-input') as HTMLInputElement | null;
-  if (nameInput) nameInput.value = prefillName;
-  renderComboBuilder();
-  const searchInput = document.getElementById('journal-search') as HTMLInputElement | null;
-  if (searchInput) {
-    searchInput.value = '';
-    searchInput.focus();
-  }
-  foodRepo.fuzzySearch('', 20).then(renderJournalResults);
+const FOOD_CMP: Record<FoodSortKey, (a: Food, b: Food) => number> = {
+  'created-desc': (a, b) => (b.created_at || '').localeCompare(a.created_at || ''),
+  'created-asc': (a, b) => (a.created_at || '').localeCompare(b.created_at || ''),
+  'kcal-desc': numericCmp(f => f.calories_per_100g, 'desc'),
+  'kcal-asc': numericCmp(f => f.calories_per_100g, 'asc'),
+  'protein-desc': numericCmp(f => f.protein_per_100g, 'desc'),
+  'protein-asc': numericCmp(f => f.protein_per_100g, 'asc'),
+  'carbs-desc': numericCmp(f => f.carbs_per_100g, 'desc'),
+  'carbs-asc': numericCmp(f => f.carbs_per_100g, 'asc'),
+  'fat-desc': numericCmp(f => f.fat_per_100g, 'desc'),
+  'fat-asc': numericCmp(f => f.fat_per_100g, 'asc'),
+  'confidence-desc': numericCmp(f => f.confidence ?? null, 'desc'),
+  'confidence-asc': numericCmp(f => f.confidence ?? null, 'asc')
+};
+
+function confidenceLabel(confidence: number | null | undefined): string {
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'no estimate';
+  return `${Math.round(confidence * 100)}% sure`;
 }
 
-function exitComboBuilder() {
-  builderActive = false;
-  editingComboId = null;
-  pendingComboFoodIds = [];
-  renderComboBuilder();
+function fmt1(n: number | null | undefined): string {
+  return (Math.round((n || 0) * 10) / 10).toString();
 }
 
-/** Saved-combos list; tapping a combo expands its nourishment breakdown card.
- *  Renders through a detached fragment (rows await food lookups — concurrent
- *  calls must not interleave). */
-async function renderComboList() {
-  const listEl = document.getElementById('combo-list');
+async function renderIndexFoods() {
+  const listEl = document.getElementById('index-list');
   if (!listEl) return;
 
-  const gen = ++comboListGen;
-  const combos = await comboRepo.getAllCombos();
-  const frag = document.createDocumentFragment();
+  const gen = ++indexRenderGen;
+  const query = (document.getElementById('index-search') as HTMLInputElement | null)?.value.trim() || '';
+  const foods = query
+    ? await foodRepo.fuzzySearch(query, 300)
+    : await foodRepo.getAllFoods(500);
+  if (gen !== indexRenderGen) return;
+  foods.sort(FOOD_CMP[indexSortFoods]);
 
-  if (combos.length === 0) {
+  listEl.innerHTML = '';
+  if (foods.length === 0) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'color:var(--text-dim);font-size:12px;padding:4px;';
-    empty.textContent = 'No combos yet — tap "+ New Combo" and pick ingredients above.';
-    frag.appendChild(empty);
+    empty.className = 'index-empty';
+    empty.textContent = 'No foods found. Log your first meal from the dashboard text bar.';
+    listEl.appendChild(empty);
+    return;
   }
 
-  const buildRow = async (combo: Awaited<ReturnType<ComboRepository['getAllCombos']>>[number]) => {
-    // Resolve ingredient foods once per render (amounts default to 100 g/ml).
-    const ingredients: Array<{ name: string; ref: any; amountG: number | null; amountMl: number | null }> = [];
-    let totalKcal = 0;
+  const frag = document.createDocumentFragment();
+  for (const food of foods) frag.appendChild(buildIndexFoodRow(food));
+  listEl.appendChild(frag);
+}
+
+function buildIndexFoodRow(food: Food): HTMLElement {
+  const expanded = expandedIndexFoodId === food.id;
+  const row = document.createElement('div');
+  row.className = 'log-item' + (expanded ? ' expanded' : '');
+  row.dataset.indexFoodId = food.id;
+
+  const main = document.createElement('div');
+  main.className = 'log-main';
+  const name = document.createElement('span');
+  name.className = 'log-name';
+  name.textContent = food.canonical_name;
+  const cal = document.createElement('span');
+  cal.className = 'log-cal';
+  cal.textContent = food.calories_per_100g != null ? `${Math.round(food.calories_per_100g)} kcal` : 'no data';
+  main.append(name, cal);
+  row.appendChild(main);
+
+  const macros = document.createElement('div');
+  macros.className = 'log-macros';
+  macros.innerHTML = `
+    <span style="color: var(--pro);">P: ${Math.round(food.protein_per_100g || 0)}g</span>
+    <span style="color: var(--carb);">C: ${Math.round(food.carbs_per_100g || 0)}g</span>
+    <span style="color: var(--fat);">F: ${Math.round(food.fat_per_100g || 0)}g</span>
+    <span class="conf-chip">${confidenceLabel(food.confidence)}</span>
+  `;
+  row.appendChild(macros);
+
+  if (expanded) {
+    const details = document.createElement('div');
+    details.className = 'index-food-details';
+
+    const per100 = document.createElement('div');
+    per100.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;line-height:1.6;';
+    per100.textContent =
+      `Per 100 g · P ${fmt1(food.protein_per_100g)} · C ${fmt1(food.carbs_per_100g)} · F ${fmt1(food.fat_per_100g)}` +
+      (food.water_per_100g ? ` · water ${fmt1(food.water_per_100g)} ml` : '') +
+      ` · source: ${food.source_type}`;
+    details.appendChild(per100);
+
+    const actions = document.createElement('div');
+    actions.className = 'log-actions';
+    const quick = document.createElement('button');
+    quick.className = 'log-action-btn blue';
+    quick.textContent = 'Log 100 g';
+    quick.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await quickLogFood(food.id);
+      expandedIndexFoodId = null;
+      renderIndex();
+    });
+    const custom = document.createElement('button');
+    custom.className = 'log-action-btn';
+    custom.textContent = 'Other amount…';
+    custom.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const grams = await requestGrams(
+        `How many grams of ${food.canonical_name}?`,
+        `${Math.round(food.calories_per_100g || 0)} kcal per 100 g`,
+        100
+      );
+      if (grams === null || !(grams > 0)) return;
+      await logFoodAtAmount(food, grams);
+      expandedIndexFoodId = null;
+      renderIndex();
+    });
+    actions.append(quick, custom);
+    details.appendChild(actions);
+    row.appendChild(details);
+  }
+
+  return row;
+}
+
+/* ----- Combos sub-view ----- */
+
+interface IndexComboView {
+  combo: Awaited<ReturnType<ComboRepository['getAllCombos']>>[number];
+  totalKcal: number;
+  totalProtein: number;
+  totalCarbs: number;
+  totalFat: number;
+}
+
+/** Resolve a food through the shared builder cache (one lookup per id ever). */
+async function resolveFoodCached(foodId: string): Promise<Food | null> {
+  const cached = builderFoodCache.get(foodId);
+  if (cached) return cached;
+  const food = await foodRepo.findById(foodId);
+  if (food) builderFoodCache.set(foodId, food);
+  return food;
+}
+
+async function loadComboViews(): Promise<IndexComboView[]> {
+  const combos = await comboRepo.getAllCombos();
+  const views: IndexComboView[] = [];
+  for (const combo of combos) {
+    let kcal = 0, pro = 0, carb = 0, fat = 0;
     for (const ci of combo.items) {
-      const food = await foodRepo.findById(ci.food_id);
+      const food = await resolveFoodCached(ci.food_id);
       if (!food) continue;
-      const ref = foodRepo.toFoodReference(food);
-      const nutrition = calculateNutrition(ref, ci.amount_g ?? ci.amount_ml ?? 100);
-      totalKcal += nutrition.calories;
-      ingredients.push({ name: food.canonical_name, ref, amountG: ci.amount_g, amountMl: ci.amount_ml });
+      const n = calculateNutrition(foodRepo.toFoodReference(food), ci.amount_g ?? ci.amount_ml ?? 100);
+      kcal += n.calories;
+      pro += n.proteinG;
+      carb += n.carbsG;
+      fat += n.fatG;
+    }
+    views.push({ combo, totalKcal: kcal, totalProtein: pro, totalCarbs: carb, totalFat: fat });
+  }
+
+  switch (indexSortCombos) {
+    case 'created-desc': return views.sort((a, b) => (b.combo.created_at || '').localeCompare(a.combo.created_at || ''));
+    case 'created-asc': return views.sort((a, b) => (a.combo.created_at || '').localeCompare(b.combo.created_at || ''));
+    case 'kcal-desc': return views.sort((a, b) => b.totalKcal - a.totalKcal);
+    case 'kcal-asc': return views.sort((a, b) => a.totalKcal - b.totalKcal);
+    case 'items-desc': return views.sort((a, b) => b.combo.items.length - a.combo.items.length);
+    case 'name-asc': return views.sort((a, b) => a.combo.name.localeCompare(b.combo.name));
+  }
+}
+
+async function renderIndexCombos() {
+  const listEl = document.getElementById('index-list');
+  if (!listEl) return;
+
+  const gen = ++indexRenderGen;
+  const views = await loadComboViews();
+  if (gen !== indexRenderGen) return;
+
+  listEl.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'index-list-head';
+  const count = document.createElement('span');
+  count.style.cssText = 'font-size:12px;color:var(--text-dim);font-weight:700;';
+  count.textContent = `${views.length} combo${views.length === 1 ? '' : 's'} · tap for breakdown`;
+  head.appendChild(count);
+  const newBtn = document.createElement('button');
+  newBtn.className = 'log-action-btn blue';
+  newBtn.style.cssText = 'flex:none;width:auto;padding:6px 12px;';
+  newBtn.textContent = '+ New Combo';
+  newBtn.addEventListener('click', () => openComboBuilderView(null));
+  head.appendChild(newBtn);
+  listEl.appendChild(head);
+
+  if (views.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'index-empty';
+    empty.textContent = 'No combos yet — tap "+ New Combo" to build your first one.';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const view of views) {
+    const row = document.createElement('div');
+    row.className = 'combo-row';
+    const main = document.createElement('div');
+    main.className = 'log-main';
+    const name = document.createElement('span');
+    name.className = 'log-name';
+    name.textContent = `🍱 ${view.combo.name}`;
+    const cal = document.createElement('span');
+    cal.className = 'log-cal';
+    cal.style.fontSize = '13px';
+    cal.textContent = `${Math.round(view.totalKcal)} kcal`;
+    main.append(name, cal);
+    row.appendChild(main);
+
+    const sub = document.createElement('div');
+    sub.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;';
+    sub.textContent = `${view.combo.items.length} ingredient(s) · P ${Math.round(view.totalProtein)}g · C ${Math.round(view.totalCarbs)}g · F ${Math.round(view.totalFat)}g`;
+    row.appendChild(sub);
+
+    row.addEventListener('click', () => openComboDetail(view.combo));
+    frag.appendChild(row);
+  }
+  listEl.appendChild(frag);
+}
+
+/* ----- Combo detail modal (§5d clean modal — image-2 layout) ----- */
+
+const comboDetailExpanded = new Set<string>();
+
+interface DetailIngredient {
+  food: Food;
+  amount: number;
+  unit: 'g' | 'ml';
+  nutrition: { calories: number; proteinG: number; carbsG: number; fatG: number };
+}
+
+async function openComboDetail(combo: Awaited<ReturnType<ComboRepository['getAllCombos']>>[number]) {
+  const ingredients: DetailIngredient[] = [];
+  for (const ci of combo.items) {
+    const food = await resolveFoodCached(ci.food_id);
+    if (!food) continue;
+    const isMl = ci.amount_ml != null;
+    const amount = ci.amount_g ?? ci.amount_ml ?? 100;
+    const n = calculateNutrition(foodRepo.toFoodReference(food), amount);
+    ingredients.push({ food, amount, unit: isMl ? 'ml' : 'g', nutrition: n });
+  }
+
+  const totals = ingredients.reduce(
+    (acc, ing) => ({
+      kcal: acc.kcal + ing.nutrition.calories,
+      protein: acc.protein + ing.nutrition.proteinG,
+      carbs: acc.carbs + ing.nutrition.carbsG,
+      fat: acc.fat + ing.nutrition.fatG
+    }),
+    { kcal: 0, protein: 0, carbs: 0, fat: 0 }
+  );
+
+  const box = document.getElementById('combo-detail-box');
+  if (!box) return;
+  box.innerHTML = '';
+  comboDetailExpanded.clear();
+
+  // Header: name + added-date left, big kcal right (image 2).
+  const head = document.createElement('div');
+  head.className = 'cd-head';
+  const titleWrap = document.createElement('div');
+  titleWrap.style.minWidth = '0';
+  const title = document.createElement('h3');
+  title.className = 'cd-name';
+  title.textContent = combo.name;
+  titleWrap.appendChild(title);
+  const time = document.createElement('div');
+  time.className = 'cd-time';
+  time.textContent = `Created ${formatCreatedLabel(combo.created_at)}`;
+  titleWrap.appendChild(time);
+  const kcalWrap = document.createElement('div');
+  kcalWrap.style.cssText = 'text-align:right;flex:none;';
+  const kcal = document.createElement('div');
+  kcal.className = 'cd-kcal';
+  kcal.textContent = String(Math.round(totals.kcal));
+  const kcalUnit = document.createElement('div');
+  kcalUnit.className = 'cd-unit';
+  kcalUnit.textContent = 'KCAL';
+  kcalWrap.append(kcal, kcalUnit);
+  head.append(titleWrap, kcalWrap);
+  box.appendChild(head);
+
+  const macros = document.createElement('div');
+  macros.className = 'cd-macros';
+  macros.innerHTML = `
+    <span style="color: var(--pro);">P: ${Math.round(totals.protein)}g</span>
+    <span style="color: var(--text-dim);">·</span>
+    <span style="color: var(--carb);">C: ${Math.round(totals.carbs)}g</span>
+    <span style="color: var(--text-dim);">·</span>
+    <span style="color: var(--fat);">F: ${Math.round(totals.fat)}g</span>
+  `;
+  box.appendChild(macros);
+
+  const divider = document.createElement('div');
+  divider.className = 'cd-divider';
+  box.appendChild(divider);
+
+  const bdTitle = document.createElement('div');
+  bdTitle.className = 'combo-breakdown-title';
+  bdTitle.style.marginBottom = '8px';
+  bdTitle.textContent = 'Nourishment Breakdown';
+  box.appendChild(bdTitle);
+
+  const rebuild = () => renderComboDetailIngredients(box, ingredients, rebuild);
+
+  renderComboDetailIngredients(box, ingredients, rebuild);
+
+  // Totals — kcal + every macro (image 2 bottom).
+  const totalsRow = document.createElement('div');
+  totalsRow.className = 'cd-totals';
+  const totalsLabel = document.createElement('span');
+  totalsLabel.textContent = 'Total';
+  const totalsKcal = document.createElement('span');
+  totalsKcal.className = 'cd-total-kcal';
+  totalsKcal.textContent = `${Math.round(totals.kcal)} kcal`;
+  totalsRow.append(totalsLabel, totalsKcal);
+  box.appendChild(totalsRow);
+
+  const totalsMacros = document.createElement('div');
+  totalsMacros.className = 'cd-macros';
+  totalsMacros.style.justifyContent = 'flex-end';
+  totalsMacros.innerHTML = `
+    <span style="color: var(--pro);">P: ${Math.round(totals.protein)}g</span>
+    <span style="color: var(--text-dim);">·</span>
+    <span style="color: var(--carb);">C: ${Math.round(totals.carbs)}g</span>
+    <span style="color: var(--text-dim);">·</span>
+    <span style="color: var(--fat);">F: ${Math.round(totals.fat)}g</span>
+  `;
+  box.appendChild(totalsMacros);
+
+  // Actions: primary Log All, then Close / Edit / Delete (all prior functionality kept).
+  const logAll = document.createElement('button');
+  logAll.className = 'btn-primary';
+  logAll.style.marginTop = '14px';
+  logAll.textContent = `Log All (${Math.round(totals.kcal)} kcal)`;
+  logAll.addEventListener('click', () => logCombo(combo));
+  box.appendChild(logAll);
+
+  const actions = document.createElement('div');
+  actions.className = 'cd-actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'log-action-btn';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => closeModalLayer('combo-detail-modal'));
+  const editBtn = document.createElement('button');
+  editBtn.className = 'log-action-btn blue';
+  editBtn.textContent = 'Edit';
+  editBtn.addEventListener('click', () => {
+    closeModalLayer('combo-detail-modal');
+    openComboBuilderView(combo.id);
+  });
+  const delBtn = document.createElement('button');
+  delBtn.className = 'log-action-btn danger';
+  delBtn.textContent = 'Delete';
+  delBtn.addEventListener('click', async () => {
+    const ok = await requestConfirmation(
+      'Delete Combo',
+      `Delete "${combo.name}" from the library? Logged meals are not affected.`
+    );
+    if (!ok) return;
+    await comboRepo.deleteCombo(combo.id);
+    openComboDetailId = null;
+    closeModalLayer('combo-detail-modal');
+    await renderIndex();
+    showToast(`Deleted combo "${combo.name}"`);
+  });
+  actions.append(closeBtn, editBtn, delBtn);
+  box.appendChild(actions);
+
+  openModalLayer('combo-detail-modal', () => {
+    if (openComboDetailId === combo.id) openComboDetailId = null;
+  });
+}
+
+function formatCreatedLabel(iso?: string): string {
+  if (!iso) return 'earlier';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 'earlier';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+    ' · ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
+}
+
+/** Ingredient rows with inline expansion (tap → per-100g profile + provenance). */
+function renderComboDetailIngredients(
+  box: HTMLElement,
+  ingredients: DetailIngredient[],
+  rebuild: () => void
+) {
+  box.querySelectorAll('.cd-ing-list').forEach(el => el.remove());
+
+  const anchor = box.querySelector('.combo-breakdown-title');
+  const list = document.createElement('div');
+  list.className = 'cd-ing-list';
+
+  if (ingredients.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'cd-empty-ing';
+    empty.style.cssText = 'font-size:12px;color:var(--text-dim);padding:4px 2px;';
+    empty.textContent = 'No valid ingredients left in this combo.';
+    list.appendChild(empty);
+  }
+
+  for (const ing of ingredients) {
+    const expanded = comboDetailExpanded.has(ing.food.id);
+    const row = document.createElement('div');
+    row.className = 'cd-ing' + (expanded ? ' expanded' : '');
+
+    const line = document.createElement('div');
+    line.className = 'cd-ing-line';
+    const left = document.createElement('div');
+    left.style.cssText = 'display:flex;flex-direction:column;min-width:0;gap:2px;';
+    const nm = document.createElement('span');
+    nm.className = 'cd-ing-name';
+    nm.textContent = ing.food.canonical_name;
+    const mac = document.createElement('span');
+    mac.className = 'cd-ing-sub';
+    mac.innerHTML = `
+      ${fmt1(ing.amount)}${ing.unit} ·
+      <span style="color: var(--pro);">P: ${Math.round(ing.nutrition.proteinG)}g</span>
+      · <span style="color: var(--carb);">C: ${Math.round(ing.nutrition.carbsG)}g</span>
+      · <span style="color: var(--fat);">F: ${Math.round(ing.nutrition.fatG)}g</span>
+    `;
+    left.append(nm, mac);
+    const kcalEl = document.createElement('span');
+    kcalEl.className = 'cd-ing-kcal';
+    kcalEl.textContent = `${Math.round(ing.nutrition.calories)} kcal`;
+    line.append(left, kcalEl);
+    row.appendChild(line);
+
+    if (expanded) {
+      const extra = document.createElement('div');
+      extra.className = 'cd-ing-extra';
+      extra.textContent =
+        `Per 100 ${ing.unit}: ${Math.round(ing.food.calories_per_100g || 0)} kcal · ` +
+        `P ${fmt1(ing.food.protein_per_100g)} · C ${fmt1(ing.food.carbs_per_100g)} · F ${fmt1(ing.food.fat_per_100g)}` +
+        (ing.food.water_per_100g ? ` · water ${fmt1(ing.food.water_per_100g)} ml` : '') +
+        ` · ${confidenceLabel(ing.food.confidence)} (${ing.food.source_type})`;
+      row.appendChild(extra);
     }
 
-    const expanded = comboBreakdownOpenId === combo.id;
+    row.addEventListener('click', () => {
+      if (comboDetailExpanded.has(ing.food.id)) comboDetailExpanded.delete(ing.food.id);
+      else comboDetailExpanded.add(ing.food.id);
+      rebuild();
+    });
+
+    list.appendChild(row);
+  }
+
+  if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(list, anchor.nextSibling);
+  else box.insertBefore(list, box.firstChild);
+}
+
+/* ----- Combo creation remake (§5d: full-screen builder with real amounts) ----- */
+
+function currentComboQuery(): string {
+  return (document.getElementById('combo-item-search') as HTMLInputElement | null)?.value.trim() || '';
+}
+
+function openComboBuilderView(editComboId: string | null) {
+  builderComboId = editComboId;
+  builderItems = [];
+
+  const previousView = currentViewId;
+  pushLayer(() => closeComboBuilderView(previousView));
+
+  document.body.classList.add('builder-open');
+  document.querySelectorAll('main section.view').forEach(v => v.classList.remove('active-view'));
+  const view = document.getElementById('view-combo-builder');
+  const titleEl = document.getElementById('combo-builder-title');
+  if (titleEl) titleEl.textContent = editComboId ? 'Edit Combo' : 'New Combo';
+  const nameInput = document.getElementById('combo-name-input') as HTMLInputElement | null;
+  if (nameInput) nameInput.value = '';
+
+  if (editComboId) {
+    comboRepo.getCombo(editComboId).then(async (combo) => {
+      if (!combo) {
+        showToast('That combo no longer exists');
+        closeLayer();
+        return;
+      }
+      if (nameInput) nameInput.value = combo.name;
+      builderItems = combo.items.map(i => ({ foodId: i.food_id, amountG: i.amount_g ?? i.amount_ml ?? 100 }));
+      await Promise.all([
+        renderComboBuilderItems(),
+        refreshComboBuilderTotals(),
+        renderComboSearchResults('')
+      ]);
+    });
+  } else {
+    renderComboBuilderItems();
+    refreshComboBuilderTotals();
+    renderComboSearchResults('');
+  }
+
+  if (view) {
+    view.classList.add('active-view');
+    animateViewIn(view, 'up');
+  }
+}
+
+function closeComboBuilderView(previousView: ViewId) {
+  document.body.classList.remove('builder-open');
+  document.getElementById('view-combo-builder')?.classList.remove('active-view');
+  tabController?.switchTabDirect(previousView);
+  builderComboId = null;
+  builderItems = [];
+}
+
+function setupComboBuilderHandlers() {
+  document.getElementById('btn-combo-back')?.addEventListener('click', () => closeLayer());
+
+  const search = document.getElementById('combo-item-search') as HTMLInputElement | null;
+  search?.addEventListener('input', () => renderComboSearchResults(search.value.trim()));
+
+  document.getElementById('btn-save-combo')?.addEventListener('click', saveComboFromBuilder);
+}
+
+async function renderComboSearchResults(query: string) {
+  const container = document.getElementById('combo-search-results');
+  if (!container) return;
+
+  const gen = ++builderSearchGen;
+  const results = query
+    ? await foodRepo.fuzzySearch(query, 40)
+    : await foodRepo.getAllFoods(60);
+  if (gen !== builderSearchGen) return;
+
+  container.innerHTML = '';
+  if (results.length === 0) {
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:12px;color:var(--text-dim);padding:4px;text-align:center;';
+    hint.textContent = 'No matching foods — log them first, then build combos.';
+    container.appendChild(hint);
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const food of results) {
+    const added = builderItems.some(i => i.foodId === food.id);
     const row = document.createElement('div');
-    row.className = 'combo-row' + (expanded ? ' expanded' : '');
+    row.className = 'log-item combo-add-row' + (added ? ' added' : '');
+    const main = document.createElement('div');
+    main.className = 'log-main';
+    const name = document.createElement('span');
+    name.className = 'log-name';
+    name.textContent = food.canonical_name;
+    const cal = document.createElement('span');
+    cal.className = 'log-cal';
+    cal.style.fontSize = '12px';
+    cal.textContent = food.calories_per_100g != null ? `${Math.round(food.calories_per_100g)} kcal/100g` : 'no data';
+    main.append(name, cal);
+    row.appendChild(main);
+
+    if (added) {
+      const badge = document.createElement('div');
+      badge.className = 'combo-chip';
+      badge.style.cssText = 'margin-top:2px;width:fit-content;';
+      badge.textContent = '✓ In Combo';
+      row.appendChild(badge);
+    }
+
+    row.addEventListener('click', () => addComboBuilderItem(food.id));
+    frag.appendChild(row);
+  }
+  container.appendChild(frag);
+}
+
+async function addComboBuilderItem(foodId: string) {
+  if (builderItems.some(i => i.foodId === foodId)) return;
+  builderItems.push({ foodId, amountG: 100 });
+  await Promise.all([
+    renderComboBuilderItems(),
+    refreshComboBuilderTotals(),
+    renderComboSearchResults(currentComboQuery())
+  ]);
+}
+
+function renderComboBuilderItems() {
+  const container = document.getElementById('combo-builder-items');
+  const label = document.getElementById('combo-items-label');
+  if (!container) return;
+
+  if (label) label.textContent = `INGREDIENTS (${builderItems.length})`;
+  container.innerHTML = '';
+
+  if (builderItems.length === 0) {
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:12px;color:var(--text-dim);padding:4px 2px;';
+    hint.textContent = 'Nothing yet — search above and tap foods to add them (100 g each to start).';
+    container.appendChild(hint);
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  builderItems.forEach((item, idx) => {
+    const food = builderFoodCache.get(item.foodId);
+    const ref = food ? foodRepo.toFoodReference(food) : null;
+    const nutrition = ref ? calculateNutrition(ref, item.amountG) : null;
+
+    const row = document.createElement('div');
+    row.className = 'log-item combo-build-row';
 
     const main = document.createElement('div');
     main.className = 'log-main';
     const name = document.createElement('span');
     name.className = 'log-name';
-    name.textContent = `🍱 ${combo.name}`;
-    const cal = document.createElement('span');
-    cal.className = 'log-cal';
-    cal.style.fontSize = '13px';
-    cal.textContent = `${Math.round(totalKcal)} kcal`;
-    main.append(name, cal);
+    name.textContent = food?.canonical_name || 'Loading…';
+    const remove = document.createElement('button');
+    remove.className = 'combo-remove-btn';
+    remove.title = 'Remove from combo';
+    remove.textContent = '×';
+    remove.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      builderItems.splice(idx, 1);
+      await Promise.all([
+        renderComboBuilderItems(),
+        refreshComboBuilderTotals(),
+        renderComboSearchResults(currentComboQuery())
+      ]);
+    });
+    main.append(name, remove);
     row.appendChild(main);
 
-    const countLine = document.createElement('div');
-    countLine.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;';
-    countLine.textContent = `${combo.items.length} item(s) · tap for breakdown`;
-    row.appendChild(countLine);
-
-    if (expanded) {
-      const breakdown = document.createElement('div');
-      breakdown.className = 'combo-breakdown';
-
-      const title = document.createElement('div');
-      title.className = 'combo-breakdown-title';
-      title.textContent = 'Nourishment Breakdown';
-      breakdown.appendChild(title);
-
-      for (const ing of ingredients) {
-        const nutrition = calculateNutrition(ing.ref, ing.amountG ?? ing.amountMl ?? 100);
-        const line = document.createElement('div');
-        line.className = 'combo-ingredient';
-        const left = document.createElement('div');
-        left.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
-        const nm = document.createElement('span');
-        nm.className = 'combo-ing-name';
-        nm.textContent = ing.name;
-        const mac = document.createElement('span');
-        mac.className = 'combo-ing-macros';
-        mac.textContent =
-          `${Math.round(ing.amountG ?? ing.amountMl ?? 100)}${ing.amountMl != null ? 'ml' : 'g'} · ` +
-          `P ${Math.round(nutrition.proteinG)} C ${Math.round(nutrition.carbsG)} F ${Math.round(nutrition.fatG)}`;
-        left.append(nm, mac);
-        const kcalEl = document.createElement('span');
-        kcalEl.className = 'combo-ing-kcal';
-        kcalEl.textContent = `${Math.round(nutrition.calories)} kcal`;
-        line.append(left, kcalEl);
-        breakdown.appendChild(line);
-      }
-
-      const totalRow = document.createElement('div');
-      totalRow.className = 'combo-total-row';
-      totalRow.innerHTML = `<span>Total</span><span style="color: var(--accent-glow);">${Math.round(totalKcal)} kcal</span>`;
-      breakdown.appendChild(totalRow);
-
-      const actions = document.createElement('div');
-      actions.className = 'combo-actions';
-
-      const closeBtn = document.createElement('button');
-      closeBtn.className = 'log-action-btn';
-      closeBtn.textContent = 'Close';
-      closeBtn.addEventListener('click', (e) => { e.stopPropagation(); comboBreakdownOpenId = null; renderComboList(); });
-      actions.appendChild(closeBtn);
-
-      const logBtn = document.createElement('button');
-      logBtn.className = 'log-action-btn blue';
-      logBtn.textContent = 'Log All';
-      logBtn.addEventListener('click', async (e) => { e.stopPropagation(); await logCombo(combo); });
-      actions.appendChild(logBtn);
-
-      const editBtn = document.createElement('button');
-      editBtn.className = 'log-action-btn blue';
-      editBtn.textContent = 'Edit';
-      editBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        enterComboBuilder(combo.id, combo.name);
-        // Prefill the item chips with the saved template.
-        pendingComboFoodIds = combo.items.map(i => i.food_id);
-        renderComboBuilder();
-      });
-      actions.appendChild(editBtn);
-
-      const delBtn = document.createElement('button');
-      delBtn.className = 'log-action-btn danger';
-      delBtn.textContent = 'Delete';
-      delBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await comboRepo.deleteCombo(combo.id);
-        comboBreakdownOpenId = null;
-        await renderComboList();
-        showToast(`Deleted combo "${combo.name}"`);
-      });
-      actions.appendChild(delBtn);
-
-      breakdown.appendChild(actions);
-      row.appendChild(breakdown);
-    }
-
-    row.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('button')) return;
-      comboBreakdownOpenId = comboBreakdownOpenId === combo.id ? null : combo.id;
-      renderComboList();
+    const controls = document.createElement('div');
+    controls.style.cssText = 'display:flex;align-items:center;gap:8px;padding-left:2px;';
+    const amount = document.createElement('input');
+    amount.type = 'number';
+    amount.min = '1';
+    amount.step = 'any';
+    amount.value = String(item.amountG);
+    amount.className = 'combo-amount-input';
+    amount.addEventListener('change', async () => {
+      const v = parseFloat(amount.value);
+      item.amountG = v > 0 ? v : 100;
+      if (!(v > 0)) amount.value = '100';
+      await refreshComboBuilderTotals();
+      await renderComboBuilderItems();
     });
+    const unit = document.createElement('span');
+    unit.style.cssText = 'font-size:11px;color:var(--text-dim);font-weight:700;';
+    unit.textContent = 'g/ml';
+    const kcal = document.createElement('span');
+    kcal.className = 'combo-row-kcal';
+    kcal.textContent = nutrition ? `${Math.round(nutrition.calories)} kcal` : '—';
+    controls.append(amount, unit, kcal);
+    row.appendChild(controls);
 
-    return row;
-  };
+    frag.appendChild(row);
 
-  const rows = await Promise.all(combos.map(buildRow));
-  rows.forEach(row => frag.appendChild(row));
-  if (gen !== comboListGen) return; // superseded by a newer render
-  listEl.innerHTML = '';
-  listEl.appendChild(frag);
+    // Warm the cache for rows still loading their name.
+    if (!food) resolveFoodCached(item.foodId).then(f => {
+      if (f) renderComboBuilderItems();
+    });
+  });
+  container.appendChild(frag);
 }
 
-/** Open the Food Library with the combo editor prefilled (journal "Edit Combo"). */
-async function openEditComboTemplate(comboId: string) {
-  const combo = await comboRepo.getCombo(comboId).catch(() => null);
-  if (!combo) {
-    showToast('That combo no longer exists');
+async function refreshComboBuilderTotals() {
+  const gen = ++builderTotalsGen;
+  let kcal = 0, pro = 0, carb = 0, fat = 0;
+  for (const item of builderItems) {
+    const food = await resolveFoodCached(item.foodId);
+    if (!food) continue;
+    const n = calculateNutrition(foodRepo.toFoodReference(food), item.amountG);
+    kcal += n.calories;
+    pro += n.proteinG;
+    carb += n.carbsG;
+    fat += n.fatG;
+  }
+  if (gen !== builderTotalsGen) return;
+
+  const kcalEl = document.getElementById('combo-total-kcal');
+  const macrosEl = document.getElementById('combo-total-macros');
+  if (kcalEl) kcalEl.textContent = String(Math.round(kcal));
+  if (macrosEl) {
+    macrosEl.innerHTML = `
+      <span style="color: var(--pro);">P: ${Math.round(pro)}g</span> ·
+      <span style="color: var(--carb);">C: ${Math.round(carb)}g</span> ·
+      <span style="color: var(--fat);">F: ${Math.round(fat)}g</span>
+    `;
+  }
+}
+
+async function saveComboFromBuilder() {
+  const nameInput = document.getElementById('combo-name-input') as HTMLInputElement | null;
+  const name = nameInput?.value.trim() || '';
+  if (!name || builderItems.length === 0) {
+    showToast('Give the combo a name and at least one ingredient');
     return;
   }
-  openLibraryModal();
-  enterComboBuilder(combo.id, combo.name);
-  pendingComboFoodIds = combo.items.map(i => i.food_id);
-  await renderComboBuilder();
+  const items = builderItems.map(i => ({ food_id: i.foodId, amount_g: i.amountG, amount_ml: null }));
+  try {
+    if (builderComboId) {
+      await comboRepo.updateCombo(builderComboId, name, items);
+      showToast(`Updated combo "${name}"`);
+    } else {
+      await comboRepo.createCombo(name, items);
+      showToast(`Saved combo "${name}"`);
+    }
+    closeLayer();
+    await renderIndex();
+  } catch (err) {
+    console.error('Combo save failed:', err);
+    showToast('Could not save the combo — try again');
+  }
 }
 
 /** Expand a combo through the deterministic domain path and log every ingredient.
@@ -1042,49 +1609,9 @@ async function logCombo(combo: Awaited<ReturnType<ComboRepository['getAllCombos'
     }
   }
 
-  closeModalLayer('journal-modal');
+  closeModalLayer('combo-detail-modal');
   await refreshStateForDate(date);
   showToast(`Logged combo "${combo.name}" · ${Math.round(totalCal)} kcal`);
-}
-
-function setupComboHandlers() {
-  document.getElementById('btn-new-combo')?.addEventListener('click', () => enterComboBuilder(null));
-
-  document.getElementById('btn-save-combo')?.addEventListener('click', async () => {
-    const nameInput = document.getElementById('combo-name-input') as HTMLInputElement | null;
-    const name = nameInput?.value.trim() || '';
-    if (!name || pendingComboFoodIds.length === 0) {
-      showToast('Pick a name and at least one food first');
-      return;
-    }
-    try {
-      if (editingComboId) {
-        await comboRepo.updateCombo(
-          editingComboId,
-          name,
-          pendingComboFoodIds.map(food_id => ({ food_id, amount_g: 100, amount_ml: null }))
-        );
-        showToast(`Updated combo "${name}"`);
-      } else {
-        await comboRepo.createCombo(
-          name,
-          pendingComboFoodIds.map(food_id => ({ food_id, amount_g: 100, amount_ml: null }))
-        );
-        showToast(`Saved combo "${name}"`);
-      }
-      exitComboBuilder();
-      await renderComboList();
-    } catch (err) {
-      console.error('Combo save failed:', err);
-      showToast('Could not save the combo — try again');
-    }
-  });
-
-  document.getElementById('btn-cancel-combo')?.addEventListener('click', () => {
-    exitComboBuilder();
-    const query = (document.getElementById('journal-search') as HTMLInputElement | null)?.value.trim() || '';
-    foodRepo.fuzzySearch(query, 20).then(renderJournalResults);
-  });
 }
 
 // ---------- Dashboard Text Bar (always-visible text logging, HANDOVER §5a item 2) ----------
@@ -1674,13 +2201,13 @@ function setupScannerHandlers() {
   });
 }
 
-// ---------- Journal (§5c-D: day-grouped log list with times + totals) ----------
+// ---------- Day logs (§5c-D day-grouped list; §5d: selected-day-only window,
+//            newest/oldest day ordering, full water-row actions) ----------
 
 /**
- * Build the journal groups for the window ending at the selected date.
- * Four batched range queries (logs, water, totals, daily records); logged
- * combos (ingredient logs sharing one combo observation) collapse into a
- * single expandable row per group.
+ * Build the log groups for the visible window. §5d: the window is JUST the
+ * selected date by default — picking Saturday never shows Friday below it —
+ * and "Load Older Days" pages the window back 14 days at a time.
  */
 async function renderJournalIfVisible() {
   if (currentViewId !== 'history') return;
@@ -1689,7 +2216,7 @@ async function renderJournalIfVisible() {
 
   const gen = ++journalRenderGen;
   const selDate = store.getState().selectedDate;
-  const start = shiftDate(selDate, -(journalDaysBack - 1));
+  const start = shiftDate(selDate, -(journalDaysShown - 1));
 
   try {
     const [logs, waters, totalsByDate, records] = await Promise.all([
@@ -1778,7 +2305,8 @@ async function renderJournalIfVisible() {
       container,
       selectedDate: selDate,
       groups,
-      hasMoreDays: datesDesc.length > 0 || journalDaysBack > JOURNAL_PAGE_DAYS,
+      hasMoreDays: true,
+      dayOrder: journalDayOrder,
       expandedLogId,
       expandedComboKeys,
       selection,
@@ -1803,9 +2331,29 @@ async function renderJournalIfVisible() {
         showToast('Log deleted');
       },
       onDeleteWater: async (water) => {
+        const ok = await requestConfirmation('Delete Water', `Delete this ${Math.round(water.amount_ml)}ml water entry?`);
+        if (!ok) return;
         await waterRepo.deleteWaterLog(water.id);
+        expandedLogId = null;
         await refreshStateForDate(store.getState().selectedDate);
         showToast(`Deleted ${Math.round(water.amount_ml)}ml water entry`);
+      },
+      onDuplicateWater: async (water) => {
+        // §5d: water duplicates exactly like food — same amount, same day.
+        await waterRepo.insertWaterLog({
+          date: water.date,
+          amount_ml: water.amount_ml,
+          source: water.source as any,
+          note: water.note ?? undefined
+        });
+        expandedLogId = null;
+        await refreshStateForDate(store.getState().selectedDate);
+        showToast(`Duplicated +${Math.round(water.amount_ml)}ml water`);
+      },
+      onEditWater: (water) => openWaterEditModal(water),
+      onToggleDayOrder() {
+        journalDayOrder = journalDayOrder === 'desc' ? 'asc' : 'desc';
+        renderJournalIfVisible();
       },
       onEditDayNote: (date) => openDayNoteModal(date),
       onToggleLowAccuracy: async (date, current) => {
@@ -1866,7 +2414,7 @@ async function renderJournalIfVisible() {
         showToast(`Deleted ${ids.length} item(s)`);
       },
       onLoadMore() {
-        journalDaysBack += JOURNAL_PAGE_DAYS;
+        journalDaysShown += JOURNAL_PAGE_DAYS;
         renderJournalIfVisible();
       },
       onToggleCombo(key) {
@@ -1877,7 +2425,7 @@ async function renderJournalIfVisible() {
       onDeleteComboLogs: async (cluster) => {
         const ok = await requestConfirmation(
           'Delete Combo',
-          `Delete all ${cluster.logs.length} items of "${cluster.name}" from the journal?`
+          `Delete all ${cluster.logs.length} items of "${cluster.name}" from the logs?`
         );
         if (!ok) return;
         for (const log of cluster.logs) await logRepo.deleteLog(log.id);
@@ -1886,7 +2434,8 @@ async function renderJournalIfVisible() {
         showToast(`Deleted combo "${cluster.name}"`);
       },
       onEditComboTemplate: (comboId) => {
-        openEditComboTemplate(comboId);
+        // §5d: editing now opens the full-screen combo builder.
+        openComboBuilderView(comboId);
       }
     });
   } catch (err) {
@@ -1920,6 +2469,85 @@ function setupDayNoteHandlers() {
 }
 
 let noteTargetDate = getTodayDateString();
+
+// ---------- Water edit (§5d: amount + date ONLY — no macros, they make no sense) ----------
+
+function openWaterEditModal(water: JournalWater) {
+  const idEl = document.getElementById('water-edit-id') as HTMLInputElement | null;
+  const amountEl = document.getElementById('water-edit-amount') as HTMLInputElement | null;
+  const dateEl = document.getElementById('water-edit-date') as HTMLInputElement | null;
+  if (!idEl || !amountEl || !dateEl) return;
+  idEl.value = water.id;
+  amountEl.value = String(Math.round(water.amount_ml));
+  dateEl.value = water.date;
+  openModalLayer('water-edit-modal');
+}
+
+function setupWaterEditHandlers() {
+  document.getElementById('btn-water-edit-cancel')?.addEventListener('click', () => closeModalLayer('water-edit-modal'));
+
+  document.getElementById('btn-water-edit-ok')?.addEventListener('click', async () => {
+    const idEl = document.getElementById('water-edit-id') as HTMLInputElement | null;
+    const amountEl = document.getElementById('water-edit-amount') as HTMLInputElement | null;
+    const dateEl = document.getElementById('water-edit-date') as HTMLInputElement | null;
+    const id = idEl?.value;
+    const amount = parseFloat(amountEl?.value || '');
+    const date = dateEl?.value;
+
+    if (!id) return;
+    if (!(amount > 0)) {
+      showToast('Enter a valid water amount');
+      return;
+    }
+    if (!date) {
+      showToast('Pick a date');
+      return;
+    }
+
+    const current = await waterRepo.getWaterById(id);
+    await waterRepo.updateWaterLog(id, { amount_ml: amount, date });
+
+    closeModalLayer('water-edit-modal');
+    expandedLogId = null;
+    historyWindowKey = '';
+    await refreshStateForDate(date);
+    if (current && current.date !== date) {
+      await refreshStateForDate(current.date);
+    }
+    showToast(`Water entry updated · ${Math.round(amount)}ml on ${date}`);
+  });
+}
+
+// ---------- Delete All Data (§5d: complete local wipe, double-guarded) ----------
+
+function setupDeleteAllHandler() {
+  document.getElementById('btn-delete-all')?.addEventListener('click', async () => {
+    const ok = await requestConfirmation(
+      'Delete All Data',
+      'This permanently erases EVERYTHING — foods, logs, water entries, combos, goals and settings — from this device. It cannot be undone. Export a backup first! Continue?'
+    );
+    if (!ok) return;
+
+    try {
+      if (dbManager.isFallback()) {
+        dbManager.replaceFallbackStore({});
+      } else {
+        const db = await dbManager.getConnection();
+        await wipeAllData(db);
+        await dbManager.saveWebStore();
+      }
+
+      historyWindowKey = '';
+      builderFoodCache.clear();
+      await refreshStateForDate(store.getState().selectedDate);
+      await renderIndex();
+      showToast('All data deleted');
+    } catch (err) {
+      console.error('Delete all failed:', err);
+      showToast('Could not delete all data — try again');
+    }
+  });
+}
 
 function openDayNoteModal(date: string) {
   noteTargetDate = date;
@@ -1986,8 +2614,10 @@ async function openEditView(log: JournalFoodLog) {
   if (!editView) return;
 
   pushLayer(() => switchToBaseView(previousView));
-  [document.getElementById('today'), document.getElementById('history'), document.getElementById('view-goals')]
-    .forEach(v => v?.classList.remove('active-view'));
+  document.querySelectorAll('main section.view').forEach(v => {
+    if (v.id !== 'view-edit') v.classList.remove('active-view');
+  });
+  document.querySelectorAll('.nav-btn').forEach(b => b?.classList.remove('active'));
   // §5c-A: genuinely full-screen — dock + settings gear hidden, slide-up entrance.
   document.body.classList.add('edit-open');
   editView.classList.add('active-view');

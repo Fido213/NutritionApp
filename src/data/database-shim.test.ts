@@ -441,4 +441,45 @@ describe('createFallbackConnection', () => {
     );
     expect(rows.map(r => r.id)).toEqual(['w1', 'w2']);
   });
+
+  // §5d additions: water edit + Delete All Data must survive fallback mode.
+  it('updates a water entry by id (amount and/or date only)', async () => {
+    const store = createStore();
+    const db = createFallbackConnection(store);
+
+    store.setTable('water_logs', [
+      { id: 'w1', date: '2026-08-01', amount_ml: 250, source: 'explicit', food_log_id: null, note: null, created_at: 'a' }
+    ]);
+
+    await db.run(`UPDATE water_logs SET amount_ml = ?, date = ? WHERE id = ?`, [750, '2026-08-05', 'w1']);
+
+    const rows = await queryValues(db, `SELECT * FROM water_logs WHERE id = ?`, ['w1']);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].amount_ml).toBe(750);
+    expect(rows[0].date).toBe('2026-08-05');
+    expect(rows[0].source).toBe('explicit'); // untouched — amount/date only
+  });
+
+  it('wipes every row on DELETE without a WHERE clause (Delete All Data)', async () => {
+    const store = createStore();
+    const db = createFallbackConnection(store);
+
+    store.setTable('food_logs', [
+      { id: 'l1', date: '2026-08-01', calories: 100 },
+      { id: 'l2', date: '2026-08-02', calories: 200 }
+    ]);
+    store.setTable('water_logs', [
+      { id: 'w1', date: '2026-08-01', amount_ml: 250, source: 'explicit' }
+    ]);
+
+    await db.run(`DELETE FROM food_logs`);
+    await db.run(`DELETE FROM water_logs`);
+
+    expect(await queryValues(db, `SELECT * FROM food_logs`)).toHaveLength(0);
+    expect(await queryValues(db, `SELECT * FROM water_logs`)).toHaveLength(0);
+    // Other tables are untouched.
+    store.setTable('foods', [{ id: 'f1', canonical_name: 'Rice' }]);
+    await db.run(`DELETE FROM foods`);
+    expect(await queryValues(db, `SELECT * FROM foods`)).toHaveLength(0);
+  });
 });

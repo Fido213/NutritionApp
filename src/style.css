@@ -147,9 +147,11 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(76px, calc(en
 }
 
 /* Desktop Responsive Layout */
-/* Edit screen = REAL full-screen view (§5c-A): dock + settings gear hidden */
+/* Edit screen + combo builder = REAL full-screen views (§5c-A / §5d): dock + settings gear hidden */
 body.edit-open .dock,
-body.edit-open .sys-btn-top { display: none; }
+body.edit-open .sys-btn-top,
+body.builder-open .dock,
+body.builder-open .sys-btn-top { display: none; }
 
 /* Dashboard day header above the ring card (§5b items 10–11) */
 .day-header { display: flex; justify-content: space-between; align-items: center; padding: 0 4px; }
@@ -462,3 +464,98 @@ body.edit-open .sys-btn-top { display: none; }
     pointer-events: none;
     z-index: 10;
 }
+
+/* ============ Index screen (§5d — former Journal modal) ============ */
+.index-header h2 { font-size: 26px; font-weight: 900; letter-spacing: 1.5px; }
+.index-subtitle { font-size: 11px; color: var(--text-dim); font-weight: 800; letter-spacing: 2.5px; text-transform: uppercase; margin-top: 2px; }
+.index-searchbar input {
+    width: 100%;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 13px 18px;
+    color: var(--text);
+    outline: none;
+    font-family: inherit;
+    font-size: 14px;
+}
+.index-searchbar input:focus { border-color: var(--accent-glow); }
+.index-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.index-sort {
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    outline: none;
+    max-width: 48%;
+}
+.index-empty { color: var(--text-dim); font-size: 13px; text-align: center; padding: 24px 12px; }
+.index-list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.conf-chip { color: var(--text-dim); background: rgba(0,0,0,0.3); border-radius: 4px; padding: 0 5px; }
+.index-food-details { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+
+/* Combo detail modal (§5d clean modal — image-2 layout) */
+.combo-detail-box { display: flex; flex-direction: column; max-height: 82vh; overflow-y: auto; }
+.cd-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.cd-name { font-size: 20px; font-weight: 800; overflow-wrap: anywhere; }
+.cd-time { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.cd-kcal { font-size: 30px; font-weight: 800; line-height: 1; }
+.cd-unit { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--text-dim); text-align: right; }
+.cd-macros { display: flex; gap: 6px; font-size: 13px; font-weight: 700; margin-top: 4px; }
+.cd-divider { border-top: 1px solid var(--border); margin: 14px 0 12px; }
+.cd-ing-list { display: flex; flex-direction: column; gap: 6px; }
+.cd-ing { display: flex; flex-direction: column; gap: 4px; background: rgba(0,0,0,0.2); border-radius: 10px; padding: 9px 12px; cursor: pointer; border: 1px solid transparent; }
+.cd-ing.expanded { border-color: var(--border); }
+.cd-ing-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cd-ing-name { font-size: 14px; font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
+.cd-ing-sub { font-size: 11px; color: var(--text-dim); }
+.cd-ing-sub span { font-weight: 700; }
+.cd-ing-kcal { font-size: 14px; font-weight: 800; white-space: nowrap; }
+.cd-ing-extra { font-size: 11px; color: var(--text-dim); line-height: 1.6; border-top: 1px dashed var(--border); padding-top: 6px; overflow-wrap: anywhere; }
+.cd-totals { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; font-weight: 800; }
+.cd-total-kcal { color: var(--accent-glow); font-size: 16px; }
+.cd-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+
+/* Combo builder (§5d full-screen remake) */
+.combo-totals-card { display: flex; flex-direction: column; gap: 10px; }
+.combo-totals { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; background: rgba(0,0,0,0.25); border-radius: 12px; padding: 10px 14px; }
+.combo-totals-left { display: flex; align-items: baseline; gap: 6px; }
+#combo-total-kcal { font-size: 28px; font-weight: 900; color: var(--accent-glow); }
+.combo-totals-unit { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--text-dim); }
+.combo-totals-macros { font-size: 13px; font-weight: 700; }
+.combo-builder-label { font-size: 10px; font-weight: 900; letter-spacing: 1.5px; color: var(--text-dim); }
+.combo-add-row.added { border-color: var(--pro); }
+.combo-build-row .log-main { pointer-events: auto; }
+.combo-remove-btn { background: transparent; border: none; color: var(--warn); font-size: 18px; font-weight: 900; cursor: pointer; padding: 0 4px; line-height: 1; }
+.combo-amount-input {
+    width: 84px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: #fff;
+    padding: 7px 9px;
+    border-radius: 8px;
+    outline: none;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    text-align: right;
+}
+.combo-row-kcal { margin-left: auto; font-size: 12px; font-weight: 800; color: var(--accent-glow); }
+
+/* Dashboard score badge (§5d: bare number, tier-coloured text + border) */
+#dash-score-badge {
+    background: transparent !important;
+    font-size: 19px;
+    font-weight: 900;
+    padding: 1px 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+
+/* Day-order toggle (§5d logs header) */
+.day-order-btn { background: var(--surface-light); border: 1px solid var(--border); color: var(--text-dim); padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 12px; cursor: pointer; font-family: inherit; }
+.day-order-btn.active { color: var(--accent-glow); border-color: var(--accent-glow); }

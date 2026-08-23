@@ -73,6 +73,28 @@ export class WaterRepository {
     return out;
   }
 
+  async getWaterById(id: string): Promise<WaterLog | null> {
+    const res = await this.db.query(`SELECT * FROM water_logs WHERE id = ?`, [id]);
+    return res.values && res.values.length > 0 ? (res.values[0] as WaterLog) : null;
+  }
+
+  /** Edit a water entry — only the amount and/or the date (Index §5d water UX). */
+  async updateWaterLog(id: string, updates: Partial<Pick<WaterLog, 'amount_ml' | 'date'>>): Promise<void> {
+    const setClauses: string[] = [];
+    const values: any[] = [];
+    if (updates.amount_ml !== undefined) {
+      setClauses.push(`amount_ml = ?`);
+      values.push(updates.amount_ml);
+    }
+    if (updates.date !== undefined) {
+      setClauses.push(`date = ?`);
+      values.push(updates.date);
+    }
+    if (setClauses.length === 0) return;
+    values.push(id);
+    await this.db.run(`UPDATE water_logs SET ${setClauses.join(', ')} WHERE id = ?`, values);
+  }
+
   async deleteWaterLog(id: string): Promise<void> {
     await this.db.run(`DELETE FROM water_logs WHERE id = ?`, [id]);
   }
