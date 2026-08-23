@@ -156,6 +156,12 @@ Core principle: **Gemma interprets. Code calculates. SQLite remembers.**
   - Nav internals: `ViewId` + TAB_ORDER include 'index'; `switchTabInternal` assigns `currentViewId` before data loads (renderIndex guards on it); openEditView hides views generically via querySelectorAll.
   - Tests: shim +2 (water UPDATE amount/date by id; no-WHERE DELETE wipes table), sqlite-real +3 (`getAllFoods` newest-first ordering, `updateWaterLog` amount/date-only + no-op safety, `wipeAllData` clears every backup table then stays usable). Suite now **262 tests, 18 files**.
 
+- **Pass 20 follow-up — first user feedback round (4 fixes, installed via adb, no on-app testing per user):**
+  - **Combo-save false error (user: "error everytime i save a combo but in the end it works"):** `ComboRepository.createCombo/updateCombo` now run through a shared `withTransaction` helper that tolerates connections which cannot hold a manual transaction across run() calls (benign "no transaction is active" COMMIT state warned + treated as committed — same contract as the pass-18 restore fix); ROLLBACK is best-effort. `saveComboFromBuilder` additionally verifies persistence against the DB when the save path throws before showing any error — a combo that actually landed never surfaces a failure toast.
+  - **Dock:** INDEX kept in the dock; dock rebuilt as a grid (`grid-template-columns: 1fr 1fr 96px 1fr`) so the scan circle is EXACTLY centered at 50% width regardless of label widths; desktop ≥768px overrides back to the vertical flex rail (`display:flex`).
+  - **Dashboard header:** score moved from the right edge to sit directly NEXT to the date (`.day-header` flex-start + 12px gap, baseline-aligned).
+  - **Imports:** CSV import no longer auto-sets `daily_records.low_accuracy` on split/reconstructed days (the 0.5 library confidence on split rows remains as the estimate marker); existing flags untouched.
+
 ## 3. Verification status
 
 | Check | Result |

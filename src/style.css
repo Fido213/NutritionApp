@@ -102,7 +102,9 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(76px, calc(en
     cursor: pointer;
 }
 
-/* Navigation Dock & Circular Centered Scan Button */
+/* Navigation Dock & Circular Centered Scan Button.
+   §5d: 4 items (DASH · INDEX · scan · LOGS) on a grid whose middle column is
+   exactly centered — the scan circle always sits at 50% width. */
 .dock {
     position: fixed;
     bottom: 0;
@@ -112,11 +114,12 @@ main { flex: 1; overflow-y: auto; position: relative; padding: max(76px, calc(en
     border-top: 1px solid var(--border);
     background: rgba(18, 18, 18, 0.95);
     backdrop-filter: blur(10px);
-    display: flex;
-    justify-content: space-around;
+    display: grid;
+    grid-template-columns: 1fr 1fr 96px 1fr;
     align-items: center;
+    justify-items: center;
     z-index: 100;
-    padding: 0 20px;
+    padding: 0;
 }
 .nav-btn { background: none; border: none; color: var(--text-dim); font-size: 14px; font-weight: 700; cursor: pointer; padding: 10px; transition: color 0.2s; }
 .nav-btn.active { color: var(--accent-glow); }
@@ -153,8 +156,8 @@ body.edit-open .sys-btn-top,
 body.builder-open .dock,
 body.builder-open .sys-btn-top { display: none; }
 
-/* Dashboard day header above the ring card (§5b items 10–11) */
-.day-header { display: flex; justify-content: space-between; align-items: center; padding: 0 4px; }
+/* Dashboard day header above the ring card (§5b items 10–11 / §5d: score sits NEXT to the date) */
+.day-header { display: flex; justify-content: flex-start; align-items: baseline; gap: 12px; padding: 0 4px; }
 .dash-date { font-size: 15px; font-weight: 800; color: var(--text); }
 #dash-score-badge { font-weight: 800; }
 
@@ -163,7 +166,7 @@ body.builder-open .sys-btn-top { display: none; }
 
 @media (min-width: 768px) {
     body { flex-direction: row; }
-    .dock { width: 80px; height: 100vh; top: 0; flex-direction: column; border-top: none; border-right: 1px solid var(--border); justify-content: center; gap: 40px; padding: 0; }
+    .dock { display: flex; width: 80px; height: 100vh; top: 0; flex-direction: column; border-top: none; border-right: 1px solid var(--border); justify-content: center; gap: 40px; padding: 0; }
     .scan-btn { position: relative; top: auto; bottom: auto; left: auto; transform: none; width: 50px; height: 50px; margin: 0 auto; }
     .scan-wrapper { width: auto; height: auto; display: flex; justify-content: center; }
     main { padding-left: 100px; padding-bottom: 16px; max-width: 1200px; margin: 0 auto; }

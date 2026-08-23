@@ -1537,20 +1537,39 @@ async function saveComboFromBuilder() {
     return;
   }
   const items = builderItems.map(i => ({ food_id: i.foodId, amount_g: i.amountG, amount_ml: null }));
+
+  let errored: unknown = null;
   try {
-    if (builderComboId) {
-      await comboRepo.updateCombo(builderComboId, name, items);
-      showToast(`Updated combo "${name}"`);
-    } else {
-      await comboRepo.createCombo(name, items);
-      showToast(`Saved combo "${name}"`);
-    }
-    closeLayer();
-    await renderIndex();
+    if (builderComboId) await comboRepo.updateCombo(builderComboId, name, items);
+    else await comboRepo.createCombo(name, items);
   } catch (err) {
-    console.error('Combo save failed:', err);
-    showToast('Could not save the combo — try again');
+    errored = err;
+    console.error('Combo save reported an error:', err);
   }
+
+  // Belt & suspenders: some connections throw AFTER the writes already landed
+  // (spurious COMMIT state) — verify against the DB before declaring failure,
+  // so the user never sees an error for a combo that actually saved.
+  if (errored) {
+    let persisted = false;
+    try {
+      if (builderComboId) {
+        const check = await comboRepo.getCombo(builderComboId);
+        persisted = !!check && check.name === name && check.items.length === items.length;
+      } else {
+        const all = await comboRepo.getAllCombos();
+        persisted = all.some(c => c.name === name && c.items.length === items.length);
+      }
+    } catch { /* verification itself failed → treat as a real failure */ }
+    if (!persisted) {
+      showToast('Could not save the combo — try again');
+      return;
+    }
+  }
+
+  showToast(`${builderComboId ? 'Updated' : 'Saved'} combo "${name}"`);
+  closeLayer();
+  await renderIndex();
 }
 
 /** Expand a combo through the deterministic domain path and log every ingredient.
@@ -2733,7 +2752,6 @@ function setupImportHandlers() {
     }
 
     let inserted = 0;
-    const splitDays = new Set<string>();
     for (const row of rows) {
       const date = formatDateISO(row.date);
       const normalized = normalizeFoodName(row.foodName);
@@ -2775,15 +2793,10 @@ function setupImportHandlers() {
         });
       }
 
-      // §5c-4: days reconstructed from equal-split legacy aggregates are
-      // estimates — flag them so the new low-accuracy UI/export shows it.
-      if (row.estimatedSplit) splitDays.add(date);
+      // §5d feedback: imported days are NOT auto-flagged low-accuracy anymore
+      // (split rows keep their 0.5 library confidence as the estimate marker).
 
       inserted++;
-    }
-
-    for (const date of splitDays) {
-      await dailyRecordRepo.setLowAccuracy(date, true);
     }
 
     await importRepo.recordImport({
