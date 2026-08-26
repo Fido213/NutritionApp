@@ -58,6 +58,31 @@ function switchToBaseView(viewId: ViewId) {
 export function setupEditHandlers() {
   document.getElementById('btn-edit-back')?.addEventListener('click', () => closeLayer());
 
+  // Auto-scale the visible macro fields when the amount changes — so the
+  // edit-cal/pro/carb/fat inputs stay in sync with the amount multiplier.
+  // Direct macro edits are preserved (user can override after).
+  const syncMacrosFromAmount = () => {
+    const read = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value || '';
+    const baseAmount = parseFloat(read('base-amount')) || 100;
+    const eatenAmount = parseFloat(read('eaten-amount')) || 0;
+    if (!(baseAmount > 0 && eatenAmount > 0)) return;
+    const multiplier = eatenAmount / baseAmount;
+    const set = (id: string, v: number) => {
+      const el = document.getElementById(id) as HTMLInputElement | null;
+      if (el) el.value = String(Math.round(v * multiplier));
+    };
+    const baseCal = parseFloat(read('base-cal')) || 0;
+    const basePro = parseFloat(read('base-pro')) || 0;
+    const baseCarb = parseFloat(read('base-carb')) || 0;
+    const baseFat = parseFloat(read('base-fat')) || 0;
+    set('edit-cal', baseCal);
+    set('edit-pro', basePro);
+    set('edit-carb', baseCarb);
+    set('edit-fat', baseFat);
+  };
+  document.getElementById('base-amount')?.addEventListener('input', syncMacrosFromAmount);
+  document.getElementById('eaten-amount')?.addEventListener('input', syncMacrosFromAmount);
+
   document.getElementById('btn-save-edit')?.addEventListener('click', async () => {
     const idEl = document.getElementById('edit-log-id') as HTMLInputElement | null;
     const logId = idEl?.value;
@@ -70,17 +95,17 @@ export function setupEditHandlers() {
 
     const baseAmount = parseFloat(read('base-amount')) || 100;
     const eatenAmount = parseFloat(read('eaten-amount')) || 0;
-    const baseCal = parseFloat(read('base-cal')) || 0;
-    const basePro = parseFloat(read('base-pro')) || 0;
-    const baseCarb = parseFloat(read('base-carb')) || 0;
-    const baseFat = parseFloat(read('base-fat')) || 0;
 
-    // Amount multiplier: scale the stored base macros to the new eaten amount
-    const multiplier = baseAmount > 0 && eatenAmount > 0 ? eatenAmount / baseAmount : 1;
-    const calories = Math.round(baseCal * multiplier);
-    const proteinG = Math.round(basePro * multiplier);
-    const carbsG = Math.round(baseCarb * multiplier);
-    const fatG = Math.round(baseFat * multiplier);
+    // FIX: respect the visible macro fields the user actually edited.
+    // Previously these were ignored and recomputed from base*multiplier,
+    // so "Saving macros doesnt work" — direct edits to calories/protein etc
+    // never persisted. Now the edit-cal/pro/carb/fat inputs are the source
+    // of truth (they are auto-scaled when amount changes, but user overrides
+    // win).
+    const calories = Math.round(parseFloat(read('edit-cal')) || 0);
+    const proteinG = Math.round(parseFloat(read('edit-pro')) || 0);
+    const carbsG = Math.round(parseFloat(read('edit-carb')) || 0);
+    const fatG = Math.round(parseFloat(read('edit-fat')) || 0);
 
     const current = await ctx.logRepo.findById(logId);
     if (!current) {
