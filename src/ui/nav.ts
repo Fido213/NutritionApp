@@ -14,6 +14,7 @@
  */
 import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
+import { hapticLight } from './haptics';
 
 export type ViewId = 'today' | 'index' | 'history' | 'view-goals';
 
@@ -166,7 +167,12 @@ export function setupTabNavigation(
         if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
         const idx = TAB_ORDER.indexOf(getCurrentView());
         const nextIdx = dx < 0 ? Math.min(idx + 1, TAB_ORDER.length - 1) : Math.max(idx - 1, 0);
-        controller.switchTab(TAB_ORDER[nextIdx]);
+        if (nextIdx !== idx) {
+          // Pass-22e: subtle tick on swipe-driven tab changes — reinforces the
+          // gesture without firing on dock taps.
+          void hapticLight();
+          controller.switchTab(TAB_ORDER[nextIdx]);
+        }
       },
       { passive: true }
     );

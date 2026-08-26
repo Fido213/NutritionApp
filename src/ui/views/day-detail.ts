@@ -12,12 +12,15 @@
  * - §5d: Water entries share the exact same UI — tap expands inline with
  *   Duplicate / Edit (amount + date ONLY) / Delete.
  * - Logged combos (ingredient logs sharing one combo observation) render as
- *   one collapsible row that expands into a NOURISHMENT BREAKDOWN card;
- *   "Edit Combo" opens the full-screen combo builder.
+ *   one collapsible row — tap to expand/collapse, NO dedicated close button
+ *   (pass 22c) — with total macros on the row and a NOURISHMENT BREAKDOWN
+ *   card: Duplicate (re-log every ingredient same day) / "Edit Combo" (opens
+ *   the full-screen builder) / Delete All.
  * - Log notes render under the item name; day notes + the low-accuracy flag
  *   are editable per group header (§5c-3 / §5c-F).
  * - Multi-select mode supports Change Date / Duplicate / Delete — explicitly
- *   NO bulk edit. Selecting a combo selects all of its ingredient logs.
+ *   NO bulk edit. Selecting a combo selects all of its ingredient logs, and a
+ *   pass-22 "All" button selects everything currently loaded.
  */
 
 export interface JournalFoodLog {
@@ -96,6 +99,10 @@ export interface DayDetailArgs {
   onToggleSelectMode(): void;
   onToggleSelect(id: string): void;
   onSelectMany(ids: string[]): void;
+  /** Pass 22: force-select every loaded entry (foods, water, combo members). */
+  onSelectAll(ids: string[]): void;
+  /** Pass 22: duplicate a logged combo — every ingredient log re-logged same day. */
+  onDuplicateCombo(cluster: ComboCluster): void;
   onBulkChangeDate(ids: string[]): void;
   onBulkDuplicate(ids: string[]): void;
   onBulkDelete(ids: string[]): void;
@@ -124,9 +131,9 @@ export function renderDayDetail(args: DayDetailArgs) {
     selection, selectMode,
     onToggleExpand, onEdit, onDuplicate, onDeleteFood, onDeleteWater,
     onDuplicateWater, onEditWater, onToggleDayOrder,
-    onEditDayNote, onToggleLowAccuracy, onToggleSelectMode, onToggleSelect, onSelectMany,
+    onEditDayNote, onToggleLowAccuracy, onToggleSelectMode, onToggleSelect, onSelectMany, onSelectAll,
     onBulkChangeDate, onBulkDuplicate, onBulkDelete,
-    onToggleCombo, onDeleteComboLogs, onEditComboTemplate
+    onToggleCombo, onDeleteComboLogs, onEditComboTemplate, onDuplicateCombo
   } = args;
 
   container.innerHTML = '';
@@ -150,11 +157,36 @@ export function renderDayDetail(args: DayDetailArgs) {
   orderBtn.addEventListener('click', onToggleDayOrder);
   headerBtns.appendChild(orderBtn);
 
+  // Pass 22: every loaded entry id — foods, waters, and all combo member logs
+  // (deduped) — for the select-mode "All" shortcut.
+  const allLoadedIds: string[] = [];
+  const seenIds = new Set<string>();
+  for (const g of groups) {
+    for (const e of g.entries) {
+      const ids = e.kind === 'combo' ? e.logs.map(l => l.id) : [e.id];
+      for (const id of ids) {
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          allLoadedIds.push(id);
+        }
+      }
+    }
+  }
+
   const selectBtn = document.createElement('button');
   selectBtn.className = 'day-detail-select-btn' + (selectMode ? ' active' : '');
   selectBtn.textContent = selectMode ? 'Cancel' : 'Select';
   selectBtn.addEventListener('click', onToggleSelectMode);
   headerBtns.appendChild(selectBtn);
+
+  if (selectMode && allLoadedIds.length > 0) {
+    const allBtn = document.createElement('button');
+    allBtn.className = 'day-order-btn';
+    allBtn.title = 'Select everything currently loaded';
+    allBtn.textContent = 'All';
+    allBtn.addEventListener('click', () => onSelectAll(allLoadedIds));
+    headerBtns.appendChild(allBtn);
+  }
   header.appendChild(headerBtns);
   container.appendChild(header);
 
@@ -248,7 +280,11 @@ export function renderDayDetail(args: DayDetailArgs) {
     const list = document.createElement('div');
     list.className = 'log-list';
 
-    const sorted = [...group.entries].sort((a, b) => entryTime(a) - entryTime(b));
+    // §5d/pass-22c: the window is a single selected day, so Newest/Oldest
+    // orders the ENTRIES within the day (chronological ⇄ newest-first).
+    const sorted = [...group.entries].sort((a, b) =>
+      dayOrder === 'asc' ? entryTime(a) - entryTime(b) : entryTime(b) - entryTime(a)
+    );
     for (const entry of sorted) {
       if (entry.kind === 'water') {
         list.appendChild(buildWaterRow(entry, group.date));
@@ -429,6 +465,20 @@ export function renderDayDetail(args: DayDetailArgs) {
     countLine.textContent = `Combo · ${cluster.logs.length} items`;
     item.appendChild(countLine);
 
+    // Pass 22c: total macros right on the combo row — same profile as any
+    // normal food log (P/C/F next to the kcal).
+    const totP = cluster.logs.reduce((s, l) => s + (l.protein_g || 0), 0);
+    const totC = cluster.logs.reduce((s, l) => s + (l.carbs_g || 0), 0);
+    const totF = cluster.logs.reduce((s, l) => s + (l.fat_g || 0), 0);
+    const macros = document.createElement('div');
+    macros.className = 'log-macros';
+    macros.innerHTML = `
+      <span style="color: var(--pro);">P: ${Math.round(totP)}g</span>
+      <span style="color: var(--carb);">C: ${Math.round(totC)}g</span>
+      <span style="color: var(--fat);">F: ${Math.round(totF)}g</span>
+    `;
+    item.appendChild(macros);
+
     if (expanded) {
       const breakdown = document.createElement('div');
       breakdown.className = 'combo-breakdown';
@@ -467,11 +517,13 @@ export function renderDayDetail(args: DayDetailArgs) {
       if (!selectMode) {
         const actions = document.createElement('div');
         actions.className = 'combo-actions';
-        const close = document.createElement('button');
-        close.className = 'log-action-btn';
-        close.textContent = 'Close';
-        close.addEventListener('click', (e) => { e.stopPropagation(); onToggleCombo(cluster.key); });
-        actions.appendChild(close);
+        // Pass 22c: NO "Close" button — tapping the row collapses it, same as
+        // every other log item (a dedicated close was dumb UX).
+        const dupCombo = document.createElement('button');
+        dupCombo.className = 'log-action-btn blue';
+        dupCombo.textContent = 'Duplicate';
+        dupCombo.addEventListener('click', (e) => { e.stopPropagation(); onDuplicateCombo(cluster); });
+        actions.appendChild(dupCombo);
         if (cluster.comboId) {
           const editTpl = document.createElement('button');
           editTpl.className = 'log-action-btn blue';

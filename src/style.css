@@ -38,7 +38,7 @@
     --score-pos-2: #86efac;
     --score-pos-1: #bbf7d0;
     --score-0: #525252; 
-    --score-neg-1: #fca5a5;
+    --score-neg-1: #fc4c4c;
     --score-neg-2: #ef4444;
     --score-neg-3: #b91c1c;
     
@@ -470,6 +470,15 @@ body.builder-open .sys-btn-top { display: none; }
 /* ============ Index screen (§5d — former Journal modal) ============ */
 .index-header h2 { font-size: 26px; font-weight: 900; letter-spacing: 1.5px; }
 .index-subtitle { font-size: 11px; color: var(--text-dim); font-weight: 800; letter-spacing: 2.5px; text-transform: uppercase; margin-top: 2px; }
+.index-controls {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
 .index-searchbar input {
     width: 100%;
     background: var(--surface-light);
@@ -482,17 +491,19 @@ body.builder-open .sys-btn-top { display: none; }
     font-size: 14px;
 }
 .index-searchbar input:focus { border-color: var(--accent-glow); }
-.index-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.index-toolbar { display: flex; gap: 8px; align-items: center; }
+.index-toolbar .tabs { flex: 1; }
 .index-sort {
     background: var(--surface-light);
     border: 1px solid var(--border);
     color: var(--text);
-    border-radius: 10px;
-    padding: 8px 10px;
+    border-radius: 999px;
+    padding: 7px 12px;
     font-family: inherit;
     font-size: 12px;
     font-weight: 600;
     outline: none;
+    min-width: 130px;
     max-width: 48%;
 }
 .index-empty { color: var(--text-dim); font-size: 13px; text-align: center; padding: 24px 12px; }
@@ -547,6 +558,126 @@ body.builder-open .sys-btn-top { display: none; }
     text-align: right;
 }
 .combo-row-kcal { margin-left: auto; font-size: 12px; font-weight: 800; color: var(--accent-glow); }
+
+/* Combo-builder feel (pass 21): touch feedback (row entrance animation
+   removed in 22b — it replayed on every rebuild and read as jank) */
+.log-item.combo-add-row { cursor: pointer; transition: border-color 120ms ease, background-color 120ms ease; }
+.log-item.combo-add-row:active { transform: scale(0.985); }
+
+/* Amount steppers (pass 22b): − / + flanking the grams input */
+.combo-step-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 900;
+    line-height: 1;
+    cursor: pointer;
+    font-family: inherit;
+    flex: none;
+    transition: border-color 120ms ease, color 120ms ease;
+}
+.combo-step-btn:active { border-color: var(--pro); color: var(--pro); transform: scale(0.92); }
+.combo-amount-input { transition: border-color 120ms ease; }
+
+/* Search inputs (pass 22e): clean pill style shared by INDEX + combo builder */
+.search-pill {
+    width: 100%;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: #fff;
+    padding: 11px 16px;
+    outline: none;
+    font-family: inherit;
+    font-size: 14px;
+    box-sizing: border-box;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.search-pill::placeholder { color: var(--text-dim); }
+.search-pill:focus {
+    border-color: var(--accent-glow);
+    box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.12);
+}
+
+/* Combo-builder modernization (pass 22b redesign) */
+.cb-main-card { display: flex; flex-direction: column; gap: 12px; }
+.cb-name-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid var(--border);
+    color: #fff;
+    padding: 4px 2px 10px;
+    font-size: 17px;
+    font-weight: 800;
+    outline: none;
+    font-family: inherit;
+    transition: border-color 150ms ease;
+}
+.cb-name-input:focus { border-bottom-color: var(--accent-glow); }
+.cb-header { justify-content: space-between; }
+.cb-header h2 { flex: 1; }
+.cb-save-btn-top {
+    background: var(--accent-glow);
+    color: #000;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-weight: 800;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+    flex: none;
+}
+.cb-save-btn-top:disabled { opacity: 0.55; }
+.cb-save-btn-top:active { transform: scale(0.96); }
+.cb-add-card { display: flex; flex-direction: column; gap: 8px; }
+.cb-items-card { display: flex; flex-direction: column; gap: 8px; }
+.cb-results { max-height: 250px; overflow-y: auto; }
+.cb-items { display: flex; flex-direction: column; gap: 6px; }
+.combo-totals-card { border-radius: 16px; }
+.combo-totals {
+    background: linear-gradient(135deg, rgba(0,0,0,0.35), rgba(0,0,0,0.12));
+    border: 1px solid var(--border);
+}
+.log-item.combo-add-row,
+.log-item.combo-build-row { border-radius: 12px; }
+.log-item.combo-build-row { background: var(--surface-light); border: 1px solid var(--border); }
+.log-item.combo-build-row .combo-amount-input:focus {
+    border-color: var(--pro);
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+}
+.combo-remove-btn { transition: color 120ms ease, transform 120ms ease; }
+.combo-remove-btn:active { transform: scale(1.25); }
+.log-item.combo-add-row.added .combo-chip {
+    background: rgba(34, 197, 94, 0.14);
+    border-color: rgba(34, 197, 94, 0.45);
+    color: var(--pro);
+    font-weight: 700;
+}
+.log-item.combo-add-row.added { border-color: rgba(34, 197, 94, 0.45); }
+
+/* Import progress (pass 22) */
+.progress-track {
+    width: 100%;
+    height: 10px;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+}
+#import-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent-glow), #86efac);
+    border-radius: 999px;
+    transition: width 140ms ease-out;
+}
 
 /* Dashboard score badge (§5d: bare number, tier-coloured text + border) */
 #dash-score-badge {

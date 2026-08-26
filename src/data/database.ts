@@ -13,6 +13,7 @@ export class DatabaseManager {
   private isWeb: boolean = false;
   private isFallbackMode: boolean = false;
   private fallbackStore: Map<string, any[]> = new Map();
+  private initPromise: Promise<void> | null = null;
 
   constructor() {
     this.sqlite = new SQLiteConnection(CapacitorSQLite);
@@ -27,37 +28,68 @@ export class DatabaseManager {
   }
 
   async initialize(): Promise<void> {
-    try {
-      if (this.isWeb) {
-        await jeepSqliteDefineCustomElements(window);
-        let jeepEl = document.querySelector('jeep-sqlite');
-        if (!jeepEl) {
-          jeepEl = document.createElement('jeep-sqlite');
-          document.body.appendChild(jeepEl);
-          await customElements.whenDefined('jeep-sqlite');
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = (async () => {
+      try {
+        if (this.isWeb) {
+          await jeepSqliteDefineCustomElements(window);
+          let jeepEl = document.querySelector('jeep-sqlite');
+          if (!jeepEl) {
+            jeepEl = document.createElement('jeep-sqlite');
+            document.body.appendChild(jeepEl);
+            await customElements.whenDefined('jeep-sqlite');
+          }
+          await this.sqlite.initWebStore();
         }
-        await this.sqlite.initWebStore();
+
+        // Warm-reload guard: a previous JS context may have left a native
+        // connection for the same DB name dangling. Reuse it if it exists,
+        // otherwise create a fresh one. This avoids the "empty DB after
+        // location.reload()" race observed via CDP.
+        if (this.db) {
+          try { await this.db.close(); } catch { /* already closed */ }
+          this.db = null;
+        }
+        try {
+          const consistency = await this.sqlite.checkConnectionsConsistency();
+          // If a stale connection for this DB is still registered, retrieve it
+          if (!consistency.result) {
+            try {
+              this.db = await this.sqlite.retrieveConnection(this.DB_NAME, false);
+              await this.db.open();
+              await this.db.execute('PRAGMA foreign_keys = ON;');
+              await this.runMigrations();
+              if (this.isWeb) await this.sqlite.saveToStore(this.DB_NAME);
+              return;
+            } catch { /* fall through to createConnection */ }
+          }
+        } catch { /* checkConnectionsConsistency may not be available on all platforms */ }
+
+        this.db = await this.sqlite.createConnection(
+          this.DB_NAME,
+          false,
+          'no-encryption',
+          1,
+          false
+        );
+
+        await this.db.open();
+        await this.db.execute('PRAGMA foreign_keys = ON;');
+        await this.runMigrations();
+
+        if (this.isWeb) {
+          await this.sqlite.saveToStore(this.DB_NAME);
+        }
+      } catch (error) {
+        console.warn('SQLite initialization warning (falling back to web storage):', error);
+        this.isFallbackMode = true;
+        this.initFallbackStore();
       }
-
-      this.db = await this.sqlite.createConnection(
-        this.DB_NAME,
-        false,
-        'no-encryption',
-        1,
-        false
-      );
-
-      await this.db.open();
-      await this.db.execute('PRAGMA foreign_keys = ON;');
-      await this.runMigrations();
-
-      if (this.isWeb) {
-        await this.sqlite.saveToStore(this.DB_NAME);
-      }
-    } catch (error) {
-      console.warn('SQLite initialization warning (falling back to web storage):', error);
-      this.isFallbackMode = true;
-      this.initFallbackStore();
+    })();
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
     }
   }
 
@@ -65,8 +97,10 @@ export class DatabaseManager {
     if (this.isFallbackMode) {
       return this.createFallbackConnection();
     }
+    if (this.initPromise) await this.initPromise;
     if (!this.db) {
       await this.initialize();
+      if (this.initPromise) await this.initPromise;
     }
     return this.db || this.createFallbackConnection();
   }

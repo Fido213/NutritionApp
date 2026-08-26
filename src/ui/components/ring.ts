@@ -1,42 +1,61 @@
 /**
  * Multi-Lap Calorie Ring Component
  * Circumference = 2 * PI * 50 = 314.159px
+ *
+ * Pass 22b: ONE color at a time. The whole ring reads as a single hue that
+ * shifts with the kcal ratio — never a multi-color sweep (that read as a
+ * rainbow and got scrapped). Anchors walked by the ratio:
+ *   deep red (empty) → lighter red → amber (~50%) → green entering the band
+ *   → deep green through the target → red past it → violet → purple that
+ *   intensifies the further over the day runs.
+ * The stroke is set directly (not via gradient) so the existing CSS
+ * `transition: stroke` smooths every shift between renders.
  */
 
 const CIRCUMFERENCE = 314.159;
 
-/**
- * Gradient stops for the ring stroke based on how the day is going (§5d):
- * deep red while barely eating, amber approaching the target band, a green
- * sweep inside 85–115%, amber→red once over.
- */
-function ringGradientColors(ratio: number): [string, string] {
-  if (ratio > 1.15) return ['var(--fat)', 'var(--warn)'];
-  if (ratio >= 0.85) return ['var(--score-pos-2)', 'var(--score-pos-5)'];
-  if (ratio >= 0.5) return ['#d97706', 'var(--fat)'];
-  return ['#b91c1c', 'var(--score-neg-2)'];
+type Rgb = [number, number, number];
+
+function hexToRgb(hex: string): Rgb {
+  const v = parseInt(hex.replace('#', ''), 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
-/** Create-once the SVG <linearGradient> backing the ring stroke. */
-function ensureRingGradient(svg: SVGSVGElement): SVGLinearGradientElement | null {
-  const SVG_NS = 'http://www.w3.org/2000/svg';
-  let defs = svg.querySelector('defs');
-  if (!defs) {
-    defs = document.createElementNS(SVG_NS, 'defs');
-    svg.prepend(defs);
-  }
-  let grad = defs.querySelector('#ring-gradient') as SVGLinearGradientElement | null;
-  if (!grad) {
-    grad = document.createElementNS(SVG_NS, 'linearGradient');
-    grad.id = 'ring-gradient';
-    for (const offset of ['0%', '100%']) {
-      const stop = document.createElementNS(SVG_NS, 'stop');
-      stop.setAttribute('offset', offset);
-      grad.appendChild(stop);
+function lerpColor(a: string, b: string, t: number): string {
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  const mix = ca.map((ch, i) => Math.round(ch + (cb[i] - ch) * t));
+  return `#${mix.map(ch => ch.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** Palette anchors along the eaten fraction of the target. Purple is held
+ *  back until the ring has run nearly a FULL extra circle past the target
+ *  (~1.75x blend start, fully violet just after 2x) per user review. */
+const PALETTE: Array<[number, string]> = [
+  [0.0, '#7f1d1d'], // deep red — barely eating
+  [0.35, '#dc2626'], // red lifting as the day fills
+  [0.6, '#ea9d06'], // amber approaching the band
+  [0.85, '#65d96a'], // green entering the target band
+  [1.05, '#22a94e'], // deep green through the target
+  [1.2, '#ef4444'], // red takes over past the band…
+  [1.75, '#ef4444'], // …and HOLDS pure red until well past a full circle
+  [2.05, '#a855f7'], // violet arrives around the completed extra lap
+  [2.5, '#8b2fd6'], // purple intensifying
+  [3.0, '#5b1e9e'] // saturated deep purple far over
+];
+
+/** Continuous single color for any ratio ≥ 0 (clamped at the last anchor). */
+export function ringColor(ratio: number): string {
+  const r = Math.max(0, ratio);
+  if (r <= PALETTE[0][0]) return PALETTE[0][1];
+  for (let i = 1; i < PALETTE.length; i++) {
+    if (r <= PALETTE[i][0]) {
+      const [r0, c0] = PALETTE[i - 1];
+      const [r1, c1] = PALETTE[i];
+      return lerpColor(c0, c1, (r - r0) / (r1 - r0));
     }
-    defs.appendChild(grad);
   }
-  return grad;
+  return PALETTE[PALETTE.length - 1][1];
 }
 
 export function renderCalorieRing(current: number, target: number) {
@@ -71,44 +90,26 @@ export function renderCalorieRing(current: number, target: number) {
     }
   }
 
-  // Multi-lap calculation
-  const lap = Math.floor(ratio);
-  const lapOffset = ratio % 1;
+  // Multi-lap calculation — at exactly 1.0 / 2.0 etc the lap is complete,
+  // so the foreground must read FULL, not empty (0% vs 100% were indistinguishable).
+  let lapOffset = ratio % 1;
+  if (ratio > 0 && (lapOffset === 0 || Math.abs(lapOffset - 1) < 1e-9)) lapOffset = 1;
   const strokeDashoffset = CIRCUMFERENCE * (1 - lapOffset);
 
   fillEl.style.strokeDasharray = `${CIRCUMFERENCE}`;
   fillEl.style.strokeDashoffset = `${strokeDashoffset}`;
 
-  // Gradient stroke while on the first lap (how the day is going); multi-lap
-  // over-target states keep their dedicated class colors instead.
-  if (lap === 0) {
-    const svg = fillEl.ownerSVGElement;
-    const grad = svg ? ensureRingGradient(svg) : null;
-    if (grad) {
-      const stops = grad.querySelectorAll('stop');
-      const [from, to] = ringGradientColors(ratio);
-      stops[0].setAttribute('stop-color', from);
-      stops[1].setAttribute('stop-color', to);
-      fillEl.style.stroke = 'url(#ring-gradient)';
-    }
-  } else {
-    fillEl.style.stroke = ''; // class color takes over (lap-over-1/2/3)
-  }
+  // One hue for the whole ring; CSS `transition: stroke` smooths shifts.
+  fillEl.style.stroke = ringColor(ratio);
 
   fillEl.className.baseVal = 'ring-fill';
   if (bgEl) bgEl.className.baseVal = 'ring-bg';
 
-  if (lap === 0) {
-    if (ratio >= 0.85 && ratio <= 1.15) fillEl.classList.add('success');
-    else if (ratio > 1.15) fillEl.classList.add('bleed');
-  } else if (lap === 1) {
-    fillEl.classList.add('lap-over-1');
-    if (bgEl) bgEl.classList.add('bg-success');
-  } else if (lap === 2) {
-    fillEl.classList.add('lap-over-2');
-    if (bgEl) bgEl.classList.add('bg-over-1');
-  } else {
-    fillEl.classList.add('lap-over-3');
-    if (bgEl) bgEl.classList.add('bg-over-2');
+  // Track (background ring) reflects how many laps the day has run.
+  if (bgEl) {
+    const lap = Math.floor(ratio);
+    if (lap === 1) bgEl.classList.add('bg-success');
+    else if (lap === 2) bgEl.classList.add('bg-over-1');
+    else if (lap >= 3) bgEl.classList.add('bg-over-2');
   }
 }

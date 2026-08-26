@@ -1,0 +1,9 @@
+{
+  "name": "EverydayFuel",
+  "short_name": "Fuel",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#22c55e",
+  "description": "Offline-first nutrition tracking"
+}

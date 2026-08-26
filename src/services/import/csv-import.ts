@@ -10,10 +10,13 @@
  *
  * §5c-4: a legacy day is NO LONGER collapsed into one aggregate mega-item.
  * The "Logs" cell ("A | B | C") expands into one imported row per named food;
- * the day's totals are split equally across the items (per-item breakdowns do
- * not exist in the legacy format — nothing else is fabricated). Such rows are
- * flagged `estimatedSplit` so the importer can mark those days low-accuracy,
- * and only the first row of a day carries `waterMl` so water imports once.
+ * the day's totals are split ACROSS the items proportionally to each item's
+ * parsed "(NNNg)" amount (equal shares when no amounts exist — pass-22c
+ * change: pure equal-split gave a 120 g item the same share as a 50 g item,
+ * producing visibly wrong macro values). Per-item breakdowns still do NOT
+ * exist in the legacy format — multi-food days remain estimates, flagged
+ * `estimatedSplit`; single-food days are EXACT. Only the first row of a day
+ * carries `waterMl` so water imports once.
  */
 
 export interface ParsedImportRow {
@@ -27,6 +30,13 @@ export interface ParsedImportRow {
   waterMl?: number;
   /** True when this row came from an equal-split of a legacy day aggregate. */
   estimatedSplit?: boolean;
+}
+
+/** Extract a trailing "(NNNg)" / "(NNNml)" amount from a log-list segment. */
+function parseAmountSuffix(name: string): { name: string; grams: number | null } {
+  const m = name.match(/\((\d+(?:\.\d+)?)\s*(?:g|ml)\)\s*$/i);
+  if (!m) return { name, grams: null };
+  return { name, grams: parseFloat(m[1]) };
 }
 
 /** First header index matching the first key that matches any header (case-insensitive). */
@@ -82,7 +92,7 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
     const waterMl = waterIdx !== -1 ? parseFloat(cols[waterIdx]) || 0 : undefined;
 
     // Legacy daily-aggregate row: expand the Logs cell into one item per food.
-    let names = ['Imported Item'];
+    let items: Array<{ name: string; grams: number | null }> = [{ name: 'Imported Item', grams: null }];
     let isLegacyAggregate = false;
     if (nameIdx === -1 && logsIdx !== -1) {
       isLegacyAggregate = true;
@@ -90,26 +100,35 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
         .split('|')
         .map(s => s.trim())
         .filter(Boolean);
-      if (segments.length > 0) names = segments;
+      if (segments.length > 0) {
+        items = segments.map(seg => {
+          const parsed = parseAmountSuffix(seg);
+          return { name: seg, grams: parsed.grams };
+        });
+      }
     } else if (nameIdx !== -1 && cols[nameIdx]) {
-      names = [cols[nameIdx].split('|')[0].trim() || 'Imported Item'];
+      const n = cols[nameIdx].split('|')[0].trim() || 'Imported Item';
+      items = [{ name: n, grams: parseAmountSuffix(n).grams }];
     }
 
-    // Equal split of the day totals across items (exact division — sums stay
-    // equal to the day's real totals). Water attaches to the first item only.
-    const shareCount = names.length;
-    for (let n = 0; n < shareCount; n++) {
+    // Split the day totals across items PROPORTIONALLY to each item's parsed
+    // "(NNNg)" amount (equal shares when no amounts exist). Sums stay equal
+    // to the day's real totals. Water attaches to the first item only.
+    const weights = items.map(it => it.grams ?? 100);
+    const totalWeight = weights.reduce((s, w) => s + w, 0);
+    for (let n = 0; n < items.length; n++) {
+      const share = weights[n] / totalWeight;
       const row: ParsedImportRow = {
         date: dateStr,
-        foodName: names[n],
-        calories: cal / shareCount,
-        proteinG: pro / shareCount,
-        carbsG: carb / shareCount,
-        fatG: fat / shareCount,
-        amountG: amt
+        foodName: items[n].name,
+        calories: cal * share,
+        proteinG: pro * share,
+        carbsG: carb * share,
+        fatG: fat * share,
+        amountG: items[n].grams ?? amt
       };
       if (n === 0 && waterMl !== undefined) row.waterMl = waterMl;
-      if (isLegacyAggregate && shareCount > 1) row.estimatedSplit = true;
+      if (isLegacyAggregate && items.length > 1) row.estimatedSplit = true;
       rows.push(row);
     }
   }
