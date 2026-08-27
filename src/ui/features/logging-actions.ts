@@ -13,6 +13,7 @@ import { refreshStateForDate } from '../app-refresh';
 import type { Food } from '@data/types';
 import { ctx } from '../context';
 import type { ComboRepository } from '@data/repositories/combo.repo';
+import { invalidateIndexCaches } from './index-screen';
 
 /** Log a meal description through Gemma + the FoodService pipeline. */
 export async function logTextInput(rawText: string) {
@@ -33,6 +34,12 @@ export async function logTextInput(rawText: string) {
     textInput.closest('.text-bar')?.classList.remove('has-text');
   }
 
+  // New foods may have been created via upsert — bust library caches
+  for (const r of results) {
+    if (r.food?.id) ctx.foodCache.delete(r.food.id);
+  }
+  invalidateIndexCaches();
+  await ctx.dbManager.saveWebStore();
   await refreshStateForDate(date);
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal`);
 }
@@ -63,6 +70,7 @@ export async function logFoodAtAmount(food: Food, grams: number) {
     });
   }
 
+  await ctx.dbManager.saveWebStore();
   await refreshStateForDate(date);
   showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
 }
@@ -134,6 +142,7 @@ export async function logCombo(combo: Awaited<ReturnType<ComboRepository['getAll
   }
 
   closeModalLayer('combo-detail-modal');
+  await ctx.dbManager.saveWebStore();
   await refreshStateForDate(date);
   showToast(`Logged combo "${combo.name}" · ${Math.round(totalCal)} kcal`);
 }

@@ -47,7 +47,7 @@ export class LogRepository {
 
   async getLogsForDate(date: string): Promise<FoodLog[]> {
     const res = await this.db.query(
-      `SELECT fl.*, f.canonical_name AS food_name FROM food_logs fl JOIN foods f ON f.id = fl.food_id WHERE fl.date = ? ORDER BY fl.created_at ASC`,
+      `SELECT fl.*, COALESCE(f.canonical_name, 'Logged Item') AS food_name FROM food_logs fl LEFT JOIN foods f ON f.id = fl.food_id WHERE fl.date = ? ORDER BY fl.created_at ASC`,
       [date]
     );
     return (res.values as FoodLog[]) || [];
@@ -56,7 +56,7 @@ export class LogRepository {
   /** All logs in a range with display names (journal view) — one batched query. */
   async getLogsForRange(startDate: string, endDate: string): Promise<FoodLog[]> {
     const res = await this.db.query(
-      `SELECT fl.*, f.canonical_name AS food_name FROM food_logs fl JOIN foods f ON f.id = fl.food_id
+      `SELECT fl.*, COALESCE(f.canonical_name, 'Logged Item') AS food_name FROM food_logs fl LEFT JOIN foods f ON f.id = fl.food_id
        WHERE fl.date >= ? AND fl.date <= ? ORDER BY fl.date ASC, fl.created_at ASC`,
       [startDate, endDate]
     );
@@ -72,7 +72,7 @@ export class LogRepository {
       `SELECT fl.date,
               AVG(f.confidence) AS avg_confidence,
               MIN(f.confidence) AS min_confidence
-       FROM food_logs fl JOIN foods f ON f.id = fl.food_id
+       FROM food_logs fl LEFT JOIN foods f ON f.id = fl.food_id
        WHERE fl.date >= ? AND fl.date <= ? GROUP BY fl.date`,
       [startDate, endDate]
     );

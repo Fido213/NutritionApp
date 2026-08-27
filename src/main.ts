@@ -49,7 +49,7 @@ import { Capacitor } from '@capacitor/core';
 import { GemmaClient } from '@services/ai/gemma-client';
 import { FoodService } from '@services/food/food-service';
 import { logTextInput } from './ui/features/logging-actions';
-import { setupIndexHandlers, renderIndex } from './ui/features/index-screen';
+import { setupIndexHandlers, renderIndex, invalidateIndexCaches } from './ui/features/index-screen';
 import { setupComboBuilderHandlers } from './ui/features/combo-builder';
 import { setupScannerHandlers } from './ui/features/scanner';
 import { setupJournalHandlers } from './ui/features/journal';
@@ -217,6 +217,7 @@ function setupModals() {
   document.getElementById('btn-water-250')?.addEventListener('click', async () => {
     const date = store.getState().selectedDate;
     await ctx.waterRepo.insertWaterLog({ date, amount_ml: 250, source: 'explicit' });
+    await ctx.dbManager.saveWebStore();
     await refreshStateForDate(date);
     showToast('Logged +250ml Water');
   });
@@ -224,6 +225,7 @@ function setupModals() {
   document.getElementById('btn-water-500')?.addEventListener('click', async () => {
     const date = store.getState().selectedDate;
     await ctx.waterRepo.insertWaterLog({ date, amount_ml: 500, source: 'explicit' });
+    await ctx.dbManager.saveWebStore();
     await refreshStateForDate(date);
     showToast('Logged +500ml Water');
   });
@@ -366,6 +368,9 @@ function setupActionHandlers() {
       fat_g: fatG,
       note
     });
+    ctx.foodCache.set(food.id, food);
+    invalidateIndexCaches();
+    await ctx.dbManager.saveWebStore();
 
     document.getElementById('manual-log-modal')?.classList.remove('active');
     await refreshStateForDate(date);
@@ -441,6 +446,7 @@ function setupNumpadHandlers() {
 
     const date = store.getState().selectedDate;
     await ctx.waterRepo.insertWaterLog({ date, amount_ml: amount, source: 'explicit' });
+    await ctx.dbManager.saveWebStore();
     document.getElementById('numpad-modal')?.classList.remove('active');
     await refreshStateForDate(date);
     showToast(`Logged +${amount}ml Water`);

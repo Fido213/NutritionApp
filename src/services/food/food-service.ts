@@ -165,7 +165,26 @@ export class FoodService {
 
     let food: Food;
     if (found) {
-      food = found;
+      // Update stale library entry with fresh OCR values (fixes "label OCR not saving")
+      const needsUpdate =
+        (ocr.caloriesPer100g != null && ocr.caloriesPer100g !== found.calories_per_100g) ||
+        (ocr.proteinPer100g != null && ocr.proteinPer100g !== found.protein_per_100g) ||
+        (ocr.carbsPer100g != null && ocr.carbsPer100g !== found.carbs_per_100g) ||
+        (ocr.fatPer100g != null && ocr.fatPer100g !== found.fat_per_100g) ||
+        (ocr.waterPer100g != null && ocr.waterPer100g !== found.water_per_100g);
+      if (needsUpdate) {
+        const updated = await this.foodRepo.update(found.id, {
+          calories_per_100g: ocr.caloriesPer100g ?? found.calories_per_100g,
+          protein_per_100g: ocr.proteinPer100g ?? found.protein_per_100g,
+          carbs_per_100g: ocr.carbsPer100g ?? found.carbs_per_100g,
+          fat_per_100g: ocr.fatPer100g ?? found.fat_per_100g,
+          water_per_100g: ocr.waterPer100g ?? found.water_per_100g,
+          confidence: ocr.confidence ?? found.confidence
+        } as any);
+        food = updated ?? found;
+      } else {
+        food = found;
+      }
     } else {
       food = await this.foodRepo.insert({
         canonical_name: name,
@@ -247,7 +266,23 @@ export class FoodService {
 
     let food: Food;
     if (found) {
-      food = found;
+      const needsUpdate =
+        product.caloriesPer100g !== found.calories_per_100g ||
+        product.proteinPer100g !== found.protein_per_100g ||
+        product.carbsPer100g !== found.carbs_per_100g ||
+        product.fatPer100g !== found.fat_per_100g;
+      if (needsUpdate) {
+        const updated = await this.foodRepo.update(found.id, {
+          calories_per_100g: product.caloriesPer100g,
+          protein_per_100g: product.proteinPer100g,
+          carbs_per_100g: product.carbsPer100g,
+          fat_per_100g: product.fatPer100g,
+          source_reference: barcode
+        } as any);
+        food = updated ?? found;
+      } else {
+        food = found;
+      }
     } else {
       food = await this.foodRepo.insert({
         canonical_name: name,

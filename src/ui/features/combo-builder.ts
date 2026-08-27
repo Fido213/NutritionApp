@@ -20,7 +20,7 @@ import type { Food } from '@data/types';
 import { renderIndex, invalidateIndexCaches } from './index-screen';
 
 let builderComboId: string | null = null;
-let builderItems: Array<{ foodId: string; amountG: number }> = [];
+let builderItems: Array<{ foodId: string; amountG: number | null; amountMl: number | null }> = [];
 let builderSearchGen = 0;
 let builderTotalsGen = 0;
 
@@ -75,7 +75,11 @@ export function openComboBuilderView(editComboId: string | null) {
         return;
       }
       if (nameInput) nameInput.value = combo.name;
-      builderItems = combo.items.map(i => ({ foodId: i.food_id, amountG: i.amount_g ?? i.amount_ml ?? 100 }));
+      builderItems = combo.items.map(i => ({
+        foodId: i.food_id,
+        amountG: i.amount_g ?? (i.amount_ml == null ? 100 : null),
+        amountMl: i.amount_ml ?? null
+      }));
       await Promise.all([
         renderComboBuilderItems(),
         refreshComboBuilderTotals(),
@@ -213,7 +217,7 @@ async function toggleComboBuilderItem(foodId: string) {
     await removeComboBuilderItem(existing);
     return;
   }
-  builderItems.push({ foodId, amountG: 100 });
+  builderItems.push({ foodId, amountG: 100, amountMl: null });
   await Promise.all([
     renderComboBuilderItems(),
     refreshComboBuilderTotals(),
@@ -231,10 +235,11 @@ async function removeComboBuilderItem(idx: number) {
 }
 
 /** Recompute ONE row's kcal label from the cached food (no DOM rebuild). */
-function refreshRowKcal(item: { foodId: string; amountG: number }, kcalEl: HTMLElement) {
+function refreshRowKcal(item: { foodId: string; amountG: number | null; amountMl: number | null }, kcalEl: HTMLElement) {
   const cached = ctx.foodCache.get(item.foodId);
   if (!cached) return;
-  const n = calculateNutrition(ctx.foodRepo.toFoodReference(cached), item.amountG);
+  const amt = item.amountG ?? item.amountMl ?? 100;
+  const n = calculateNutrition(ctx.foodRepo.toFoodReference(cached), amt);
   kcalEl.textContent = `${Math.round(n.calories)} kcal`;
 }
 
@@ -258,7 +263,9 @@ function renderComboBuilderItems() {
   builderItems.forEach((item, idx) => {
     const food = ctx.foodCache.get(item.foodId);
     const ref = food ? ctx.foodRepo.toFoodReference(food) : null;
-    const nutrition = ref ? calculateNutrition(ref, item.amountG) : null;
+    const amt = item.amountG ?? item.amountMl ?? 100;
+    const nutrition = ref ? calculateNutrition(ref, amt) : null;
+    const isMl = item.amountMl != null;
 
     const row = document.createElement('div');
     row.className = 'log-item combo-build-row';
@@ -284,9 +291,14 @@ function renderComboBuilderItems() {
     controls.style.cssText = 'display:flex;align-items:center;gap:8px;padding-left:2px;';
 
     // Pass-22b steppers: ±10 g without opening the keyboard.
+    const getAmt = () => item.amountG ?? item.amountMl ?? 100;
+    const setAmt = (v: number) => {
+      if (isMl) item.amountMl = Math.max(1, Math.round(v * 100) / 100);
+      else item.amountG = Math.max(1, Math.round(v * 100) / 100);
+    };
     const applyAmount = (v: number) => {
-      item.amountG = Math.max(1, Math.round(v * 100) / 100);
-      amount.value = String(item.amountG);
+      setAmt(v);
+      amount.value = String(getAmt());
       refreshRowKcal(item, kcal);
       void refreshComboBuilderTotals();
     };
@@ -294,21 +306,21 @@ function renderComboBuilderItems() {
     minus.className = 'combo-step-btn';
     minus.textContent = '−';
     minus.setAttribute('aria-label', '10 grams less');
-    minus.addEventListener('click', (e) => { e.stopPropagation(); hapticLight(); applyAmount(item.amountG - 10); });
+    minus.addEventListener('click', (e) => { e.stopPropagation(); hapticLight(); applyAmount(getAmt() - 10); });
 
     const amount = document.createElement('input');
     amount.type = 'number';
     amount.min = '1';
     amount.step = 'any';
     amount.inputMode = 'decimal';
-    amount.value = String(item.amountG);
+    amount.value = String(getAmt());
     amount.className = 'combo-amount-input';
 
     const plus = document.createElement('button');
     plus.className = 'combo-step-btn';
     plus.textContent = '+';
     plus.setAttribute('aria-label', '10 grams more');
-    plus.addEventListener('click', (e) => { e.stopPropagation(); hapticLight(); applyAmount(item.amountG + 10); });
+    plus.addEventListener('click', (e) => { e.stopPropagation(); hapticLight(); applyAmount(getAmt() + 10); });
 
     // Live update while typing: scale this row's kcal + the totals WITHOUT
     // rebuilding the list — rebuilding here used to drop focus and slam the
@@ -316,7 +328,7 @@ function renderComboBuilderItems() {
     amount.addEventListener('input', () => {
       const v = parseFloat(amount.value);
       if (!(v > 0)) return;
-      item.amountG = v;
+      setAmt(v);
       refreshRowKcal(item, kcal);
       void refreshComboBuilderTotals();
     });
@@ -324,18 +336,18 @@ function renderComboBuilderItems() {
     amount.addEventListener('change', () => {
       const v = parseFloat(amount.value);
       if (!(v > 0)) {
-        item.amountG = 100;
+        setAmt(100);
         amount.value = '100';
         refreshRowKcal(item, kcal);
         void refreshComboBuilderTotals();
         return;
       }
-      item.amountG = v;
+      setAmt(v);
     });
 
     const unit = document.createElement('span');
     unit.style.cssText = 'font-size:11px;color:var(--text-dim);font-weight:700;';
-    unit.textContent = 'g/ml';
+    unit.textContent = isMl ? 'ml' : 'g';
     const kcal = document.createElement('span');
     kcal.className = 'combo-row-kcal';
     kcal.textContent = nutrition ? `${Math.round(nutrition.calories)} kcal` : '—';
@@ -359,7 +371,8 @@ async function refreshComboBuilderTotals() {
   for (const item of builderItems) {
     const food = await resolveFoodCached(item.foodId);
     if (!food) continue;
-    const n = calculateNutrition(ctx.foodRepo.toFoodReference(food), item.amountG);
+    const amt = item.amountG ?? item.amountMl ?? 100;
+    const n = calculateNutrition(ctx.foodRepo.toFoodReference(food), amt);
     kcal += n.calories;
     pro += n.proteinG;
     carb += n.carbsG;
@@ -388,7 +401,7 @@ async function saveComboFromBuilder() {
     showToast('Give the combo a name and at least one ingredient');
     return;
   }
-  const items = builderItems.map(i => ({ food_id: i.foodId, amount_g: i.amountG, amount_ml: null }));
+  const items = builderItems.map(i => ({ food_id: i.foodId, amount_g: i.amountG, amount_ml: i.amountMl }));
 
   const saveBtn = document.getElementById('btn-save-combo') as HTMLButtonElement | null;
   const originalLabel = saveBtn?.textContent ?? 'Save Combo';

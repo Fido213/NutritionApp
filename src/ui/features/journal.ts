@@ -146,6 +146,7 @@ export async function renderJournalIfVisible() {
       onDuplicate: async (log) => {
         await ctx.logRepo.duplicateLog(log.id, log.date);
         expandedLogId = null;
+        await ctx.dbManager.saveWebStore();
         await refreshStateForDate(store.getState().selectedDate);
         showToast('Log duplicated');
       },
@@ -154,6 +155,8 @@ export async function renderJournalIfVisible() {
         if (!ok) return;
         await ctx.logRepo.deleteLog(log.id);
         expandedLogId = null;
+        await ctx.dbManager.saveWebStore();
+        invalidateHistoryWindow();
         await refreshStateForDate(store.getState().selectedDate);
         showToast('Log deleted');
       },
@@ -162,6 +165,8 @@ export async function renderJournalIfVisible() {
         if (!ok) return;
         await ctx.waterRepo.deleteWaterLog(water.id);
         expandedLogId = null;
+        await ctx.dbManager.saveWebStore();
+        invalidateHistoryWindow();
         await refreshStateForDate(store.getState().selectedDate);
         showToast(`Deleted ${Math.round(water.amount_ml)}ml water entry`);
       },
@@ -174,6 +179,7 @@ export async function renderJournalIfVisible() {
           note: water.note ?? undefined
         });
         expandedLogId = null;
+        await ctx.dbManager.saveWebStore();
         await refreshStateForDate(store.getState().selectedDate);
         showToast(`Duplicated +${Math.round(water.amount_ml)}ml water`);
       },
@@ -185,6 +191,7 @@ export async function renderJournalIfVisible() {
       onEditDayNote: (date) => openDayNoteModal(date),
       onToggleLowAccuracy: async (date, current) => {
         await ctx.dailyRecordRepo.setLowAccuracy(date, !current);
+        await ctx.dbManager.saveWebStore();
         bumpDataVersion();
         await renderJournalIfVisible();
         showToast(!current ? 'Day flagged low accuracy' : 'Low-accuracy flag cleared');
@@ -243,6 +250,7 @@ export async function renderJournalIfVisible() {
           });
         }
         expandedComboKeys.delete(cluster.key);
+        await ctx.dbManager.saveWebStore();
         await refreshStateForDate(store.getState().selectedDate);
         showToast(`Duplicated "${cluster.name}"`);
       },
@@ -263,6 +271,7 @@ export async function renderJournalIfVisible() {
         }
         selectMode = false;
         selection.clear();
+        await ctx.dbManager.saveWebStore();
         await refreshStateForDate(date);
         showToast(`Duplicated ${foodIds.length} item(s)`);
       },
@@ -276,6 +285,8 @@ export async function renderJournalIfVisible() {
         selectMode = false;
         selection.clear();
         expandedLogId = null;
+        await ctx.dbManager.saveWebStore();
+        invalidateHistoryWindow();
         await refreshStateForDate(store.getState().selectedDate);
         showToast(`Deleted ${ids.length} item(s)`);
       },
@@ -292,6 +303,8 @@ export async function renderJournalIfVisible() {
         if (!ok) return;
         for (const log of cluster.logs) await ctx.logRepo.deleteLog(log.id);
         expandedComboKeys.delete(cluster.key);
+        await ctx.dbManager.saveWebStore();
+        invalidateHistoryWindow();
         await refreshStateForDate(store.getState().selectedDate);
         showToast(`Deleted combo "${cluster.name}"`);
       },
@@ -347,6 +360,7 @@ function setupBulkDateHandlers() {
     for (const id of pendingBulkIds) {
       await ctx.logRepo.updateLog(id, { date: target } as any);
     }
+    await ctx.dbManager.saveWebStore();
     const moved = pendingBulkIds.length;
     pendingBulkIds = [];
     selectMode = false;
@@ -365,6 +379,7 @@ export function setupJournalHandlers() {
     if (!input) return;
     const noteDate = noteTargetDate;
     await ctx.dailyRecordRepo.setNote(noteDate, input.value.trim() || null);
+    await ctx.dbManager.saveWebStore();
 
     closeModalLayer('note-modal');
     bumpDataVersion();
@@ -402,6 +417,7 @@ export function setupJournalHandlers() {
 
     const current = await ctx.waterRepo.getWaterById(id);
     await ctx.waterRepo.updateWaterLog(id, { amount_ml: amount, date });
+    await ctx.dbManager.saveWebStore();
 
     closeModalLayer('water-edit-modal');
     expandedLogId = null;

@@ -35,8 +35,8 @@ export interface ParsedImportRow {
 /** Extract a trailing "(NNNg)" / "(NNNml)" amount from a log-list segment. */
 function parseAmountSuffix(name: string): { name: string; grams: number | null } {
   const m = name.match(/\((\d+(?:\.\d+)?)\s*(?:g|ml)\)\s*$/i);
-  if (!m) return { name, grams: null };
-  return { name, grams: parseFloat(m[1]) };
+  if (!m || m.index === undefined) return { name, grams: null };
+  return { name: name.slice(0, m.index).trim(), grams: parseFloat(m[1]) };
 }
 
 /** First header index matching the first key that matches any header (case-insensitive). */
@@ -103,12 +103,13 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
       if (segments.length > 0) {
         items = segments.map(seg => {
           const parsed = parseAmountSuffix(seg);
-          return { name: seg, grams: parsed.grams };
+          return { name: parsed.name, grams: parsed.grams };
         });
       }
     } else if (nameIdx !== -1 && cols[nameIdx]) {
       const n = cols[nameIdx].split('|')[0].trim() || 'Imported Item';
-      items = [{ name: n, grams: parseAmountSuffix(n).grams }];
+      const parsed = parseAmountSuffix(n);
+      items = [{ name: parsed.name, grams: parsed.grams }];
     }
 
     // Split the day totals across items PROPORTIONALLY to each item's parsed

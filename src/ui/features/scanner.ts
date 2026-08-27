@@ -16,6 +16,7 @@ import { lookupBarcodeOnline } from '@services/barcode/online-lookup';
 import { getVisionPlugin, stripDataUrlPrefix, supportsBrowserBarcodeScan, startBrowserBarcodeScan } from '@services/vision/vision-client';
 import type { ScanHandle } from '@services/vision/vision-client';
 import { ctx } from '../context';
+import { invalidateIndexCaches } from './index-screen';
 
 /**
  * Spec §7.4 fallback chain: the barcode is missing from the local library,
@@ -42,6 +43,9 @@ async function logBarcodeViaOnlineLookup(code: string) {
     try {
       const result = await ctx.foodService.logBarcodeLookup(date, product, code, grams);
       await ctx.barcodeRepo.saveBarcode(result.food.id, code, 'online');
+      ctx.foodCache.delete(result.food.id);
+      invalidateIndexCaches();
+      await ctx.dbManager.saveWebStore();
       closeModalLayer('scanner-modal');
       await refreshStateForDate(date);
       showToast(`Logged "${product.productName}" · ${Math.round(result.nutrition.calories)} kcal`);
@@ -49,14 +53,14 @@ async function logBarcodeViaOnlineLookup(code: string) {
     } catch (err) {
       console.error('Online barcode logging failed:', err);
       showToast('Could not save that product — scan the label instead');
-      triggerLabelScanFallback();
+      void triggerLabelScanFallback();
       return null;
     }
   }
 
-  closeModalLayer('scanner-modal');
+  // Keep scanner open for fallback — don't close before triggering label scan
   showToast('Barcode not found online — scan the nutrition label instead');
-  triggerLabelScanFallback();
+  void triggerLabelScanFallback();
   return null;
 }
 
@@ -78,33 +82,40 @@ async function logBarcodeFood(code: string) {
     return null;
   }
 
-  const nutrition = calculateNutrition(ref, grams);
-  const date = store.getState().selectedDate;
+  try {
+    const nutrition = calculateNutrition(ref, grams);
+    const date = store.getState().selectedDate;
 
-  const log = await ctx.logRepo.insertFoodLog({
-    date,
-    food_id: food.id,
-    amount_g: grams,
-    calories: nutrition.calories,
-    protein_g: nutrition.proteinG,
-    carbs_g: nutrition.carbsG,
-    fat_g: nutrition.fatG,
-    water_ml: nutrition.waterMl
-  });
-
-  if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
-    await ctx.waterRepo.insertWaterLog({
+    const log = await ctx.logRepo.insertFoodLog({
       date,
-      amount_ml: nutrition.waterMl,
-      source: classifyWaterSource(ref),
-      food_log_id: log.id
+      food_id: food.id,
+      amount_g: grams,
+      calories: nutrition.calories,
+      protein_g: nutrition.proteinG,
+      carbs_g: nutrition.carbsG,
+      fat_g: nutrition.fatG,
+      water_ml: nutrition.waterMl
     });
-  }
 
-  closeModalLayer('scanner-modal');
-  await refreshStateForDate(date);
-  showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
-  return food;
+    if (nutrition.waterMl !== null && nutrition.waterMl > 0) {
+      await ctx.waterRepo.insertWaterLog({
+        date,
+        amount_ml: nutrition.waterMl,
+        source: classifyWaterSource(ref),
+        food_log_id: log.id
+      });
+    }
+
+    await ctx.dbManager.saveWebStore();
+    closeModalLayer('scanner-modal');
+    await refreshStateForDate(date);
+    showToast(`Logged ${food.canonical_name} · ${Math.round(nutrition.calories)} kcal`);
+    return food;
+  } catch (err) {
+    console.error('Local barcode logging failed:', err);
+    showToast('Could not log that barcode — try again');
+    return null;
+  }
 }
 
 /**
@@ -113,7 +124,14 @@ async function logBarcodeFood(code: string) {
  * grams they ate; the dev-only paste-text path keeps its own amount field.
  */
 async function logLabelOcrText(text: string, amount: number, askGrams = true) {
-  const ocr = await ctx.gemmaClient.parseNutritionLabel(text);
+  let ocr: any;
+  try {
+    ocr = await ctx.gemmaClient.parseNutritionLabel(text);
+  } catch (err) {
+    console.error('Label parse failed:', err);
+    showToast('Could not parse that label text');
+    return;
+  }
   const date = store.getState().selectedDate;
 
   // HANDOVER §5a item 7: never log the "Scanned Label Product" placeholder —
@@ -132,7 +150,7 @@ async function logLabelOcrText(text: string, amount: number, askGrams = true) {
 
   let grams = amount;
   if (askGrams) {
-    const per100 = ocr.caloriesPer100g ? `${Math.round(ocr.caloriesPer100g)} kcal` : 'no calories listed';
+    const per100 = ocr.caloriesPer100g != null ? `${Math.round(ocr.caloriesPer100g)} kcal` : 'no calories listed';
     const g = await requestGrams(
       'How many grams did you eat?',
       `${ocr.foodName} · ${per100} per 100g`
@@ -142,10 +160,19 @@ async function logLabelOcrText(text: string, amount: number, askGrams = true) {
       return;
     }
     grams = g;
+  } else {
+    // Paste path validates amount explicitly
+    if (!(grams > 0)) {
+      showToast('Enter a positive amount in grams');
+      return;
+    }
   }
 
   try {
     const result = await ctx.foodService.logLabelOcr(date, ocr, grams);
+    if (result.food?.id) ctx.foodCache.delete(result.food.id);
+    invalidateIndexCaches();
+    await ctx.dbManager.saveWebStore();
     closeModalLayer('scanner-modal');
     await refreshStateForDate(date);
     showToast(`Logged "${ocr.foodName}" · ${Math.round(result.nutrition.calories)} kcal`);
@@ -169,7 +196,7 @@ async function capturePhotoUri(): Promise<string | null> {
       source: CameraSource.Prompt,
       correctOrientation: true
     });
-    return photo.path || null;
+    return (photo as any).path || (photo as any).webPath || null;
   } catch (err: any) {
     if (err && typeof err.message === 'string' && err.message.toLowerCase().includes('cancel')) {
       return null;
@@ -213,8 +240,9 @@ async function scanLabelFromScanner(): Promise<boolean> {
 }
 
 /** Kick off the label-scan fallback (native capture, or the file picker on web). */
-function triggerLabelScanFallback() {
-  if (!scanLabelFromScanner() && !getVisionPlugin()) {
+async function triggerLabelScanFallback() {
+  const didScan = await scanLabelFromScanner().catch(() => false);
+  if (!didScan && !getVisionPlugin()) {
     document.getElementById('ai-file-input')?.click();
   }
 }

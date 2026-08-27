@@ -9,6 +9,7 @@ import { refreshStateForDate, invalidateHistoryWindow } from '../app-refresh';
 import { store } from '../state';
 import { ctx } from '../context';
 import type { JournalFoodLog } from '@ui/views/day-detail';
+import { invalidateIndexCaches } from './index-screen';
 
 export async function openEditView(log: JournalFoodLog) {
   const food = log.food_id ? await ctx.foodRepo.findById(log.food_id) : null;
@@ -93,7 +94,6 @@ export function setupEditHandlers() {
     const date = read('edit-date') || store.getState().selectedDate;
     const note = read('edit-note').trim() || null;
 
-    const baseAmount = parseFloat(read('base-amount')) || 100;
     const eatenAmount = parseFloat(read('eaten-amount')) || 0;
 
     // FIX: respect the visible macro fields the user actually edited.
@@ -118,19 +118,22 @@ export function setupEditHandlers() {
     if (currentFood && name !== currentFood.canonical_name) {
       let renamed = await ctx.foodRepo.findByNormalizedName(normalizeFoodName(name));
       if (!renamed) {
-        const refAmount = current.amount_g || current.amount_ml || 100;
+        // Use the EDITED macros for the new library entry, not the pre-edit values
+        const refAmount = eatenAmount > 0 ? eatenAmount : (current.amount_g || current.amount_ml || 100);
         renamed = await ctx.foodRepo.insert({
           canonical_name: name,
           normalized_name: normalizeFoodName(name),
-          calories_per_100g: refAmount > 0 ? (current.calories / refAmount) * 100 : null,
-          protein_per_100g: refAmount > 0 ? (current.protein_g / refAmount) * 100 : null,
-          carbs_per_100g: refAmount > 0 ? (current.carbs_g / refAmount) * 100 : null,
-          fat_per_100g: refAmount > 0 ? (current.fat_g / refAmount) * 100 : null,
+          calories_per_100g: refAmount > 0 ? (calories / refAmount) * 100 : null,
+          protein_per_100g: refAmount > 0 ? (proteinG / refAmount) * 100 : null,
+          carbs_per_100g: refAmount > 0 ? (carbsG / refAmount) * 100 : null,
+          fat_per_100g: refAmount > 0 ? (fatG / refAmount) * 100 : null,
           water_per_100g: 0,
           nutrition_basis: 'per_100g',
           source_type: 'user_entered',
           confidence: 1.0
         });
+        ctx.foodCache.set(renamed.id, renamed);
+        invalidateIndexCaches();
       }
       foodId = renamed.id;
     }
@@ -150,6 +153,7 @@ export function setupEditHandlers() {
     }
 
     await ctx.logRepo.updateLog(logId, updates);
+    await ctx.dbManager.saveWebStore();
 
     const previousDate = current.date;
     invalidateHistoryWindow();
