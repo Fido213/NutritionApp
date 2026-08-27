@@ -46,6 +46,12 @@ coverage/
 *.sln
 *.sw?
 
+# AI Models (untracked, built locally, <300MB APK budget)
+ai models/
+*.onnx
+*.index
+*.bin
+
 # Operating System Files
 .DS_Store
 Thumbs.db

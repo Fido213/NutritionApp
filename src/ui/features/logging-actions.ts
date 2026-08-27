@@ -15,17 +15,47 @@ import { ctx } from '../context';
 import type { ComboRepository } from '@data/repositories/combo.repo';
 import { invalidateIndexCaches } from './index-screen';
 
-/** Log a meal description through Gemma + the FoodService pipeline. */
+/** Log a meal description through L12 interpreter + hybrid retriever + FoodService pipeline.
+ *  Primary path: deterministic qty parser + L12 FOOD NER spans -> hybrid BM25/mE5 -> FoodService.
+ *  Fallback: GemmaClient when interpreter yields 0 spans (e.g., no foods cached yet).
+ */
 export async function logTextInput(rawText: string) {
   const date = store.getState().selectedDate;
-  const items = await ctx.gemmaClient.interpretTextLog(rawText);
+
+  // Try new interpreter first (offline, <55ms, L12 + FP16). Needs food list for hybrid retrieval.
+  let items: any[] | null = null;
+  try {
+    const { interpretText, setFoodsForInterpreter } = await import('@services/interpreter');
+    // Ensure BM25/mE5 caches are warm — load up to 500 foods once per session or after invalidate
+    let foods: any[] = [];
+    try { foods = await ctx.foodRepo.getAllFoods(1000); setFoodsForInterpreter(foods); } catch {}
+    const spans = await interpretText(rawText, foods.length ? foods : null);
+    if (spans && spans.length > 0) {
+      items = spans.map(s => ({
+        canonicalName: s.canonicalName,
+        amountG: s.amountG,
+        amountMl: s.amountMl,
+        confidence: s.confidence,
+        isComposite: s.isComposite,
+        retrievalScore: s.retrievalScore,
+        span: s.span,
+      }));
+    }
+  } catch (e) {
+    console.debug('[logTextInput] interpreter failed, fallback to Gemma', e);
+  }
+
+  // Fallback to Gemma (legacy path) if interpreter found nothing
+  if (!items || items.length === 0) {
+    items = await ctx.gemmaClient.interpretTextLog(rawText);
+  }
 
   if (!items || items.length === 0) {
     showToast('Could not interpret that text');
     return;
   }
 
-  const results = await ctx.foodService.logTextInput(date, rawText, items);
+  const results = await ctx.foodService.logTextInput(date, rawText, items as any);
   const totalCal = results.reduce((sum, r) => sum + r.nutrition.calories, 0);
 
   const textInput = document.getElementById('dash-text-input') as HTMLInputElement | null;
@@ -39,6 +69,8 @@ export async function logTextInput(rawText: string) {
     if (r.food?.id) ctx.foodCache.delete(r.food.id);
   }
   invalidateIndexCaches();
+  // Also invalidate BM25 after new foods
+  try { const { invalidateBm25Cache } = await import('@services/interpreter/hybrid-retriever'); invalidateBm25Cache(); } catch {}
   await ctx.dbManager.saveWebStore();
   await refreshStateForDate(date);
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal`);

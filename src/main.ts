@@ -49,6 +49,7 @@ import { Capacitor } from '@capacitor/core';
 import { GemmaClient } from '@services/ai/gemma-client';
 import { FoodService } from '@services/food/food-service';
 import { logTextInput } from './ui/features/logging-actions';
+import { setFoodsForInterpreter } from '@services/interpreter';
 import { setupIndexHandlers, renderIndex, invalidateIndexCaches } from './ui/features/index-screen';
 import { setupComboBuilderHandlers } from './ui/features/combo-builder';
 import { setupScannerHandlers } from './ui/features/scanner';
@@ -92,6 +93,15 @@ async function initApp() {
       comboRepo: ctx.comboRepo,
       barcodeRepo: ctx.barcodeRepo
     });
+
+    // Warm interpreter caches for hybrid retrieval (BM25 + mE5 fallback). Non-blocking.
+    void (async () => {
+      try {
+        const foods = await ctx.foodRepo.getAllFoods(1000);
+        setFoodsForInterpreter(foods);
+        console.log('[interpreter] warmed with', foods.length, 'foods (BM25 + FAISS fallback)');
+      } catch (e) { console.debug('[interpreter] warm failed', e); }
+    })();
 
     // 2. Load active goal
     let currentGoal = await ctx.goalRepo.getCurrentGoal();
