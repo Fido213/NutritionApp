@@ -86,9 +86,22 @@ async function logBarcodeFood(code: string) {
     const nutrition = calculateNutrition(ref, grams);
     const date = store.getState().selectedDate;
 
+    const observation = await ctx.observationRepo.insert({
+      food_id: food.id,
+      source_type: 'barcode',
+      estimated_amount: grams,
+      final_amount: grams,
+      amount_unit: 'g',
+      confidence: 0.9,
+      raw_input: code,
+      interpretation_json: JSON.stringify({ barcode: code, productName: food.canonical_name }),
+      user_corrected: 0
+    });
+
     const log = await ctx.logRepo.insertFoodLog({
       date,
       food_id: food.id,
+      observation_id: observation.id,
       amount_g: grams,
       calories: nutrition.calories,
       protein_g: nutrition.proteinG,

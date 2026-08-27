@@ -92,12 +92,12 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
       }
     }
 
-    const cal = parseFloat(cols[calIdx]) || 0;
-    const pro = proIdx !== -1 ? parseFloat(cols[proIdx]) || 0 : 0;
-    const carb = carbIdx !== -1 ? parseFloat(cols[carbIdx]) || 0 : 0;
-    const fat = fatIdx !== -1 ? parseFloat(cols[fatIdx]) || 0 : 0;
-    const amt = amtIdx !== -1 ? parseFloat(cols[amtIdx]) || 100 : 100;
-    const waterMl = waterIdx !== -1 ? parseFloat(cols[waterIdx]) || 0 : undefined;
+    const cal = (() => { const v = parseFloat(cols[calIdx]); return Number.isFinite(v) ? v : 0; })();
+    const pro = proIdx !== -1 ? (() => { const v = parseFloat(cols[proIdx]); return Number.isFinite(v) ? v : 0; })() : 0;
+    const carb = carbIdx !== -1 ? (() => { const v = parseFloat(cols[carbIdx]); return Number.isFinite(v) ? v : 0; })() : 0;
+    const fat = fatIdx !== -1 ? (() => { const v = parseFloat(cols[fatIdx]); return Number.isFinite(v) ? v : 0; })() : 0;
+    const amt = amtIdx !== -1 ? (() => { const v = parseFloat(cols[amtIdx]); return Number.isFinite(v) && v > 0 ? v : 100; })() : 100;
+    const waterMl = waterIdx !== -1 ? (() => { const v = parseFloat(cols[waterIdx]); return Number.isFinite(v) ? v : 0; })() : undefined;
 
     // Legacy daily-aggregate row: expand the Logs cell into one item per food.
     let items: Array<{ name: string; grams: number | null }> = [{ name: 'Imported Item', grams: null }];
