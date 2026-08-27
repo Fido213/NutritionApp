@@ -76,25 +76,29 @@ export async function renderJournalIfVisible() {
     }
     const comboByObsId = new Map<string, ComboCluster>();
     for (const [obsId, members] of candidateGroups) {
+      if (gen !== journalRenderGen) return;
       if (members.length < 2) continue;
       const obs = await ctx.observationRepo.findById(obsId);
+      if (gen !== journalRenderGen) return;
       if (!obs || obs.source_type !== 'combo') continue;
       let meta: { comboId?: string; comboName?: string } = {};
       try { meta = JSON.parse(obs.interpretation_json || '{}'); } catch { /* unparseable */ }
       let name = String(meta.comboName || '').trim();
       if (!name && meta.comboId) {
         const tpl = await ctx.comboRepo.getCombo(meta.comboId).catch(() => null);
+        if (gen !== journalRenderGen) return;
         name = tpl?.name || 'Combo';
       }
       if (!name) name = 'Combo';
+      const sorted = [...members].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
       comboByObsId.set(obsId, {
         kind: 'combo',
         key: `combo:${obsId}`,
         comboId: meta.comboId ?? null,
         name,
-        logs: [...members].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '')),
+        logs: sorted,
         totalCalories: members.reduce((sum, l) => sum + (l.calories || 0), 0),
-        createdAt: members[0]?.created_at
+        createdAt: sorted[0]?.created_at
       });
     }
 
@@ -192,6 +196,7 @@ export async function renderJournalIfVisible() {
       onToggleLowAccuracy: async (date, current) => {
         await ctx.dailyRecordRepo.setLowAccuracy(date, !current);
         await ctx.dbManager.saveWebStore();
+        invalidateHistoryWindow();
         bumpDataVersion();
         await renderJournalIfVisible();
         showToast(!current ? 'Day flagged low accuracy' : 'Low-accuracy flag cleared');
@@ -199,6 +204,10 @@ export async function renderJournalIfVisible() {
       onToggleSelectMode() {
         selectMode = !selectMode;
         if (!selectMode) selection.clear();
+        else {
+          expandedLogId = null;
+          expandedComboKeys.clear();
+        }
         void renderJournalIfVisible();
       },
       onToggleSelect(id) {
@@ -215,8 +224,9 @@ export async function renderJournalIfVisible() {
         void renderJournalIfVisible();
       },
       onSelectAll(ids) {
-        // Pass 22: force-select everything loaded (foods + waters + combo members).
-        for (const id of ids) selection.add(id);
+        const allSelected = ids.every(id => selection.has(id));
+        if (allSelected) selection.clear();
+        else for (const id of ids) selection.add(id);
         void renderJournalIfVisible();
       },
       onDuplicateCombo: async (cluster) => {
@@ -259,21 +269,34 @@ export async function renderJournalIfVisible() {
         const countEl = document.getElementById('bulk-date-count');
         if (input) input.value = store.getState().selectedDate;
         if (countEl) countEl.textContent = `${ids.length} item(s) will move to a different date.`;
-        pendingBulkIds = ids.filter(id => !journalWaters.some(w => w.id === id));
+        // Keep ALL ids — handler will dispatch to water vs food repo accordingly
+        pendingBulkIds = [...ids];
         openModalLayer('bulk-date-modal');
       },
       onBulkDuplicate: async (ids) => {
-        const foodIds = ids.filter(id => !journalWaters.some(w => w.id === id));
         const date = store.getState().selectedDate;
-        for (const id of foodIds) {
-          const target = journalLogsById.get(id)?.date ?? date;
-          await ctx.logRepo.duplicateLog(id, target);
+        let duplicated = 0;
+        for (const id of ids) {
+          const water = journalWaters.find(w => w.id === id);
+          if (water) {
+            await ctx.waterRepo.insertWaterLog({
+              date: water.date,
+              amount_ml: water.amount_ml,
+              source: water.source as any,
+              note: water.note ?? undefined
+            });
+            duplicated++;
+          } else {
+            const target = journalLogsById.get(id)?.date ?? date;
+            await ctx.logRepo.duplicateLog(id, target);
+            duplicated++;
+          }
         }
         selectMode = false;
         selection.clear();
         await ctx.dbManager.saveWebStore();
         await refreshStateForDate(date);
-        showToast(`Duplicated ${foodIds.length} item(s)`);
+        showToast(`Duplicated ${duplicated} item(s)`);
       },
       onBulkDelete: async (ids) => {
         const ok = await requestConfirmation('Delete Items', `Delete ${ids.length} selected item(s)? This cannot be undone.`);
@@ -358,7 +381,9 @@ function setupBulkDateHandlers() {
       return;
     }
     for (const id of pendingBulkIds) {
-      await ctx.logRepo.updateLog(id, { date: target } as any);
+      const isWater = journalWaters.some(w => w.id === id);
+      if (isWater) await ctx.waterRepo.updateWaterLog(id, { date: target } as any);
+      else await ctx.logRepo.updateLog(id, { date: target } as any);
     }
     await ctx.dbManager.saveWebStore();
     const moved = pendingBulkIds.length;

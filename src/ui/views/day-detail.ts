@@ -210,7 +210,7 @@ export function renderDayDetail(args: DayDetailArgs) {
     container.appendChild(bulkBar);
   }
 
-  if (groups.length === 0) {
+  if (groups.length === 0 || groups.every(g => g.entries.length === 0)) {
     const empty = document.createElement('div');
     empty.className = 'day-detail-empty';
     empty.textContent = 'Nothing logged in this period yet.';
@@ -405,7 +405,7 @@ export function renderDayDetail(args: DayDetailArgs) {
       item.appendChild(macros);
     }
 
-    if (expanded) {
+    if (expanded && !selectMode) {
       const actions = document.createElement('div');
       actions.className = 'log-actions';
       const edit = document.createElement('button');
@@ -545,7 +545,11 @@ export function renderDayDetail(args: DayDetailArgs) {
     item.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
       if (target.closest('button')) return;
-      if (selectMode) return;
+      if (selectMode) {
+        const memberIds = cluster.logs.map(l => l.id);
+        onSelectMany(memberIds);
+        return;
+      }
       onToggleCombo(cluster.key);
     });
     return item;

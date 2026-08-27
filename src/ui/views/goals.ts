@@ -18,6 +18,11 @@ export function renderGoals() {
 }
 
 export function readGoalsForm() {
+  const parse = (el: HTMLInputElement | null, fallback: number) => {
+    if (!el) return fallback;
+    const v = parseFloat(el.value);
+    return Number.isFinite(v) && v >= 0 ? v : fallback;
+  };
   const calInput = document.getElementById('goal-cal') as HTMLInputElement | null;
   const proInput = document.getElementById('goal-pro') as HTMLInputElement | null;
   const carbInput = document.getElementById('goal-carb') as HTMLInputElement | null;
@@ -25,10 +30,10 @@ export function readGoalsForm() {
   const waterInput = document.getElementById('goal-water') as HTMLInputElement | null;
 
   return {
-    caloriesTarget: calInput ? parseFloat(calInput.value) || 2500 : 2500,
-    proteinTarget: proInput ? parseFloat(proInput.value) || 150 : 150,
-    carbsTarget: carbInput ? parseFloat(carbInput.value) || 250 : 250,
-    fatTarget: fatInput ? parseFloat(fatInput.value) || 80 : 80,
-    waterTarget: waterInput ? parseFloat(waterInput.value) || 4000 : 4000
+    caloriesTarget: parse(calInput, 2500),
+    proteinTarget: parse(proInput, 150),
+    carbsTarget: parse(carbInput, 250),
+    fatTarget: parse(fatInput, 80),
+    waterTarget: parse(waterInput, 4000)
   };
 }
