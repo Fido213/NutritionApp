@@ -104,18 +104,29 @@ const COMBO_SORT_OPTIONS: Array<{ value: ComboSortKey; label: string }> = [
 ];
 
 function populateIndexSort() {
-  const select = document.getElementById('index-sort') as HTMLSelectElement | null;
-  if (!select) return;
+  const btn = document.getElementById('index-sort') as HTMLButtonElement | null;
+  const list = document.getElementById('index-sort-options') as HTMLElement | null;
+  const labelEl = document.getElementById('index-sort-label') as HTMLElement | null;
+  if (!btn || !list) return;
   const options = indexTab === 'foods' ? FOOD_SORT_OPTIONS : COMBO_SORT_OPTIONS;
   const current = indexTab === 'foods' ? indexSortFoods : indexSortCombos;
-  select.innerHTML = '';
+  const currentLabel = (options.find(o => o.value === current)?.label) || options[0].label;
+  if (labelEl) labelEl.textContent = currentLabel;
+  list.innerHTML = '';
   for (const opt of options) {
-    const o = document.createElement('option');
-    o.value = opt.value;
-    o.textContent = opt.label;
-    select.appendChild(o);
+    const b = document.createElement('button');
+    b.className = 'sort-option' + (opt.value === current ? ' active' : '');
+    b.textContent = opt.label;
+    b.addEventListener('click', () => {
+      if (indexTab === 'foods') indexSortFoods = opt.value as FoodSortKey;
+      else indexSortCombos = opt.value as ComboSortKey;
+      btn.classList.remove('open');
+      list.classList.remove('open');
+      populateIndexSort();
+      renderIndex();
+    });
+    list.appendChild(b);
   }
-  select.value = current;
 }
 
 function setIndexTab(tab: 'foods' | 'combos') {
@@ -211,11 +222,25 @@ export function setupIndexHandlers() {
     renderIndex();
   });
 
-  (document.getElementById('index-sort') as HTMLSelectElement | null)?.addEventListener('change', (e) => {
-    const val = (e.target as HTMLSelectElement).value;
-    if (indexTab === 'foods') indexSortFoods = val as FoodSortKey;
-    else indexSortCombos = val as ComboSortKey;
-    renderIndex();
+  const sortBtn = document.getElementById('index-sort') as HTMLButtonElement | null;
+  const sortList = document.getElementById('index-sort-options') as HTMLElement | null;
+  sortBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = sortList?.classList.contains('open');
+    if (isOpen) {
+      sortBtn.classList.remove('open');
+      sortList?.classList.remove('open');
+    } else {
+      sortBtn.classList.add('open');
+      sortList?.classList.add('open');
+    }
+  });
+  document.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (!target.closest('.index-sort-wrap')) {
+      sortBtn?.classList.remove('open');
+      sortList?.classList.remove('open');
+    }
   });
 
   // Inline opening of individual foods (same interaction as the day logs).
