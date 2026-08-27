@@ -79,9 +79,17 @@ export function parseCSV(csvText: string): { rows: ParsedImportRow[]; errors: st
     if (cols.length <= dateIdx) continue;
 
     const dateStr = cols[dateIdx];
-    if (!dateStr || isNaN(new Date(dateStr).getTime())) {
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
       errors.push(`Row ${i + 1}: Invalid date "${dateStr}"`);
       continue;
+    }
+    {
+      const d = new Date(dateStr + 'T00:00:00');
+      const [y,m,day] = dateStr.split('-').map(Number);
+      if (isNaN(d.getTime()) || d.getFullYear() !== y || d.getMonth()+1 !== m || d.getDate() !== day) {
+        errors.push(`Row ${i + 1}: Invalid date "${dateStr}"`);
+        continue;
+      }
     }
 
     const cal = parseFloat(cols[calIdx]) || 0;

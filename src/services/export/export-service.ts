@@ -116,6 +116,14 @@ export function datesBetween(startDate: string, endDate: string): string[] {
   // the final day of every range crossing a transition (verified on device
   // and by regression test).
   const pad = (n: number) => String(n).padStart(2, '0');
+  const isValidYMD = (s: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const d = new Date(s + 'T00:00:00');
+    if (isNaN(d.getTime())) return false;
+    const [y,m,day] = s.split('-').map(Number);
+    return d.getFullYear() === y && d.getMonth()+1 === m && d.getDate() === day;
+  };
+  if (!isValidYMD(startDate) || !isValidYMD(endDate)) return [];
   const toUTC = (s: string): number => {
     const [y, m, d] = s.split('-').map(Number);
     return Date.UTC(y, m - 1, d);
@@ -186,9 +194,9 @@ export async function buildExportRows(dates: string[], repos: ExportRepos): Prom
   const recordByDate = new Map(records.map(r => [r.date, r]));
 
   // getGoalsForRange returns most-recent-first; the first goal whose start is
-  // <= date is the goal active on that date (same rule as computeHistoryWindow).
+  // <= date and whose end (if any) covers date is the goal active on that date.
   const sortedGoals = [...goalsForRange].sort((a, b) => b.start_date.localeCompare(a.start_date));
-  const goalForDate = (date: string) => sortedGoals.find(g => g.start_date <= date) ?? null;
+  const goalForDate = (date: string) => sortedGoals.find(g => g.start_date <= date && (g.end_date == null || date <= g.end_date)) ?? null;
 
   const rows: ExportRow[] = [];
 

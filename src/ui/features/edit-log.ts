@@ -11,6 +11,9 @@ import { ctx } from '../context';
 import type { JournalFoodLog } from '@ui/views/day-detail';
 import { invalidateIndexCaches } from './index-screen';
 
+let macrosManuallyEdited = false;
+let isSyncing = false;
+
 export async function openEditView(log: JournalFoodLog) {
   const food = log.food_id ? await ctx.foodRepo.findById(log.food_id) : null;
   const baseAmount = log.amount_g ?? log.amount_ml ?? 100;
@@ -34,6 +37,7 @@ export async function openEditView(log: JournalFoodLog) {
   setValue('edit-carb', String(Math.round(log.carbs_g || 0)));
   setValue('edit-fat', String(Math.round(log.fat_g || 0)));
   setValue('edit-note', log.note || '');
+  macrosManuallyEdited = false;
 
   const editView = document.getElementById('view-edit');
   const previousView = ctx.currentViewId;
@@ -63,11 +67,13 @@ export function setupEditHandlers() {
   // edit-cal/pro/carb/fat inputs stay in sync with the amount multiplier.
   // Direct macro edits are preserved (user can override after).
   const syncMacrosFromAmount = () => {
+    if (macrosManuallyEdited) return;
     const read = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value || '';
     const baseAmount = parseFloat(read('base-amount')) || 100;
     const eatenAmount = parseFloat(read('eaten-amount')) || 0;
     if (!(baseAmount > 0 && eatenAmount > 0)) return;
     const multiplier = eatenAmount / baseAmount;
+    isSyncing = true;
     const set = (id: string, v: number) => {
       const el = document.getElementById(id) as HTMLInputElement | null;
       if (el) el.value = String(Math.round(v * multiplier));
@@ -80,9 +86,15 @@ export function setupEditHandlers() {
     set('edit-pro', basePro);
     set('edit-carb', baseCarb);
     set('edit-fat', baseFat);
+    isSyncing = false;
   };
-  document.getElementById('base-amount')?.addEventListener('input', syncMacrosFromAmount);
-  document.getElementById('eaten-amount')?.addEventListener('input', syncMacrosFromAmount);
+  const markManual = () => { if (!isSyncing) macrosManuallyEdited = true; };
+  document.getElementById('base-amount')?.addEventListener('input', () => { macrosManuallyEdited = false; syncMacrosFromAmount(); });
+  document.getElementById('eaten-amount')?.addEventListener('input', () => { macrosManuallyEdited = false; syncMacrosFromAmount(); });
+  document.getElementById('edit-cal')?.addEventListener('input', markManual);
+  document.getElementById('edit-pro')?.addEventListener('input', markManual);
+  document.getElementById('edit-carb')?.addEventListener('input', markManual);
+  document.getElementById('edit-fat')?.addEventListener('input', markManual);
 
   document.getElementById('btn-save-edit')?.addEventListener('click', async () => {
     const idEl = document.getElementById('edit-log-id') as HTMLInputElement | null;

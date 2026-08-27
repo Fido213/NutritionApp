@@ -63,7 +63,10 @@ export interface ScanHandle {
 
 /** True when the browser can run a live camera scan with the built-in detector. */
 export function supportsBrowserBarcodeScan(): boolean {
-  return typeof window !== 'undefined' && 'BarcodeDetector' in window;
+  if (typeof window === 'undefined' || !('BarcodeDetector' in window)) return false;
+  if (typeof isSecureContext !== 'undefined' && !isSecureContext) return false;
+  if (!navigator.mediaDevices?.getUserMedia) return false;
+  return true;
 }
 
 /**
@@ -80,10 +83,12 @@ export async function startBrowserBarcodeScan(
     throw new Error('Barcode scanning is not supported in this browser — type the number instead.');
   }
 
+  // Clear any previous video element from a double-tap
+  videoContainer.querySelectorAll('video').forEach(v => v.remove());
+
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: 'environment' }
   });
-  if (!stream) throw new Error('Could not access the camera.');
 
   const video = document.createElement('video');
   video.style.width = '100%';
@@ -95,26 +100,41 @@ export async function startBrowserBarcodeScan(
   video.srcObject = stream;
   videoContainer.appendChild(video);
 
-  await video.play().catch(() => { /* muted autoplay is normally allowed */ });
+  try {
+    await video.play();
+  } catch {
+    // muted autoplay normally allowed; swallow but keep scanning
+  }
 
-  const detector = new (window as any).BarcodeDetector({ formats: [...FOOD_BARCODE_FORMATS] });
+  let detector: any;
+  try {
+    detector = new (window as any).BarcodeDetector({ formats: [...FOOD_BARCODE_FORMATS] });
+  } catch (err) {
+    stream.getTracks().forEach(t => t.stop());
+    video.remove();
+    throw new Error('Barcode detector not available for these formats — type the number instead.');
+  }
   let stopped = false;
   let frame = 0;
+  let detecting = false;
 
   const loop = async () => {
     if (stopped) return;
     frame++;
     // Detect every ~4th frame so decoding doesn't starve the video pipeline.
-    if (frame % 4 === 0 && video.readyState >= 2) {
+    if (frame % 4 === 0 && video.readyState >= 2 && !detecting) {
+      detecting = true;
       try {
         const codes = await detector.detect(video);
-        const code = codes?.find((c: any) => typeof c?.rawValue === 'string' && c.rawValue);
+        const code = codes?.find((c: any) => typeof c?.rawValue === 'string' && c.rawValue && /^\d{6,14}$/.test(c.rawValue));
         if (code) {
           onDetected(code.rawValue);
           return;
         }
       } catch {
         /* transient detection errors are ignored */
+      } finally {
+        detecting = false;
       }
     }
     requestAnimationFrame(loop);
@@ -125,6 +145,8 @@ export async function startBrowserBarcodeScan(
     stopped = true;
     stream.getTracks().forEach(t => t.stop());
     video.remove();
+    // Hide container if caller hasn't already (scanner.ts also hides)
+    if (videoContainer.style.display !== 'none') videoContainer.style.display = 'none';
   };
 
   return { stop };

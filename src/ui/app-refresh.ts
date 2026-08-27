@@ -77,30 +77,33 @@ function shiftHistoryAnchor(delta: number) {
   historyAnchor = formatDateISO(d);
 }
 
-function setHistoryView(view: HistoryViewMode) {
+async function setHistoryView(view: HistoryViewMode) {
   historyView = view;
-  historyAnchor = getTodayDateString();
+  // Keep anchor when switching view modes — don't reset paging to today
   document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
   const btn = view === 'week' ? 'btn-view-week' : view === 'month' ? 'btn-view-month' : 'btn-view-year';
   document.getElementById(btn)?.classList.add('active');
-  ensureHistoryWindow().then(() => renderHistoryView());
+  await ensureHistoryWindow();
+  renderHistoryView();
 }
 
 /** Wire the history view-mode buttons + paging events (called once by main.ts). */
 export function setupHistoryViewHandlers() {
-  document.getElementById('btn-view-week')?.addEventListener('click', () => setHistoryView('week'));
-  document.getElementById('btn-view-month')?.addEventListener('click', () => setHistoryView('month'));
-  document.getElementById('btn-view-year')?.addEventListener('click', () => setHistoryView('year'));
+  document.getElementById('btn-view-week')?.addEventListener('click', () => { void setHistoryView('week'); });
+  document.getElementById('btn-view-month')?.addEventListener('click', () => { void setHistoryView('month'); });
+  document.getElementById('btn-view-year')?.addEventListener('click', () => { void setHistoryView('year'); });
 
-  window.addEventListener('history-nav', (e: any) => {
+  window.addEventListener('history-nav', async (e: any) => {
     shiftHistoryAnchor(e.detail);
-    ensureHistoryWindow().then(() => renderHistoryView());
+    await ensureHistoryWindow();
+    renderHistoryView();
   });
 }
 
 /** Exposed for setupNavigation's tab switcher (switching to LOGS re-renders it). */
-export function refreshVisibleHistoryWindow() {
-  ensureHistoryWindow().then(() => renderHistoryView());
+export async function refreshVisibleHistoryWindow() {
+  await ensureHistoryWindow();
+  renderHistoryView();
 }
 
 export async function refreshStateForDate(dateStr: string) {
@@ -152,6 +155,7 @@ export async function refreshStateForDate(dateStr: string) {
     // Data changed (this refresh follows every log/water/delete/edit/goal
     // mutation): recompute the visible window (batch range queries, ~3 native
     // calls) and re-render so heatmap cells update automatically.
-    ensureHistoryWindow().then(() => renderHistoryView());
+    await ensureHistoryWindow();
+    renderHistoryView();
   }
 }

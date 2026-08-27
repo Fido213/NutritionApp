@@ -17,7 +17,12 @@ export function getTodayDateString(): string {
  * Format ISO date string or Date object to YYYY-MM-DD
  */
 export function formatDateISO(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    // Already YYYY-MM-DD — validate without timezone shift
+    const v = new Date(date + 'T00:00:00');
+    if (!isNaN(v.getTime())) return date;
+  }
+  const d = typeof date === 'string' ? new Date(date + 'T00:00:00') : date;
   if (isNaN(d.getTime())) return getTodayDateString();
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
