@@ -42,4 +42,15 @@ export class ObservationRepository {
     const res = await this.db.query(`SELECT * FROM food_observations WHERE id = ?`, [id]);
     return res.values && res.values.length > 0 ? (res.values[0] as FoodObservation) : null;
   }
+
+  /**
+   * Phase 1 flagged-default: any user edit of a log counts as review of the
+   * assumption behind it. Clears future "assumed amount" badges for logs on
+   * this observation (badge resolution suppresses user_corrected rows) and
+   * feeds the personalization layer. Works on real SQLite and the fallback
+   * shim (generic `UPDATE … WHERE id = ?`).
+   */
+  async markCorrected(id: string): Promise<void> {
+    await this.db.run(`UPDATE food_observations SET user_corrected = 1 WHERE id = ?`, [id]);
+  }
 }

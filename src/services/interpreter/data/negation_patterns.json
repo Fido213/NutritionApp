@@ -1,0 +1,15 @@
+{
+  "_note": "Phase 1 negation lexicon. Single source — imported by src/services/interpreter/lexicon.ts. Matching semantics: Latin-script phrases match on case-insensitive word boundaries (so 'no' never fires inside 'noodles'); Arabic-script phrases match on whitespace boundaries (no \\b equivalent). A food span governed by one of these markers is dropped PRE-retrieval.",
+  "version": 1,
+  "markers": [
+    { "lang": "EN", "patterns": ["without", "hold the", "no ", "minus"] },
+    { "lang": "ES", "patterns": ["sin"] },
+    { "lang": "FR", "patterns": ["sans"] },
+    { "lang": "DE", "patterns": ["ohne"] },
+    { "lang": "AR", "patterns": ["بدون", "بلا"] },
+    { "lang": "IT", "patterns": ["senza"] },
+    { "lang": "PT", "patterns": ["sem"] },
+    { "lang": "TR", "patterns": ["suz", "olmadan"] },
+    { "lang": "PL", "patterns": ["bez"] }
+  ]
+}

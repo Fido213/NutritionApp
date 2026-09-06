@@ -10,6 +10,13 @@ export interface InterpretedFoodItem {
   confidence: number;
   isComposite: boolean;
   notes?: string;
+  /**
+   * Phase 1 flagged-default: true when the amount is an assumed default
+   * (no parsed quantity or vague marker). Persisted inside
+   * `food_observations.interpretation_json`; the UI must surface these as
+   * "amount assumed — tap to correct".
+   */
+  wasDefault?: boolean;
 }
 
 export interface InterpretedLabelOCR {

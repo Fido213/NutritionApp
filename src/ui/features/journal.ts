@@ -7,7 +7,7 @@ import { store } from '../state';
 import { showToast } from '../components/toast';
 import { openModalLayer, closeModalLayer } from '../modal-layers';
 import { requestConfirmation } from '../dialogs';
-import { renderDayDetail, weekdayLabel, groupDateLabel } from '@ui/views/day-detail';
+import { renderDayDetail, weekdayLabel, groupDateLabel, assumedAmountLabel } from '@ui/views/day-detail';
 import type { JournalGroup, JournalEntry, JournalFoodLog, JournalWater, ComboCluster } from '@ui/views/day-detail';
 import { refreshStateForDate, bumpDataVersion, invalidateHistoryWindow } from '../app-refresh';
 import { getTodayDateString } from '@utils/dates';
@@ -100,6 +100,28 @@ export async function renderJournalIfVisible() {
         totalCalories: members.reduce((sum, l) => sum + (l.calories || 0), 0),
         createdAt: sorted[0]?.created_at
       });
+    }
+
+    // Phase 1 flagged-default badge: resolve assumed-amount labels once per
+    // render, deduped by observation (duplicated logs share observation ids).
+    // Corrected rows (user_corrected) resolve to null inside the helper.
+    const assumedByObsId = new Map<string, string>();
+    {
+      const obsIds = new Set<string>();
+      for (const log of logs) if (log.observation_id) obsIds.add(log.observation_id);
+      for (const obsId of obsIds) {
+        if (gen !== journalRenderGen) return;
+        const obs = await ctx.observationRepo.findById(obsId).catch(() => null);
+        if (gen !== journalRenderGen) return;
+        if (!obs) continue;
+        const label = assumedAmountLabel(obs.interpretation_json, obs.user_corrected);
+        if (label) assumedByObsId.set(obsId, label);
+      }
+      for (const log of logs as unknown as JournalFoodLog[]) {
+        if (log.observation_id && assumedByObsId.has(log.observation_id)) {
+          log.amountAssumed = assumedByObsId.get(log.observation_id) ?? null;
+        }
+      }
     }
 
     // Groups newest-first; entries chronological within the day.

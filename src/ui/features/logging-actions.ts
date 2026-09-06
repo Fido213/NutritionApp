@@ -37,6 +37,8 @@ export async function logTextInput(rawText: string) {
         amountMl: s.amountMl,
         confidence: s.confidence,
         isComposite: s.isComposite,
+        wasDefault: s.wasDefault,
+        rawUnit: s.rawUnit,
         retrievalScore: s.retrievalScore,
         span: s.span,
       }));
@@ -57,6 +59,9 @@ export async function logTextInput(rawText: string) {
 
   const results = await ctx.foodService.logTextInput(date, rawText, items as any);
   const totalCal = results.reduce((sum, r) => sum + r.nutrition.calories, 0);
+  // Phase 1 flagged-default: immediate feedback at log time, not just the
+  // journal badge — assumed amounts must never look confident, even briefly.
+  const assumed = (items as any[]).filter(i => i?.wasDefault).length;
 
   const textInput = document.getElementById('dash-text-input') as HTMLInputElement | null;
   if (textInput) {
@@ -73,7 +78,7 @@ export async function logTextInput(rawText: string) {
   try { const { invalidateBm25Cache } = await import('@services/interpreter/hybrid-retriever'); invalidateBm25Cache(); } catch {}
   await ctx.dbManager.saveWebStore();
   await refreshStateForDate(date);
-  showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal`);
+  showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal${assumed > 0 ? ` · ${assumed} amount(s) assumed — tap to correct` : ''}`);
 }
 
 /** Log a library food at an exact gram amount on the selected date. */

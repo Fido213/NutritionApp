@@ -165,6 +165,12 @@ export function setupEditHandlers() {
     }
 
     await ctx.logRepo.updateLog(logId, updates);
+    // Phase 1 flagged-default: any edit counts as user review of the logged
+    // assumption — clears the "assumed amount" badge for this observation.
+    // Never allowed to break the save itself.
+    try {
+      if (current.observation_id) await ctx.observationRepo.markCorrected(current.observation_id);
+    } catch { /* badge hygiene only */ }
     await ctx.dbManager.saveWebStore();
 
     const previousDate = current.date;

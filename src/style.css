@@ -389,6 +389,8 @@ body.builder-open .sys-btn-top { display: none; }
 .log-action-btn.blue { background: #3b82f6; color: #fff; border-color: transparent; }
 .log-action-btn.danger { background: #ef4444; color: #fff; border-color: transparent; }
 .log-note-line { font-size: 12px; color: var(--text-dim); font-style: italic; overflow-wrap: anywhere; }
+/* Phase 1 flagged-default: assumed-amount badge — amber, tappable affordance via the row's Edit action. */
+.log-assumed-chip { font-size: 11px; font-weight: 700; color: #fbbf24; background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.4); padding: 3px 8px; border-radius: 6px; width: fit-content; overflow-wrap: anywhere; }
 .log-item.selected { border-color: var(--water); }
 .select-box { width: 20px; height: 20px; min-width: 20px; border: 2px solid var(--text-dim); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; color: #000; align-self: center; }
 .select-box.checked { background: var(--water); border-color: var(--water); }

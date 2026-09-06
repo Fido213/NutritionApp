@@ -1,0 +1,80 @@
+{"id":"q001","input":"250g chicken breast","expected":[{"grams":250}],"type":"explicit","notes":"basic grams"}
+{"id":"q002","input":"1.5kg rice","expected":[{"grams":1500}],"type":"explicit"}
+{"id":"q003","input":"100 ml milk","expected":[{"ml":100}],"type":"explicit"}
+{"id":"q004","input":"1 l water","expected":[{"ml":1000}],"type":"explicit"}
+{"id":"q005","input":"1 oz almonds","expected":[{"grams":28.35}],"type":"explicit"}
+{"id":"q006","input":"1 lb beef","expected":[{"grams":453.59}],"type":"explicit"}
+{"id":"q007","input":"1 cup rice","expected":[{"ml":240}],"type":"explicit"}
+{"id":"q008","input":"2 tbsp oil","expected":[{"ml":30}],"type":"explicit"}
+{"id":"q009","input":"1 tsp salt","expected":[{"ml":5}],"type":"explicit"}
+{"id":"q010","input":"½ cup oats","expected":[{"ml":120}],"type":"fraction"}
+{"id":"q011","input":"1/2 cup oats","expected":[{"ml":120}],"type":"fraction"}
+{"id":"q012","input":"1 1/2 lb chicken","expected":[{"grams":680.39}],"type":"fraction"}
+{"id":"q013","input":"12,5g chia","expected":[{"grams":12.5}],"type":"comma-decimal"}
+{"id":"q014","input":"2x150g chicken","expected":[{"grams":300}],"type":"multiplier"}
+{"id":"q015","input":"2 x 150 g chicken","expected":[{"grams":300}],"type":"multiplier"}
+{"id":"q016","input":"100-150g chicken","expected":[{"grams":125}],"type":"range"}
+{"id":"q017","input":"100 to 150 g rice","expected":[{"grams":125}],"type":"range"}
+{"id":"q018","input":"250g chicken breast, 100g rice","expected":[{"grams":250},{"grams":100}],"type":"multi-span"}
+{"id":"q019","input":"250g poulet, 100g riz","expected":[{"grams":250},{"grams":100}],"type":"multilingual","lang":"FR"}
+{"id":"q020","input":"250g دجاج, 100g أرز","expected":[{"grams":250},{"grams":100}],"type":"multilingual","lang":"AR"}
+{"id":"q021","input":"1 كوب أرز","expected":[{"ml":240}],"type":"multilingual","lang":"AR"}
+{"id":"q022","input":"2 apples","expected":[{"count":2}],"type":"bare-count"}
+{"id":"q023","input":"1 egg","expected":[{"grams":50}],"type":"explicit","notes":"piece-word in UNIT_RE resolves via PER_PIECE (egg=50g) in normalizeAmount"}
+{"id":"q024","input":"2 بيضة","expected":[{"count":2}],"type":"bare-count","lang":"AR"}
+{"id":"q025","input":"6000g chicken","expected":[],"type":"clamp","notes":"over 5000 clamped out"}
+{"id":"q026","input":"a side of rice","expected":[],"type":"vague","notes":"lexicon gap by design — must hit flagged-default path, never silent 100g"}
+{"id":"q027","input":"a bowl of soup","expected":[],"type":"vague"}
+{"id":"q028","input":"a pinch of salt","expected":[],"type":"vague"}
+{"id":"q029","input":"a handful of nuts","expected":[],"type":"vague"}
+{"id":"q030","input":"some rice","expected":[],"type":"vague"}
+{"id":"q031","input":"chicken breast with a side of white rice","expected":[],"type":"vague","notes":"dump's canonical example: qty parser must NOT invent grams for the side"}
+{"id":"q032","input":"una pizca de sal","expected":[],"type":"vague","lang":"ES"}
+{"id":"q033","input":"une pincée de sel","expected":[],"type":"vague","lang":"FR"}
+{"id":"q034","input":"eine Prise Salz","expected":[],"type":"vague","lang":"DE"}
+{"id":"q035","input":"رشة ملح","expected":[],"type":"vague","lang":"AR"}
+{"id":"q036","input":"250g chicken breast with rice","expected":[{"grams":250}],"type":"qty-span-align","notes":"single qty, two spans — qty belongs to chicken; rice is flagged-default"}
+{"id":"q037","input":"chicken 200g","expected":[{"grams":200}],"type":"qty-after-food"}
+{"id":"q038","input":"100g","expected":[{"grams":100}],"type":"explicit","notes":"bare qty no food word still parses"}
+{"id":"q039","input":"apple","expected":[],"type":"no-qty","notes":"no number at all — flagged-default path"}
+{"id":"q040","input":"banana","expected":[],"type":"no-qty"}
+{"id":"q041","input":"grilled chicken","expected":[],"type":"no-qty"}
+{"id":"q042","input":"2x150g poulet et 100-150g riz","expected":[{"grams":300},{"grams":125}],"type":"multilingual","lang":"FR"}
+{"id":"q043","input":"½¼¾ fractions","expected":[],"type":"fraction","notes":"fraction chars without unit are not quantities"}
+{"id":"q044","input":"3 slices bread","expected":[{"count":3}],"type":"bare-count","notes":"slice count captured as bare number"}
+{"id":"q045","input":"1 can beans","expected":[{"grams":400}],"type":"explicit","notes":"piece-word in UNIT_RE resolves via PER_PIECE (can=400g)"}
+{"id":"q046","input":"250 g chicken","expected":[{"grams":250}],"type":"explicit","notes":"space between number and unit"}
+{"id":"q047","input":"250G CHICKEN","expected":[{"grams":250}],"type":"explicit","notes":"case-insensitive unit"}
+{"id":"q048","input":"0g chicken","expected":[{"grams":0}],"type":"explicit","notes":"zero is in clamp range, kept"}
+{"id":"q049","input":"100g rice without sauce","expected":[{"grams":100}],"type":"negation-gap","notes":"negation must not disturb qty; sauce is dropped pre-retrieval, not here"}
+{"id":"q050","input":"chicken salad without dressing","expected":[],"type":"negation-gap","notes":"no qty anywhere — flagged-default for chicken, dressing dropped"}
+{"id":"q051","input":"rice with chicken 200g far away filler words to push distance beyond thirty characters limit here","expected":[{"grams":200}],"type":"far-qty","notes":"qty >30 chars from rice span — merge test must leave rice flagged-default, not steal 200g"}
+{"id":"q052","input":"200g rice and chicken","expected":[{"grams":200}],"type":"qty-span-align","notes":"leading qty attaches to nearest span; chicken flagged-default"}
+{"id":"q053","input":"1 tasse riz","expected":[{"ml":240}],"type":"multilingual","lang":"FR"}
+{"id":"q054","input":"1 taza arroz","expected":[{"ml":240}],"type":"multilingual","lang":"ES"}
+{"id":"q055","input":"1 كيلو لحم","expected":[{"grams":1000}],"type":"multilingual","lang":"AR"}
+{"id":"q056","input":"500 مل حليب","expected":[{"ml":500}],"type":"multilingual","lang":"AR"}
+{"id":"q057","input":"2 Eier","expected":[{"grams":100}],"type":"explicit","lang":"DE","notes":"Eier matches UNIT_RE (i-flag), PER_PIECE eier=50g"}
+{"id":"q058","input":"250g Hähnchenbrust","expected":[{"grams":250}],"type":"multilingual","lang":"DE"}
+{"id":"q059","input":"250g pollo","expected":[{"grams":250}],"type":"multilingual","lang":"ES"}
+{"id":"q060","input":"250g pollo grigliato","expected":[{"grams":250}],"type":"multilingual","lang":"IT"}
+{"id":"q061","input":"100g riso bianco","expected":[{"grams":100}],"type":"multilingual","lang":"IT"}
+{"id":"q062","input":"250g frango","expected":[{"grams":250}],"type":"multilingual","lang":"PT"}
+{"id":"q063","input":"250g tavuk","expected":[{"grams":250}],"type":"multilingual","lang":"TR"}
+{"id":"q064","input":"10mg salt","expected":[{"grams":0.01}],"type":"explicit"}
+{"id":"q065","input":"2.5kg potatoes","expected":[{"grams":2500}],"type":"explicit"}
+{"id":"q066","input":"3x2 apples","expected":[{"count":6}],"type":"bare-count","notes":"unitless multiplier stays bare (6 pieces); caller resolves via food-hint piece weights"}
+{"id":"q067","input":"a cup of rice","expected":[],"type":"vague","notes":"vague without number — lexicon resolves, parser stays silent"}
+{"id":"q068","input":"two apples","expected":[],"type":"no-qty","notes":"word numbers not parsed — flagged-default (documents B-QTY 'two' as future lexicon work, not parser bug)"}
+{"id":"q069","input":"1/2 apple","expected":[{"count":0.5}],"type":"bare-count","notes":"fractional bare count"}
+{"id":"q070","input":"250g chicken, chicken","expected":[{"grams":250}],"type":"multi-span","notes":"duplicate span text — single qty"}
+{"id":"q071","input":"  250g   chicken  ","expected":[{"grams":250}],"type":"explicit","notes":"extra whitespace"}
+{"id":"q072","input":"250g-chicken","expected":[{"grams":250}],"type":"explicit","notes":"hyphen glued"}
+{"id":"q073","input":"midnight oats containing 50g oats, 20g chia seeds, 120ml milk","expected":[{"grams":50},{"grams":20},{"ml":120}],"type":"multi-span"}
+{"id":"q074","input":"100–150g chicken","expected":[{"grams":125}],"type":"range","notes":"en-dash range"}
+{"id":"q075","input":"1 Stück Käse","expected":[{"grams":40}],"type":"explicit","lang":"DE","notes":"Stück matches UNIT_RE (i-flag), PER_PIECE stück=40g"}
+{"id":"q076","input":"un peu de riz","expected":[],"type":"vague","lang":"FR"}
+{"id":"q077","input":"un poco de arroz","expected":[],"type":"vague","lang":"ES"}
+{"id":"q078","input":"biraz pirinç","expected":[],"type":"vague","lang":"TR"}
+{"id":"q079","input":"trochę ryżu","expected":[],"type":"vague","lang":"PL"}
+{"id":"q080","input":"250g chicken breast, 100g rice, 50g sauce without dressing","expected":[{"grams":250},{"grams":100},{"grams":50}],"type":"multi-span","notes":"three qtys; dressing dropped pre-retrieval"}

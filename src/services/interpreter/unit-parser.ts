@@ -35,7 +35,7 @@ export interface ParsedQuantity {
 const FRACTION_CHARS = '½¼¾⅓⅔⅛';
 const NUM_RE = `(?:\\d+(?:[.,]\\d+)?|\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|[${FRACTION_CHARS}])`;
 // Unit tokens: 1-2 letters plus known words (cup, tbsp, etc.) + Arabic, or piece words
-const UNIT_RE = String.raw`(?:kg|kgs?|g|mg|oz|lbs?|lb|l|ml|cup|cups|tasse|tassen|taza|tazas|كوب|أكواب|ltr|liter|litre|liters|litres|لتر|مل|tbsp|tbsps?|tablespoon|tsp|teaspoon|el|tl|cc|piece|pieces|stück|morceau|قطعة|can|dose|boîte|علبة|egg|eggs|ei|eier|œuf|œufs|بيضة|slice|scheibe|tranche|شريحة)\.?`;
+const UNIT_RE = String.raw`(?:kg|kgs?|كيلوغرام|كيلو|g|غرام|جرام|جم|mg|oz|lbs?|lb|l|ml|cup|cups|tasse|tassen|taza|tazas|كوب|أكواب|ltr|liter|litre|liters|litres|لتر|مل|tbsp|tbsps?|tablespoon|tsp|teaspoon|el|tl|cc|piece|pieces|stück|morceau|قطعة|can|dose|boîte|علبة|egg|eggs|ei|eier|œuf|œufs|بيضة|slice|scheibe|tranche|شريحة)\.?`;
 
 // Patterns in priority order
 // 1) multiplier: 2x150g / 2 x 150 g
@@ -70,6 +70,19 @@ export function parseQuantities(text: string): ParsedQuantity[] {
     const unit = m[3] || null;
     if (mult === null || val === null) continue;
     const total = mult * val;
+    // Unitless multiplier ("3x2 apples" = 6 pieces) stays bare so the caller
+    // resolves it via food-hint piece weights instead of misreading it as grams.
+    if (!unit) {
+      add({
+        raw, span: [start, end],
+        amountG: null, amountMl: null,
+        canonicalGrams: null,
+        originalValue: total, unitText: null,
+        wasRange: false, wasMultiplier: true,
+        confidence: 0.6,
+      });
+      continue;
+    }
     const { amountG, amountMl } = normalizeAmount(total, unit);
     add({
       raw, span: [start, end],

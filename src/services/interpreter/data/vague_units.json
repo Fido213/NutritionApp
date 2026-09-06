@@ -1,0 +1,96 @@
+{
+  "_note": "Phase 1 static portion lexicon (Tier 1+3 of the FNDDS plan; Tier 2 category-modal deferred). Single source — imported by src/services/interpreter/lexicon.ts. Grams are generic defaults; user overrides and item-specific values always win. grams:null = acknowledged vague marker with no safe estimate → flagged-default path.",
+  "version": 1,
+  "markers": [
+    {
+      "id": "side",
+      "grams": 125,
+      "patterns": {
+        "EN": ["a side of", "side of"],
+        "ES": ["guarnición de", "de guarnición"],
+        "FR": ["accompagnement de", "en accompagnement"],
+        "DE": ["als Beilage", "Beilage"],
+        "AR": ["طبق جانبي"],
+        "IT": ["contorno di"],
+        "PT": ["acompanhamento de"],
+        "TR": ["garnitür olarak"],
+        "PL": ["jako dodatek"]
+      }
+    },
+    {
+      "id": "bowl",
+      "grams": 240,
+      "patterns": {
+        "EN": ["a bowl of", "bowl of"],
+        "ES": ["tazón de", "bol de"],
+        "FR": ["bol de"],
+        "DE": ["Schüssel"],
+        "AR": ["وعاء من", "طبق من"],
+        "IT": ["ciotola di"],
+        "PT": ["tigela de"],
+        "TR": ["kase"],
+        "PL": ["miska"]
+      }
+    },
+    {
+      "id": "cup-of",
+      "ml": 240,
+      "patterns": {
+        "EN": ["a cup of", "cup of"],
+        "ES": ["taza de", "una taza de"],
+        "FR": ["tasse de", "une tasse de"],
+        "DE": ["Tasse"],
+        "AR": ["كوب من"],
+        "IT": ["tazza di"],
+        "PT": ["xícara de"],
+        "TR": ["fincan"],
+        "PL": ["filiżanka"]
+      }
+    },
+    {
+      "id": "pinch",
+      "grams": 0.5,
+      "patterns": {
+        "EN": ["a pinch of", "pinch of"],
+        "ES": ["una pizca de", "pizca de"],
+        "FR": ["une pincée de", "pincée de"],
+        "DE": ["Prise"],
+        "AR": ["رشة"],
+        "IT": ["pizzico di"],
+        "PT": ["pitada de"],
+        "TR": ["tutam"],
+        "PL": ["szczypta"]
+      }
+    },
+    {
+      "id": "handful",
+      "grams": 30,
+      "patterns": {
+        "EN": ["a handful of", "handful of"],
+        "ES": ["un puñado de", "puñado de"],
+        "FR": ["poignée de"],
+        "DE": ["Handvoll"],
+        "AR": ["حفنة"],
+        "IT": ["manciata di"],
+        "PT": ["punhado de"],
+        "TR": ["avuç"],
+        "PL": ["garść"]
+      }
+    },
+    {
+      "id": "some",
+      "grams": null,
+      "patterns": {
+        "EN": ["some"],
+        "ES": ["un poco de"],
+        "FR": ["un peu de"],
+        "DE": ["etwas", "ein bisschen"],
+        "AR": ["بعض", "قليل من"],
+        "IT": ["un po' di"],
+        "PT": ["um pouco de"],
+        "TR": ["biraz"],
+        "PL": ["trochę"]
+      }
+    }
+  ]
+}

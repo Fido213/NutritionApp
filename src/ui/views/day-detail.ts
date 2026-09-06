@@ -38,6 +38,37 @@ export interface JournalFoodLog {
   note?: string | null;
   created_at?: string;
   observation_id?: string | null;
+  /**
+   * Phase 1 flagged-default badge. Short label (`amount assumed` /
+   * `~side assumed`) resolved in journal.ts from the observation's
+   * interpretation_json; null = nothing to surface. Cleared by any edit
+   * (observation.user_corrected), so corrected rows never show stale flags.
+   */
+  amountAssumed?: string | null;
+}
+
+/**
+ * Pure label resolution for the assumed-amount badge (unit-tested; the view
+ * only renders the returned string). Returns null when no badge applies:
+ * corrected rows, non-interpreter observations, confident parses.
+ */
+export function assumedAmountLabel(
+  interpretationJson: string | null | undefined,
+  userCorrected?: number | null,
+): string | null {
+  if (userCorrected === 1) return null;
+  if (!interpretationJson) return null;
+  let interp: { wasDefault?: boolean; rawUnit?: string };
+  try {
+    interp = JSON.parse(interpretationJson);
+  } catch {
+    return null;
+  }
+  if (interp?.wasDefault === true) return 'amount assumed';
+  if (typeof interp?.rawUnit === 'string' && interp.rawUnit.startsWith('~')) {
+    return `${interp.rawUnit.slice(1)} assumed`;
+  }
+  return null;
 }
 
 export interface JournalWater {
@@ -405,6 +436,14 @@ export function renderDayDetail(args: DayDetailArgs) {
       item.appendChild(macros);
     }
 
+    if (log.amountAssumed) {
+      const chip = document.createElement('div');
+      chip.className = 'log-assumed-chip';
+      chip.title = 'Amount was assumed, not measured — tap to expand, then Edit to correct';
+      chip.textContent = `⚠ ${log.amountAssumed} — tap Edit to correct`;
+      item.appendChild(chip);
+    }
+
     if (expanded && !selectMode) {
       const actions = document.createElement('div');
       actions.className = 'log-actions';
@@ -500,7 +539,8 @@ export function renderDayDetail(args: DayDetailArgs) {
         mac.className = 'combo-ing-macros';
         mac.textContent =
           `${Math.round(log.amount_g ?? log.amount_ml ?? 0)}${log.amount_ml != null ? 'ml' : 'g'} · ` +
-          `P ${Math.round(log.protein_g || 0)} C ${Math.round(log.carbs_g || 0)} F ${Math.round(log.fat_g || 0)}`;
+          `P ${Math.round(log.protein_g || 0)} C ${Math.round(log.carbs_g || 0)} F ${Math.round(log.fat_g || 0)}` +
+          (log.amountAssumed ? ` · ⚠ ${log.amountAssumed}` : '');
         left.append(nm, mac);
         const kcalEl = document.createElement('span');
         kcalEl.className = 'combo-ing-kcal';

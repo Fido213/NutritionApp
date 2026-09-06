@@ -10,6 +10,7 @@
 import { parseQuantities, resolveBareCount } from './unit-parser';
 import { extractFoodSpans, extractFoodSpansSync } from './ner-client';
 import { hybridRetrieve, hybridRetrieveSync, buildBm25Index } from './hybrid-retriever';
+import { resolveVagueMarker, governedByNegation } from './lexicon';
 import type { Food } from '@data/types';
 
 export interface InterpretedSpan {
@@ -22,6 +23,12 @@ export interface InterpretedSpan {
   retrievalScore: number;
   method: 'exact' | 'alias' | 'hybrid';
   rawUnit: string | null;
+  /**
+   * Phase 1 flagged-default: true when no quantity or vague marker was found
+   * and `defaultGrams` was assumed. The UI must surface these as
+   * "amount assumed — tap to correct", never as confident parses.
+   */
+  wasDefault: boolean;
 }
 
 let foodsCache: Food[] | null = null;
@@ -29,6 +36,79 @@ let foodsCache: Food[] | null = null;
 export function setFoodsForInterpreter(foods: Food[]): void {
   foodsCache = foods;
   buildBm25Index(foods);
+}
+
+interface ResolvedSpanAmount {
+  amountG: number | null;
+  amountMl: number | null;
+  rawUnit: string | null;
+  confidence: number;
+  wasDefault: boolean;
+}
+
+/**
+ * Single qty-resolution path shared by interpretText / interpretTextSync /
+ * alignQuantities (Phase 1 merge semantics: grams wrong = qty bug).
+ *
+ * Order: nearest explicit qty → bare-count with food hint → vague-marker
+ * lexicon estimate (visible, 0.70) → flagged default (visible, ≤0.65).
+ * The parser itself never invents grams; only this function assumes, and it
+ * always says so via `wasDefault`.
+ */
+function resolveSpanAmount(
+  text: string,
+  spanText: string,
+  span: [number, number],
+  spanConfidence: number,
+  qtys: ReturnType<typeof parseQuantities>,
+  defaultGrams: number,
+): ResolvedSpanAmount {
+  const qty = nearestQty(span, qtys);
+  if (qty) {
+    if (qty.amountG !== null || qty.amountMl !== null) {
+      return {
+        amountG: qty.amountG,
+        amountMl: qty.amountMl,
+        rawUnit: qty.unitText,
+        confidence: Math.min(0.92, (spanConfidence + qty.confidence) / 2 + 0.05),
+        wasDefault: false,
+      };
+    }
+    // Bare count like "2 apples"
+    const resolved = resolveBareCount(qty, spanText);
+    return {
+      amountG: resolved.amountG,
+      amountMl: resolved.amountMl,
+      rawUnit: resolved.unitText,
+      confidence: 0.72,
+      wasDefault: false,
+    };
+  }
+  // No explicit qty: vague marker in the span window ("a side of rice").
+  const window = text.slice(Math.max(0, span[0] - 40), Math.min(text.length, span[1] + 40));
+  const vague = resolveVagueMarker(window);
+  if (vague) {
+    return {
+      amountG: vague.amountG,
+      amountMl: vague.amountMl,
+      rawUnit: `~${vague.id}`,
+      confidence: 0.7,
+      wasDefault: false,
+    };
+  }
+  // Flagged default — visible assumption, capped confidence, never silent.
+  return {
+    amountG: defaultGrams,
+    amountMl: null,
+    rawUnit: null,
+    confidence: Math.min(0.65, spanConfidence),
+    wasDefault: true,
+  };
+}
+
+/** Drop food spans governed by a negation marker, pre-retrieval. */
+function dropNegatedSpans<T extends { span: [number, number] }>(text: string, spans: T[]): T[] {
+  return spans.filter((s) => !governedByNegation(text, s.span[0]));
 }
 
 /**
@@ -43,12 +123,12 @@ export async function interpretText(
   if (!rawInput || rawInput.trim().length === 0) return [];
   const text = rawInput.normalize('NFKC');
   const qtys = parseQuantities(text);
-  const spans = await extractFoodSpans(text, qtys);
+  const spans = dropNegatedSpans(text, await extractFoodSpans(text, qtys));
 
   if (spans.length === 0) return [];
   if (!foods || foods.length === 0) {
     // No foods loaded yet — return spans with amounts but no retrieval score
-    return alignQuantities(spans, qtys, opts.defaultGrams ?? 100);
+    return alignQuantities(text, spans, qtys, opts.defaultGrams ?? 100);
   }
 
   const out: InterpretedSpan[] = [];
@@ -59,30 +139,9 @@ export async function interpretText(
     // If below, mark low confidence but still return span text as canonical (will upsert as new food)
     const retrievalScore = best?.score ?? 0;
     const method = best?.method ?? 'hybrid';
-    // Align qty: nearest qty to span
-    const qty = nearestQty(span.span, qtys);
-    let amountG: number | null = null;
-    let amountMl: number | null = null;
-    let rawUnit: string | null = null;
-    let conf = span.confidence;
-    if (qty) {
-      rawUnit = qty.unitText;
-      if (qty.amountG !== null || qty.amountMl !== null) {
-        amountG = qty.amountG;
-        amountMl = qty.amountMl;
-        conf = Math.min(0.92, (span.confidence + qty.confidence) / 2 + 0.05);
-      } else {
-        // Bare count like "2 apples"
-        const resolved = resolveBareCount(qty, span.text);
-        amountG = resolved.amountG;
-        amountMl = resolved.amountMl;
-        rawUnit = resolved.unitText;
-        conf = 0.72;
-      }
-    } else {
-      amountG = opts.defaultGrams ?? 100;
-      conf = Math.max(0.65, span.confidence - 0.1);
-    }
+    const amt = resolveSpanAmount(text, span.text, span.span, span.confidence, qtys, opts.defaultGrams ?? 100);
+    const amountG = amt.amountG;
+    const amountMl = amt.amountMl;
 
     // Clamp 0-5000
     const g = amountG ?? amountMl ?? 0;
@@ -92,12 +151,13 @@ export async function interpretText(
       canonicalName: best ? best.food.canonical_name : span.text,
       amountG,
       amountMl,
-      confidence: retrievalScore < 0.4 ? Math.min(conf, 0.68) : conf,
+      confidence: retrievalScore < 0.4 ? Math.min(amt.confidence, 0.68) : amt.confidence,
       isComposite: !!span.isCompositeHint,
       span: span.span,
       retrievalScore,
       method,
-      rawUnit,
+      rawUnit: amt.rawUnit,
+      wasDefault: amt.wasDefault,
     });
   }
 
@@ -109,9 +169,9 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
   if (!rawInput || rawInput.trim().length === 0) return [];
   const text = rawInput.normalize('NFKC');
   const qtys = parseQuantities(text);
-  const spans = extractFoodSpansSync(text, qtys);
+  const spans = dropNegatedSpans(text, extractFoodSpansSync(text, qtys));
   if (spans.length === 0) return [];
-  if (!foods || foods.length === 0) return alignQuantities(spans, qtys, opts.defaultGrams ?? 100);
+  if (!foods || foods.length === 0) return alignQuantities(text, spans, qtys, opts.defaultGrams ?? 100);
 
   const out: InterpretedSpan[] = [];
   for (const span of spans) {
@@ -119,43 +179,24 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
     const best = hybrid[0];
     const retrievalScore = best?.score ?? 0;
     const method = best?.method ?? 'hybrid';
-    const qty = nearestQty(span.span, qtys);
-    let amountG: number | null = null;
-    let amountMl: number | null = null;
-    let rawUnit: string | null = null;
-    let conf = span.confidence;
-    if (qty) {
-      rawUnit = qty.unitText;
-      if (qty.amountG !== null || qty.amountMl !== null) {
-        amountG = qty.amountG;
-        amountMl = qty.amountMl;
-        conf = Math.min(0.92, (span.confidence + qty.confidence) / 2 + 0.05);
-      } else {
-        const resolved = resolveBareCount(qty, span.text);
-        amountG = resolved.amountG;
-        amountMl = resolved.amountMl;
-        rawUnit = resolved.unitText;
-        conf = 0.72;
-      }
-    } else {
-      amountG = opts.defaultGrams ?? 100;
-      conf = Math.max(0.65, span.confidence - 0.1);
-    }
-    const g = amountG ?? amountMl ?? 0;
+    const amt = resolveSpanAmount(text, span.text, span.span, span.confidence, qtys, opts.defaultGrams ?? 100);
+    const g = amt.amountG ?? amt.amountMl ?? 0;
     if (g < 0 || g > 5000) continue;
     out.push({
       canonicalName: best ? best.food.canonical_name : span.text,
-      amountG, amountMl,
-      confidence: retrievalScore < 0.4 ? Math.min(conf, 0.68) : conf,
+      amountG: amt.amountG, amountMl: amt.amountMl,
+      confidence: retrievalScore < 0.4 ? Math.min(amt.confidence, 0.68) : amt.confidence,
       isComposite: !!span.isCompositeHint,
       span: span.span,
-      retrievalScore, method, rawUnit,
+      retrievalScore, method, rawUnit: amt.rawUnit,
+      wasDefault: amt.wasDefault,
     });
   }
   return out;
 }
 
-function nearestQty(span: [number, number], qtys: ReturnType<typeof parseQuantities>): ReturnType<typeof parseQuantities>[number] | null {
+/** Nearest qty to a span (≤30 chars), preferring qty-before-span. Exported for the merge harness. */
+export function nearestQty(span: [number, number], qtys: ReturnType<typeof parseQuantities>): ReturnType<typeof parseQuantities>[number] | null {
   if (qtys.length === 0) return null;
   // Prefer qty that ends just before span starts (e.g., "250g chicken")
   let best: ReturnType<typeof parseQuantities>[number] | null = null;
@@ -176,35 +217,23 @@ function nearestQty(span: [number, number], qtys: ReturnType<typeof parseQuantit
 }
 
 function alignQuantities(
+  text: string,
   spans: ReturnType<typeof extractFoodSpansSync>,
   qtys: ReturnType<typeof parseQuantities>,
   defaultGrams: number
 ): InterpretedSpan[] {
   return spans.map(span => {
-    const q = nearestQty(span.span, qtys);
-    let amountG: number | null = null;
-    let amountMl: number | null = null;
-    let rawUnit: string | null = null;
-    if (q) {
-      if (q.amountG !== null || q.amountMl !== null) {
-        amountG = q.amountG;
-        amountMl = q.amountMl;
-        rawUnit = q.unitText;
-      } else {
-        const r = resolveBareCount(q, span.text);
-        amountG = r.amountG;
-        rawUnit = r.unitText;
-      }
-    } else amountG = defaultGrams;
+    const amt = resolveSpanAmount(text, span.text, span.span, span.confidence, qtys, defaultGrams);
     return {
       canonicalName: span.text,
-      amountG, amountMl,
-      confidence: span.confidence,
+      amountG: amt.amountG, amountMl: amt.amountMl,
+      confidence: amt.confidence,
       isComposite: !!span.isCompositeHint,
       span: span.span,
       retrievalScore: 0,
       method: 'hybrid' as const,
-      rawUnit,
+      rawUnit: amt.rawUnit,
+      wasDefault: amt.wasDefault,
     };
   });
 }

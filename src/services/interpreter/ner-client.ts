@@ -8,6 +8,8 @@
  * Never hallucinates — every span must be substring of input (langextract-style grounding).
  */
 
+import { isNegationToken } from './lexicon';
+
 export interface FoodSpan {
   text: string;
   normalized: string;
@@ -83,6 +85,13 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
     while (words.length && STOP_WORDS.has(words[0].toLowerCase())) words.shift();
     while (words.length && STOP_WORDS.has(words[words.length - 1].toLowerCase())) words.pop();
     if (!words.length) return null;
+    // Negation (Phase 1, pre-retrieval): truncate at the first negation token
+    // ("rice without sauce" → "rice"); a leading negation ("no sauce") drops
+    // the whole span — index.ts drops survivors via governedByNegation too.
+    const negIdx = words.findIndex(isNegationToken);
+    if (negIdx === 0) return null;
+    if (negIdx > 0) words = words.slice(0, negIdx);
+    if (!words.length) return null;
     // Heuristic: food phrase is 1-4 words, filter single letters
     words = words.slice(0, 4);
     const textClean = words.join(' ');
@@ -111,15 +120,19 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
   };
 
   if (sortedQty.length === 0) {
-    // No quantities — whole input is one food span (e.g., "apple")
+    // No quantities — whole input is one food span (e.g., "apple"),
+    // truncated at any negation marker ("chicken without skin" → "chicken").
     const whole = text.trim().replace(/^[^A-Za-z\u00C0-\u024F\u0600-\u06FF0-9]+|[^A-Za-z\u00C0-\u024F\u0600-\u06FF0-9]+$/g, '');
-    if (whole.length >= 2 && whole.length <= 60) {
-      const start = text.indexOf(whole);
+    const wholeWords = whole.split(/\s+/);
+    const negAt = wholeWords.findIndex(isNegationToken);
+    const withoutNeg = (negAt === -1 ? wholeWords : wholeWords.slice(0, negAt)).join(' ');
+    if (withoutNeg.length >= 2 && withoutNeg.length <= 60) {
+      const start = text.indexOf(withoutNeg);
       if (start !== -1) {
         spans.push({
-          text: whole,
-          normalized: whole.toLowerCase().normalize('NFKC').trim().replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\s]/g, '').replace(/\s+/g, ' '),
-          span: [start, start + whole.length],
+          text: withoutNeg,
+          normalized: withoutNeg.toLowerCase().normalize('NFKC').trim().replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\s]/g, '').replace(/\s+/g, ' '),
+          span: [start, start + withoutNeg.length],
           confidence: 0.75,
           isCompositeHint: isComposite,
         });
@@ -147,7 +160,10 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
     else if (seg.trim().length > 0 && seg.trim().length < 40) {
       // Fallback: if segment is like "and" etc., skip; otherwise treat as potential food without clean words
       const trimmed = seg.replace(/^[,\s;+\-]+|[,\s;+\-]+$/g, '').trim();
-      if (trimmed.length >= 2 && !STOP_WORDS.has(trimmed.toLowerCase())) {
+      // Never resurrect a negation-governed segment extractFood rejected
+      // ("100g no sauce" must not yield a "sauce" span via the back door).
+      const firstWord = trimmed.split(/\s+/)[0] ?? '';
+      if (trimmed.length >= 2 && !STOP_WORDS.has(trimmed.toLowerCase()) && !isNegationToken(firstWord)) {
         const start = text.indexOf(trimmed, q.span[1]);
         if (start !== -1) {
           spans.push({
