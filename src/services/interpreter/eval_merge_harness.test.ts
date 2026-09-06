@@ -12,6 +12,26 @@ import { describe, it, expect } from 'vitest';
 import { interpretTextSync, nearestQty } from './index';
 import { parseQuantities } from './unit-parser';
 import { resolveVagueMarker, governedByNegation } from './lexicon';
+import type { Food } from '@data/types';
+
+function fakeFood(id: string, name: string): Food {
+  return {
+    id,
+    canonical_name: name,
+    normalized_name: name,
+    calories_per_100g: 100,
+    protein_per_100g: 10,
+    carbs_per_100g: 10,
+    fat_per_100g: 5,
+    water_per_100g: 60,
+    nutrition_basis: 'per_100g',
+    source_type: 'user_entered',
+    source_reference: null,
+    confidence: 1.0,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  };
+}
 
 describe('merge: nearest-qty attachment', () => {
   it('attaches adjacent qty, ignores qty >30 chars away', () => {
@@ -99,5 +119,29 @@ describe('merge: vague markers vs flagged defaults', () => {
   it('explicit qty is never flagged', () => {
     const out = interpretTextSync('250g chicken', null);
     expect(out[0].wasDefault).toBe(false);
+  });
+});
+
+describe('merge: CJK survival (tokenizer range fix)', () => {
+  it('bare CJK input yields a span instead of vanishing', () => {
+    const out = interpretTextSync('鸡肉', null);
+    expect(out.length).toBe(1);
+    expect(out[0].canonicalName).toBe('鸡肉');
+    expect(out[0].wasDefault).toBe(true);
+  });
+
+  it('CJK span pairs with adjacent qty', () => {
+    const out = interpretTextSync('250g 鸡肉', null);
+    expect(out.length).toBe(1);
+    expect(out[0].canonicalName).toBe('鸡肉');
+    expect(out[0].amountG).toBe(250);
+    expect(out[0].wasDefault).toBe(false);
+  });
+
+  it('CJK query retrieves a CJK library row (aliases seedable)', () => {
+    const foods = [fakeFood('f-zh', '鸡肉'), fakeFood('f-en', 'Chicken breast, grilled')];
+    const out = interpretTextSync('鸡肉', foods);
+    expect(out.length).toBe(1);
+    expect(out[0].canonicalName).toBe('鸡肉');
   });
 });

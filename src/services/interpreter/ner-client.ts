@@ -112,7 +112,7 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
     }
     return {
       text: textClean,
-      normalized: textClean.toLowerCase().normalize('NFKC').trim().replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\s]/g, '').replace(/\s+/g, ' '),
+      normalized: textClean.toLowerCase().normalize('NFKC').trim().replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, '').replace(/\s+/g, ' '),
       span: [start, end],
       confidence: isComposite ? 0.85 : 0.88,
       isCompositeHint: isComposite,
@@ -122,7 +122,7 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
   if (sortedQty.length === 0) {
     // No quantities — whole input is one food span (e.g., "apple"),
     // truncated at any negation marker ("chicken without skin" → "chicken").
-    const whole = text.trim().replace(/^[^A-Za-z\u00C0-\u024F\u0600-\u06FF0-9]+|[^A-Za-z\u00C0-\u024F\u0600-\u06FF0-9]+$/g, '');
+    const whole = text.trim().replace(/^[^A-Za-z\u00C0-\u024F\u0600-\u06FF\u4e00-\u9fff0-9]+|[^A-Za-z\u00C0-\u024F\u0600-\u06FF\u4e00-\u9fff0-9]+$/g, '');
     const wholeWords = whole.split(/\s+/);
     const negAt = wholeWords.findIndex(isNegationToken);
     const withoutNeg = (negAt === -1 ? wholeWords : wholeWords.slice(0, negAt)).join(' ');
@@ -131,7 +131,7 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
       if (start !== -1) {
         spans.push({
           text: withoutNeg,
-          normalized: withoutNeg.toLowerCase().normalize('NFKC').trim().replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\s]/g, '').replace(/\s+/g, ' '),
+          normalized: withoutNeg.toLowerCase().normalize('NFKC').trim().replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, '').replace(/\s+/g, ' '),
           span: [start, start + withoutNeg.length],
           confidence: 0.75,
           isCompositeHint: isComposite,
@@ -168,7 +168,7 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
         if (start !== -1) {
           spans.push({
             text: trimmed,
-            normalized: trimmed.toLowerCase().normalize('NFKC').replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\s]/g, '').replace(/\s+/g, ' ').trim(),
+            normalized: trimmed.toLowerCase().normalize('NFKC').replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, '').replace(/\s+/g, ' ').trim(),
             span: [start, start + trimmed.length],
             confidence: 0.72,
             isCompositeHint: isComposite,

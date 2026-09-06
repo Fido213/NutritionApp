@@ -26,8 +26,12 @@ export interface RetrievalHit {
 let bm25Index: { docFreq: Map<string, number>; docs: Array<{ id: string; terms: Map<string, number>; len: number }>; avgLen: number; N: number } | null = null;
 
 function tokenizeBM25(text: string): string[] {
+  // Keep-set must mirror the eval sim (eval_retrieval_colab.py) or local
+  // numbers stop meaning anything. CJK Unified Ideographs included:
+  // without them Chinese queries AND Chinese alias rows strip to empty and
+  // can never match lexically, no matter how many aliases get seeded.
   return text.toLowerCase().normalize('NFKC')
-    .replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\s]/g, ' ')
+    .replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, ' ')
     .split(/\s+/).filter(Boolean);
 }
 
