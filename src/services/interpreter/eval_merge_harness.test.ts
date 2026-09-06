@@ -145,3 +145,20 @@ describe('merge: CJK survival (tokenizer range fix)', () => {
     expect(out[0].canonicalName).toBe('鸡肉');
   });
 });
+
+describe('merge: script routing (recorded hint, never a gate)', () => {
+  it('tags single-script spans', () => {
+    expect(interpretTextSync('دجاج مشوي', null)[0].script).toBe('arabic');
+    expect(interpretTextSync('grilled chicken', null)[0].script).toBe('latin');
+  });
+
+  it('mixed-script input keeps full cross-lexicon matching', () => {
+    // Router must not narrow matching: qty still pairs, span survives,
+    // and the tag simply records the mix for future dispatch.
+    const out = interpretTextSync('250g دجاج grille', null);
+    expect(out.length).toBe(1);
+    expect(out[0].amountG).toBe(250);
+    expect(out[0].wasDefault).toBe(false);
+    expect(out[0].script).toBeDefined();
+  });
+});

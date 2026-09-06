@@ -9,6 +9,7 @@
  */
 
 import { isNegationToken } from './lexicon';
+import { detectScript, type ScriptTag } from './language';
 
 export interface FoodSpan {
   text: string;
@@ -16,6 +17,12 @@ export interface FoodSpan {
   span: [number, number]; // char offsets in original
   confidence: number;
   isCompositeHint?: boolean;
+  /**
+   * Script router hint (Phase 2 pre-step). Recorded for future lexicon /
+   * model dispatch and per-script accuracy — never gates matching today,
+   * so mixed-script input keeps full cross-lexicon coverage.
+   */
+  script?: ScriptTag;
 }
 
 let onnxSession: any | null = null;
@@ -138,6 +145,7 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
         });
       }
     }
+    for (const s of spans) s.script = detectScript(s.text);
     return spans;
   }
 
@@ -180,12 +188,15 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
 
   // Dedupe by normalized
   const seen = new Set<string>();
-  return spans.filter(s => {
+  const deduped = spans.filter(s => {
     if (!s.normalized) return false;
     if (seen.has(s.normalized)) return false;
     seen.add(s.normalized);
     return true;
   });
+  // Stamp script per surviving span (post-dedupe: dropped spans need no tag).
+  for (const s of deduped) s.script = detectScript(s.text);
+  return deduped;
 }
 
 export async function extractFoodSpans(text: string, quantities: Array<{ span: [number, number] }>): Promise<FoodSpan[]> {

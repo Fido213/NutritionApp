@@ -38,6 +38,7 @@ export async function logTextInput(rawText: string) {
         confidence: s.confidence,
         isComposite: s.isComposite,
         wasDefault: s.wasDefault,
+        script: s.script,
         rawUnit: s.rawUnit,
         retrievalScore: s.retrievalScore,
         span: s.span,

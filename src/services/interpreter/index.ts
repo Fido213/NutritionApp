@@ -11,6 +11,7 @@ import { parseQuantities, resolveBareCount } from './unit-parser';
 import { extractFoodSpans, extractFoodSpansSync } from './ner-client';
 import { hybridRetrieve, hybridRetrieveSync, buildBm25Index } from './hybrid-retriever';
 import { resolveVagueMarker, governedByNegation } from './lexicon';
+import type { ScriptTag } from './language';
 import type { Food } from '@data/types';
 
 export interface InterpretedSpan {
@@ -29,6 +30,8 @@ export interface InterpretedSpan {
    * "amount assumed — tap to correct", never as confident parses.
    */
   wasDefault: boolean;
+  /** Script router hint, copied from the source span (future dispatch). */
+  script?: ScriptTag;
 }
 
 let foodsCache: Food[] | null = null;
@@ -158,6 +161,7 @@ export async function interpretText(
       method,
       rawUnit: amt.rawUnit,
       wasDefault: amt.wasDefault,
+      script: span.script,
     });
   }
 
@@ -190,6 +194,7 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
       span: span.span,
       retrievalScore, method, rawUnit: amt.rawUnit,
       wasDefault: amt.wasDefault,
+      script: span.script,
     });
   }
   return out;
@@ -234,6 +239,7 @@ function alignQuantities(
       method: 'hybrid' as const,
       rawUnit: amt.rawUnit,
       wasDefault: amt.wasDefault,
+      script: span.script,
     };
   });
 }

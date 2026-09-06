@@ -2,6 +2,7 @@
  * System Prompts & Output Schemas for Gemma local AI runtime
  * Preserved & upgraded from NutritionOS Master Specification
  */
+import type { ScriptTag } from '@services/interpreter/language';
 
 export interface InterpretedFoodItem {
   canonicalName: string;
@@ -17,6 +18,8 @@ export interface InterpretedFoodItem {
    * "amount assumed — tap to correct".
    */
   wasDefault?: boolean;
+  /** Script router hint from the source span (future lexicon/model dispatch). */
+  script?: ScriptTag;
 }
 
 export interface InterpretedLabelOCR {
