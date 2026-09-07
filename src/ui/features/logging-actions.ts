@@ -19,7 +19,34 @@ import { invalidateIndexCaches } from './index-screen';
  *  Primary path: deterministic qty parser + L12 FOOD NER spans -> hybrid BM25/mE5 -> FoodService.
  *  Fallback: GemmaClient when interpreter yields 0 spans (e.g., no foods cached yet).
  */
+let logTextInFlight = false;
+
 export async function logTextInput(rawText: string) {
+  // Overlapping submits (double-tap, Enter+click, slow first submit) would
+  // log the same text twice or interleave stale input — serialize instead.
+  if (logTextInFlight) {
+    showToast('Still logging — one moment');
+    return;
+  }
+  logTextInFlight = true;
+
+  // Clear-first: the text is captured in rawText, so the input must not hold
+  // it during the (slow) pipeline — otherwise any repeated submit re-logs
+  // stale text, and a failed submit leaves a retry trap behind.
+  const textInput = document.getElementById('dash-text-input') as HTMLInputElement | null;
+  if (textInput && textInput.value.trim() === rawText.trim()) {
+    textInput.value = '';
+    textInput.closest('.text-bar')?.classList.remove('has-text');
+  }
+
+  try {
+    await logTextInputInner(rawText);
+  } finally {
+    logTextInFlight = false;
+  }
+}
+
+async function logTextInputInner(rawText: string) {
   const date = store.getState().selectedDate;
 
   // Try new interpreter first (offline, <55ms, L12 + FP16). Needs food list for hybrid retrieval.
@@ -54,6 +81,12 @@ export async function logTextInput(rawText: string) {
   }
 
   if (!items || items.length === 0) {
+    // Parse failed: give the text back so it can be fixed and retried.
+    const textInput = document.getElementById('dash-text-input') as HTMLInputElement | null;
+    if (textInput && !textInput.value.trim()) {
+      textInput.value = rawText;
+      textInput.closest('.text-bar')?.classList.add('has-text');
+    }
     showToast('Could not interpret that text');
     return;
   }
@@ -63,12 +96,6 @@ export async function logTextInput(rawText: string) {
   // Phase 1 flagged-default: immediate feedback at log time, not just the
   // journal badge — assumed amounts must never look confident, even briefly.
   const assumed = (items as any[]).filter(i => i?.wasDefault).length;
-
-  const textInput = document.getElementById('dash-text-input') as HTMLInputElement | null;
-  if (textInput) {
-    textInput.value = '';
-    textInput.closest('.text-bar')?.classList.remove('has-text');
-  }
 
   // New foods may have been created via upsert — bust library caches
   for (const r of results) {
