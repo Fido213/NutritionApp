@@ -48,6 +48,22 @@ export interface JournalFoodLog {
 }
 
 /**
+ * Pure logged-amount label for food rows (portion-in-name fix: canonical
+ * names often carry portions — e.g. "Chicken 100g pack" — so the row must
+ * show what was actually logged). Returns null when neither amount is
+ * stored (old logs). ml wins when both are present, mirroring the row's
+ * existing `amount_ml != null ? 'ml' : 'g'` convention.
+ */
+export function formatLoggedAmount(
+  amountG?: number | null,
+  amountMl?: number | null,
+): string | null {
+  if (amountMl != null) return `${Math.round(amountMl)}ml logged`;
+  if (amountG != null) return `${Math.round(amountG)}g logged`;
+  return null;
+}
+
+/**
  * Pure label resolution for the assumed-amount badge (unit-tested; the view
  * only renders the returned string). Returns null when no badge applies:
  * corrected rows, non-interpreter observations, confident parses.
@@ -417,6 +433,15 @@ export function renderDayDetail(args: DayDetailArgs) {
     cal.textContent = log.calories ? `${Math.round(log.calories)} kcal` : `${Math.round(log.amount_ml || log.amount_g || 0)} ml`;
     main.appendChild(cal);
     item.appendChild(main);
+
+    const loggedAmount = formatLoggedAmount(log.amount_g, log.amount_ml);
+    if (loggedAmount) {
+      const amtLine = document.createElement('div');
+      amtLine.className = 'log-amount-line';
+      amtLine.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;';
+      amtLine.textContent = loggedAmount;
+      item.appendChild(amtLine);
+    }
 
     if (log.note) {
       const noteLine = document.createElement('div');

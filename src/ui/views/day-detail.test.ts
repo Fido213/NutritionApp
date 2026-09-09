@@ -4,7 +4,7 @@
  * logic that must never regress lives here.
  */
 import { describe, it, expect } from 'vitest';
-import { assumedAmountLabel } from './day-detail';
+import { assumedAmountLabel, formatLoggedAmount } from './day-detail';
 
 describe('assumedAmountLabel', () => {
   it('flags silent defaults', () => {
@@ -36,5 +36,28 @@ describe('assumedAmountLabel', () => {
     expect(assumedAmountLabel(undefined, 0)).toBeNull();
     expect(assumedAmountLabel('{not json', 0)).toBeNull();
     expect(assumedAmountLabel('{}', 0)).toBeNull();
+  });
+});
+
+describe('formatLoggedAmount', () => {
+  it('labels gram amounts', () => {
+    expect(formatLoggedAmount(250, null)).toBe('250g logged');
+  });
+
+  it('labels ml amounts', () => {
+    expect(formatLoggedAmount(null, 240)).toBe('240ml logged');
+  });
+
+  it('prefers ml when both are present', () => {
+    expect(formatLoggedAmount(250, 240)).toBe('240ml logged');
+  });
+
+  it('rounds fractional amounts', () => {
+    expect(formatLoggedAmount(125.6, null)).toBe('126g logged');
+  });
+
+  it('stays silent when neither amount is stored', () => {
+    expect(formatLoggedAmount(null, null)).toBeNull();
+    expect(formatLoggedAmount(undefined, undefined)).toBeNull();
   });
 });
