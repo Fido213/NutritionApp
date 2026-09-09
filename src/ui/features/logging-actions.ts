@@ -48,6 +48,11 @@ export async function logTextInput(rawText: string) {
 
 async function logTextInputInner(rawText: string) {
   const date = store.getState().selectedDate;
+  // Submit-path diagnosis (user-reported seconds): stage timings, debug-only,
+  // zero behavior change. Read via WebView CDP after one slow submit.
+  const t0 = performance.now();
+  const marks: Record<string, number> = {};
+  const mark = (k: string) => { marks[k] = Math.round(performance.now() - t0); };
 
   // Try new interpreter first (offline, <55ms, L12 + FP16). Needs food list for hybrid retrieval.
   let items: any[] | null = null;
@@ -57,6 +62,7 @@ async function logTextInputInner(rawText: string) {
     let foods: any[] = [];
     try { foods = await ctx.foodRepo.getAllFoods(1000); setFoodsForInterpreter(foods); } catch {}
     const spans = await interpretText(rawText, foods.length ? foods : null);
+    mark('foods+interpret');
     if (spans && spans.length > 0) {
       items = spans.map(s => ({
         canonicalName: s.canonicalName,
@@ -78,6 +84,7 @@ async function logTextInputInner(rawText: string) {
   // Fallback to Gemma (legacy path) if interpreter found nothing
   if (!items || items.length === 0) {
     items = await ctx.gemmaClient.interpretTextLog(rawText);
+    mark('gemma-fallback');
   }
 
   if (!items || items.length === 0) {
@@ -92,6 +99,7 @@ async function logTextInputInner(rawText: string) {
   }
 
   const results = await ctx.foodService.logTextInput(date, rawText, items as any);
+  mark('foodservice-log');
   const totalCal = results.reduce((sum, r) => sum + r.nutrition.calories, 0);
   // Phase 1 flagged-default: immediate feedback at log time, not just the
   // journal badge — assumed amounts must never look confident, even briefly.
@@ -106,6 +114,8 @@ async function logTextInputInner(rawText: string) {
   try { const { invalidateBm25Cache } = await import('@services/interpreter/hybrid-retriever'); invalidateBm25Cache(); } catch {}
   await ctx.dbManager.saveWebStore();
   await refreshStateForDate(date);
+  mark('refresh-done');
+  console.debug('[logTextInput:timings] ms since submit:', marks);
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal${assumed > 0 ? ` · ${assumed} amount(s) assumed — tap to correct` : ''}`);
 }
 
