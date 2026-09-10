@@ -23,6 +23,7 @@ import { BarcodeRepository } from '@data/repositories/barcode.repo';
 import { ObservationRepository } from '@data/repositories/observation.repo';
 import { ImportRepository } from '@data/repositories/import.repo';
 import { AliasRepository } from '@data/repositories/alias.repo';
+import { SettingsRepository } from '@data/repositories/settings.repo';
 
 import { store } from './ui/state';
 import { ctx } from './ui/context';
@@ -62,7 +63,8 @@ import {
   setupImportHandlers,
   setupBackupHandler,
   setupRestoreHandler,
-  setupDeleteAllHandler
+  setupDeleteAllHandler,
+  setupLibrarySettingsHandler
 } from './ui/features/data-tools';
 
 let numpadBuffer = '';
@@ -70,7 +72,14 @@ let numpadBuffer = '';
 async function initApp() {
   console.log('Initializing EverydayFuel...');
 
+  // Boot overlay: one staged card over the app's single startup jank window
+  // (database open → seed → interpreter warm). Everything after init reuses
+  // the warm index, so first interaction never pays index build. Removed in
+  // the finally below on both success and failure paths.
+  let boot: ReturnType<typeof createBootOverlay> | null = null;
   try {
+    boot = createBootOverlay();
+    boot.setStage('Opening database…');
     // 1. Initialize SQLite Database
     const dbManager = DatabaseManager.getInstance();
     await dbManager.initialize();
@@ -87,6 +96,7 @@ async function initApp() {
     ctx.observationRepo = new ObservationRepository(db);
     ctx.importRepo = new ImportRepository(db);
     ctx.aliasRepo = new AliasRepository(db);
+    ctx.settingsRepo = new SettingsRepository(db);
     ctx.gemmaClient = new GemmaClient();
     ctx.foodService = new FoodService(ctx.foodRepo, ctx.logRepo, ctx.observationRepo, ctx.waterRepo, ctx.aliasRepo);
 
@@ -98,38 +108,27 @@ async function initApp() {
 
     // First-launch base seed (44k migration): empty library + bundled CSV
     // seeds once, then the guard skips every later launch. Never touches
-    // existing data (seed module only INSERTs into an empty table). The
-    // overlay appears only while a real seed is running (first progress
-    // callback creates it) and is always removed afterwards.
-    let seedOverlay: HTMLElement | null = null;
-    const showSeedProgress = (done: number, total: number) => {
-      if (!seedOverlay) {
-        seedOverlay = document.createElement('div');
-        seedOverlay.id = 'seed-progress';
-        seedOverlay.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg, #101418);z-index:9999;font-size:15px;color:var(--text, #fff);';
-        document.body.appendChild(seedOverlay);
-      }
-      seedOverlay.textContent = `Setting up food library… ${done.toLocaleString()} / ${total.toLocaleString()}`;
-    };
+    // existing data (seed module only INSERTs into an empty table).
+    // Progress drives the boot card's determinate bar.
     try {
       const { seedFoodLibraryIfEmpty } = await import('@services/food/seed');
-      const seedRes = await seedFoodLibraryIfEmpty(ctx.foodRepo, fetch, showSeedProgress);
+      const seedRes = await seedFoodLibraryIfEmpty(
+        ctx.foodRepo,
+        fetch,
+        (done, total) => boot?.setStage('Setting up food library…', done, total),
+      );
       if (seedRes.seeded) console.log('[seed] base library ready:', seedRes.inserted, 'foods');
-    } catch (e) { console.debug('[seed] skipped', e); } finally {
-      // Cast: assigned inside the progress closure, so narrowing sees null.
-      (seedOverlay as HTMLElement | null)?.remove();
-      seedOverlay = null;
-    }
+    } catch (e) { console.debug('[seed] skipped', e); }
 
-    // Warm interpreter caches for hybrid retrieval (BM25 + mE5 fallback). Non-blocking.
-    // Full library: the old newest-1000 window hid most of the seed from retrieval.
-    void (async () => {
-      try {
-        const foods = await ctx.foodRepo.getAllFoods(100_000);
-        setFoodsForInterpreter(foods, ctx.foodRepo.getVersion());
-        console.log('[interpreter] warmed with', foods.length, 'foods (BM25 + FAISS fallback)');
-      } catch (e) { console.debug('[interpreter] warm failed', e); }
-    })();
+    // Interpreter warm, AWAITED (was fire-and-forget): the full-library
+    // fetch + index build must finish behind the boot card, never under the
+    // user's first tap. Failure still boots (the submit path refetches).
+    boot?.setStage('Warming up search…');
+    try {
+      const foods = await ctx.foodRepo.getAllFoods(100_000);
+      setFoodsForInterpreter(foods, ctx.foodRepo.getVersion());
+      console.log('[interpreter] warmed with', foods.length, 'foods (BM25 + FAISS fallback)');
+    } catch (e) { console.debug('[interpreter] warm failed', e); }
 
     // 2. Load active goal
     let currentGoal = await ctx.goalRepo.getCurrentGoal();
@@ -177,7 +176,7 @@ async function initApp() {
     setupImportHandlers();
     setupBackupHandler();
     setupRestoreHandler();
-
+    setupLibrarySettingsHandler();
     // PWA installability (low#9): register minimal SW on web only.
     if ('serviceWorker' in navigator) {
       try {
@@ -192,7 +191,48 @@ async function initApp() {
   } catch (err) {
     console.error('App init failed:', err);
     showToast('Offline Mode: Web storage fallback');
+  } finally {
+    boot?.done();
   }
+}
+
+/**
+ * Boot loading card (staged): shown from database open through seed +
+ * interpreter warm, removed before first render. Determinate bar while the
+ * seed reports counts, pulsing full-width for unmeasured stages.
+ */
+function createBootOverlay(): {
+  setStage: (label: string, done?: number, total?: number) => void;
+  done: () => void;
+} {
+  const overlay = document.createElement('div');
+  overlay.id = 'boot-progress';
+  overlay.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,12,16,0.94);z-index:9999;';
+  overlay.innerHTML =
+    '<style>@keyframes bootpulse { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }</style>' +
+    '<div style="width:min(320px,84vw);background:var(--surface,#161b22);border:1px solid var(--border,#2a3139);border-radius:16px;padding:24px 20px;text-align:center;">' +
+    '<div style="font-size:17px;font-weight:700;margin-bottom:4px;">EverydayFuel</div>' +
+    '<div id="boot-progress-label" style="font-size:12px;color:var(--text-dim,#8b949e);margin-bottom:14px;min-height:16px;"></div>' +
+    '<div style="height:8px;border-radius:99px;background:var(--surface-light,#21262d);overflow:hidden;">' +
+    '<div id="boot-progress-bar" style="height:100%;width:100%;border-radius:99px;background:linear-gradient(90deg,#2ea043,#3fb950);transition:width 0.2s;animation:bootpulse 1.2s ease-in-out infinite;"></div></div></div>';
+  document.body.appendChild(overlay);
+  const bar = overlay.querySelector('#boot-progress-bar') as HTMLElement | null;
+  const label = overlay.querySelector('#boot-progress-label') as HTMLElement | null;
+  return {
+    setStage(text: string, done?: number, total?: number) {
+      if (label) label.textContent = text;
+      if (bar) {
+        if (done !== undefined && total) {
+          bar.style.animation = 'none';
+          bar.style.width = `${Math.min(100, Math.round((done / total) * 100))}%`;
+        } else {
+          bar.style.animation = '';
+          bar.style.width = '100%';
+        }
+      }
+    },
+    done() { overlay.remove(); },
+  };
 }
 
 function setupNavigation() {
