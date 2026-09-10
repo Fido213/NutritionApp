@@ -8,7 +8,7 @@
  * Handles: 250g, 1.5kg, ½ cup, 12,5g, 2x150g, 2 apples, 100-150g→125g, 1 1/2 lb
  */
 
-import { normalizeAmount, parseLocalizedNumber, resolveUnit } from '@domain/units';
+import { normalizeAmount, parseLocalizedNumber, resolveUnit, PER_PIECE_GRAMS } from '@domain/units';
 
 export interface ParsedQuantity {
   /** original substring that is the quantity (e.g., "250g") */
@@ -180,11 +180,19 @@ export function parseQuantities(text: string): ParsedQuantity[] {
   return out;
 }
 
-/** Helper to resolve bare count once food hint is known (piece weight). */
-export function resolveBareCount(qty: ParsedQuantity, foodHint: string): ParsedQuantity {
+/**
+ * Resolve a bare count once the food hint is known (piece weight). Returns
+ * null when the food has no known piece weight ("1 chicken") — the amount
+ * is genuinely unknown and the caller must fall through to the
+ * vague/flagged-default path. Never fake grams for a count.
+ */
+export function resolveBareCount(qty: ParsedQuantity, foodHint: string): ParsedQuantity | null {
   if (qty.amountG !== null || qty.amountMl !== null) return qty;
-  const { amountG } = normalizeAmount(qty.originalValue, null, foodHint);
-  // Re-normalize with food hint via PER_PIECE
-  const { amountG: g } = normalizeAmount(qty.originalValue, foodHint ? foodHint : 'piece', foodHint);
-  return { ...qty, amountG: g ?? amountG, canonicalGrams: g ?? amountG, confidence: 0.65 };
+  const hint = (foodHint || '').toLowerCase().normalize('NFKC').trim();
+  const pieceKey = Object.keys(PER_PIECE_GRAMS).find(k => hint.includes(k));
+  const unitGrams = qty.unitText ? PER_PIECE_GRAMS[qty.unitText.toLowerCase().normalize('NFKC').trim()] : undefined;
+  const grams = pieceKey !== undefined ? PER_PIECE_GRAMS[pieceKey] : unitGrams;
+  if (grams === undefined) return null;
+  const amountG = qty.originalValue * grams;
+  return { ...qty, amountG, canonicalGrams: amountG, confidence: 0.65 };
 }

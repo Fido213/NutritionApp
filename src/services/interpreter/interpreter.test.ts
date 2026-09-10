@@ -114,6 +114,26 @@ describe('interpretTextSync pipeline', () => {
   });
 });
 
+describe('bare counts without piece weights', () => {
+  const chicken = { id: 'c', canonical_name: 'CHICKEN', normalized_name: 'chicken' } as any;
+  const apple = { id: 'a', canonical_name: 'Apple', normalized_name: 'apple' } as any;
+
+  it('flags the default instead of faking grams ("1 chicken")', () => {
+    const out = interpretTextSync('1 chicken', [chicken]);
+    expect(out).toHaveLength(1);
+    expect(out[0].amountG).toBe(100);
+    expect(out[0].wasDefault).toBe(true);
+    expect(out[0].confidence).toBeLessThanOrEqual(0.65);
+  });
+
+  it('still resolves known piece weights ("2 apples" -> 364g)', () => {
+    const out = interpretTextSync('2 apples', [apple]);
+    expect(out).toHaveLength(1);
+    expect(out[0].amountG).toBe(364);
+    expect(out[0].wasDefault).toBe(false);
+  });
+});
+
 describe('interpreter index version gate', () => {
   const apple = { id: 'a', canonical_name: 'Apple', normalized_name: 'apple' } as any;
   const banana = { id: 'b', canonical_name: 'Banana', normalized_name: 'banana' } as any;

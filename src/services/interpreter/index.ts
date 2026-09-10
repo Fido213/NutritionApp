@@ -89,15 +89,20 @@ function resolveSpanAmount(
         wasDefault: false,
       };
     }
-    // Bare count like "2 apples"
+    // Bare count like "2 apples" — resolved via piece weights. A count of a
+    // food with no known piece weight ("1 chicken") resolves to null: the
+    // amount is unknown, so fall through to vague/flagged-default below
+    // instead of faking grams.
     const resolved = resolveBareCount(qty, spanText);
-    return {
-      amountG: resolved.amountG,
-      amountMl: resolved.amountMl,
-      rawUnit: resolved.unitText,
-      confidence: 0.72,
-      wasDefault: false,
-    };
+    if (resolved) {
+      return {
+        amountG: resolved.amountG,
+        amountMl: resolved.amountMl,
+        rawUnit: resolved.unitText,
+        confidence: 0.72,
+        wasDefault: false,
+      };
+    }
   }
   // No explicit qty: vague marker in the span window ("a side of rice").
   const window = text.slice(Math.max(0, span[0] - 40), Math.min(text.length, span[1] + 40));
