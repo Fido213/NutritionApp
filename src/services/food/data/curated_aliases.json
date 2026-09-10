@@ -1,0 +1,21 @@
+{
+  "_comment": "Curated UI/search aliases for confusing reference rows (rice family first). Tracked in git so every install — including already-seeded ones — converges without a wipe: applied idempotently at boot, never overwriting user pins. Format: natural phrase -> EXACT food_name_en from the cleaned corpus. Add rows freely; keep aliases 1:1 (one phrase, one food).",
+  "aliases": [
+    { "alias": "white rice", "canonical": "Rice, cooked, NFS" },
+    { "alias": "brown rice", "canonical": "Grains, rice, brown, long-grain, cooked" },
+    { "alias": "spanish rice", "canonical": "Rice, Spanish rice" },
+    { "alias": "glutinous rice", "canonical": "Grains, rice, white, glutinous, cooked" },
+    { "alias": "sticky rice", "canonical": "Grains, rice, white, glutinous, cooked" },
+    { "alias": "basmati rice", "canonical": "Rice, basmati, cooked, no added salt" },
+    { "alias": "fried rice", "canonical": "Rice, fried, NFS" },
+    { "alias": "rice noodles", "canonical": "Pasta, rice noodles, cooked" },
+    { "alias": "wild rice", "canonical": "Wild rice, cooked" },
+    { "alias": "red rice", "canonical": "Rice, red, cooked, no added salt" },
+    { "alias": "yellow rice", "canonical": "Yellow rice, cooked, no added fat" },
+    { "alias": "rice cakes", "canonical": "RICE CAKE" },
+    { "alias": "rice cake", "canonical": "RICE CAKE" },
+    { "alias": "rice milk", "canonical": "Rice milk" },
+    { "alias": "rice flour", "canonical": "Rice flour" },
+    { "alias": "rice pudding", "canonical": "Pudding, rice" }
+  ]
+}

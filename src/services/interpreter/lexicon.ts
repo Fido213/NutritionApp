@@ -104,29 +104,69 @@ export function displayFoodName(name: string | null | undefined): string {
 
 /**
  * UI alias for a canonical name: USDA "Head, attr, ..." becomes a natural
- * phrase ("Chicken, breast, boiled, sliced" → "Boiled sliced chicken
- * breast"). Preparation words move before the head phrase; everything else
+ * phrase ("Chicken, breast, boiled, sliced" → "Boiled Sliced Chicken
+ * Breast"; "RICE, WHITE" → "White Rice"). Preparation words move before
+ * the head phrase; a lone variety adjective fronts it; everything else
  * keeps its relative order. Single-segment names just get display casing.
  * Pure and total: never throws, never returns empty for non-empty input.
  */
+/**
+ * Variety adjectives that read naturally BEFORE the head ("white rice",
+ * not "rice white"). Applies only to two-segment names with a single-word
+ * attribute, so cuts ("Chicken, breast" → "Chicken Breast") and longer
+ * USDA rows ("Grains, rice, white, glutinous, cooked") keep existing order.
+ */
+const VARIETY_ADJECTIVES: ReadonlySet<string> = new Set([
+  'white', 'brown', 'black', 'red', 'green', 'yellow', 'wild',
+]);
+
+/** Small words stay lowercase past the lead (title-case convention). */
+const SMALL_WORDS: ReadonlySet<string> = new Set(
+  ['a', 'an', 'the', 'and', 'or', 'of', 'with', 'for', 'to', 'in', 'on', 'at', 'by', 'vs'],
+);
+
+/**
+ * Title-case a composed phrase (ours — safe to shape). ALL-CAPS tokens
+ * lower first; mixed-case words (brands) are never lowered.
+ */
+function titleCase(words: string[]): string {
+  return words
+    .map(w => (/[A-Z]/.test(w) && w === w.toUpperCase() ? w.toLowerCase() : w))
+    .map((w, i) => {
+      const low = w.toLowerCase();
+      if (i > 0 && SMALL_WORDS.has(low)) return low;
+      return w.charAt(0).toUpperCase() + w.slice(1);
+    })
+    .join(' ');
+}
+
 export function friendlyFoodName(canonical: string | null | undefined): string {
   if (!canonical || !canonical.trim()) return '';
   const segments = canonical.split(',').map(s => s.trim()).filter(Boolean);
   if (segments.length < 2) return displayFoodName(canonical.trim());
   const head = segments[0].split(/\s+/).filter(Boolean);
-  const attrs = segments.slice(1).join(' ').split(/\s+/).filter(Boolean);
+  // "Rice, white" reads as "White Rice": a lone variety adjective fronts the
+  // head. Cuts and longer rows keep head-first order ("Chicken Breast").
+  if (segments.length === 2) {
+    const attr = segments[1].split(/\s+/).filter(Boolean);
+    if (attr.length === 1 && VARIETY_ADJECTIVES.has(attr[0].toLowerCase())) {
+      return titleCase([...attr, ...head]);
+    }
+  }
+  // USDA bookkeeping tokens ("NFS" = not further specified) carry no meaning
+  // for users and never survive into the alias.
+  const attrs = segments.slice(1).join(' ').split(/\s+/).filter(Boolean)
+    .filter(w => !/^(nfs|ns)$/i.test(w));
   const prep: string[] = [];
+  const variety: string[] = [];
   const rest: string[] = [];
   for (const w of attrs) {
-    (PREP_WORDS.has(w.toLowerCase()) ? prep : rest).push(w);
+    const low = w.toLowerCase();
+    if (PREP_WORDS.has(low)) prep.push(w);
+    else if (VARIETY_ADJECTIVES.has(low)) variety.push(w);
+    else rest.push(w);
   }
-  // The composed phrase is ours: normalize shouting words, then lead-capital.
-  // Mixed-case words (brands) are never lowered — only pure ALL-CAPS tokens.
-  const words = [...prep, ...head, ...rest].map(w =>
-    /[A-Z]/.test(w) && w === w.toUpperCase() ? w.toLowerCase() : w,
-  );
-  const composed = words.join(' ');
-  return composed.charAt(0).toUpperCase() + composed.slice(1);
+  return titleCase([...prep, ...variety, ...head, ...rest]);
 }
 /** Single-token negation words for span truncation / leading-strip in NER. */
 const NEGATION_TOKENS: ReadonlySet<string> = new Set(

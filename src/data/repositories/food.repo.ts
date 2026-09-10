@@ -64,6 +64,20 @@ export class FoodRepository {
     return res.values && res.values.length > 0 ? (res.values[0] as Food) : null;
   }
 
+  /**
+   * Names-only library fetch for the interpreter index (boot warm +
+   * submit-path). Same rows and order as getAllFoods, but transfers id +
+   * names instead of full nutrient rows — a fraction of the bridge bytes.
+   * Resolution re-reads full rows by id/normalized name afterwards.
+   */
+  async getAllFoodsLight(limit: number = 100_000): Promise<Food[]> {
+    const res = await this.db.query(
+      `SELECT id, canonical_name, normalized_name FROM foods ORDER BY created_at DESC LIMIT ?`,
+      [limit]
+    );
+    return (res.values as Food[]) || [];
+  }
+
   /** Every library food (Index screen) — newest first; sorted in the UI layer. */
   async getAllFoods(limit: number = 500, opts?: { includeSeed?: boolean }): Promise<Food[]> {
     // Personal-first index: without includeSeed, bulk-imported rows surface
@@ -83,22 +97,18 @@ export class FoodRepository {
   }
 
   async fuzzySearch(query: string, limit: number = 20, opts?: { includeSeed?: boolean }): Promise<Food[]> {
+    // Alias-aware: curated/user phrases ("white rice") reach their rows even
+    // when the canonical name orders words differently ("Rice, cooked, NFS").
     const searchTerm = `%${query}%`;
-    if (opts?.includeSeed === false) {
-      const res = await this.db.query(
-        `SELECT * FROM foods
-         WHERE (canonical_name LIKE ? OR normalized_name LIKE ?)
-         AND (source_type != 'imported' OR id IN (SELECT DISTINCT food_id FROM food_logs WHERE food_id IS NOT NULL))
-         LIMIT ?`,
-        [searchTerm, searchTerm, limit]
-      );
-      return (res.values as Food[]) || [];
-    }
+    const seedClause = opts?.includeSeed === false
+      ? `AND (f.source_type != 'imported' OR f.id IN (SELECT DISTINCT food_id FROM food_logs WHERE food_id IS NOT NULL))`
+      : ``;
     const res = await this.db.query(
-      `SELECT * FROM foods 
-       WHERE canonical_name LIKE ? OR normalized_name LIKE ? 
+      `SELECT DISTINCT f.* FROM foods f LEFT JOIN food_aliases fa ON fa.food_id = f.id
+       WHERE (f.canonical_name LIKE ? OR f.normalized_name LIKE ? OR fa.normalized_alias LIKE ?)
+       ${seedClause}
        LIMIT ?`,
-      [searchTerm, searchTerm, limit]
+      [searchTerm, searchTerm, searchTerm, limit]
     );
     return (res.values as Food[]) || [];
   }

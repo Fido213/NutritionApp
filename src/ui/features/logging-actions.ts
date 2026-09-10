@@ -5,6 +5,7 @@
  */
 import { store } from '../state';
 import { showToast } from '../components/toast';
+import { createBootOverlay } from '../components/loading-card';
 import { closeModalLayer } from '../modal-layers';
 import { calculateNutrition } from '@domain/nutrition';
 import { classifyWaterSource } from '@domain/hydration';
@@ -23,13 +24,13 @@ import { invalidateIndexCaches } from './index-screen';
 let logTextInFlight = false;
 
 /**
- * Session interpreter cache: the FULL library (39k rows — the old
+ * Session interpreter cache: the FULL library names (39k rows — the old
  * newest-1000 window hid 97% of the seed from retrieval) plus the repo
  * generation it was indexed at. Steady-state submits skip the fetch and
  * the BM25/embedding rebuild entirely; any library mutation bumps the
- * repo version and the next submit re-indexes once.
+ * repo version and the next submit re-indexes once. Names-only rows:
+ * resolution re-reads full rows by id afterwards.
  */
-const FULL_LIBRARY_FETCH = 100_000;
 let interpreterFoods: any[] | null = null;
 let interpreterVersion = -1;
 
@@ -75,11 +76,21 @@ async function logTextInputInner(rawText: string) {
     // interpreter degrades to span-text logging, as before).
     const version = ctx.foodRepo.getVersion();
     if (!interpreterFoods || version !== interpreterVersion) {
+      // True cold start (boot warm missed or failed): same staged card as
+      // boot, plus a programmatic probe, so the user's first submit never
+      // pays the full fetch + embed-all as mystery lag.
+      const cold = !interpreterFoods;
+      const card = cold ? createBootOverlay() : null;
       try {
-        interpreterFoods = await ctx.foodRepo.getAllFoods(FULL_LIBRARY_FETCH);
+        if (cold) card?.setStage('Warming up search…');
+        interpreterFoods = await ctx.foodRepo.getAllFoodsLight();
         setFoodsForInterpreter(interpreterFoods, version);
         interpreterVersion = version;
-      } catch { /* keep previous cache */ }
+        if (cold) {
+          try { await interpretText('warmup probe', interpreterFoods.length ? interpreterFoods : null); }
+          catch { /* best effort */ }
+        }
+      } catch { /* keep previous cache */ } finally { card?.done(); }
     }
     const foods = interpreterFoods ?? [];
     mark('foods-fetch');

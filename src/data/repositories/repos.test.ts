@@ -35,7 +35,7 @@ function createFakeDb() {
         if (s.includes('WHERE id = ?')) {
           return { values: tables.foods.filter(r => r.id === values?.[0]) };
         }
-        if (s.includes('JOIN food_aliases')) {
+        if (s.includes('JOIN food_aliases') && !s.includes('LIKE ?')) {
           const alias = values?.[0];
           const match = tables.food_aliases.find(a => a.normalized_alias === alias);
           if (!match) return { values: [] };
@@ -43,12 +43,15 @@ function createFakeDb() {
           return { values: food ? [food] : [] };
         }
         if (s.includes('LIKE ?')) {
-          const term = values?.[0]?.replace(/%/g, '') || '';
+          const term = (values?.[0] as string)?.replace(/%/g, '') || '';
+          const limit = values?.[values.length - 1] ?? 20;
           const filtered = tables.foods.filter(f =>
             f.canonical_name?.toLowerCase().includes(term.toLowerCase()) ||
-            f.normalized_name?.toLowerCase().includes(term.toLowerCase())
+            f.normalized_name?.toLowerCase().includes(term.toLowerCase()) ||
+            tables.food_aliases.some((a: any) => a.food_id === f.id &&
+              a.normalized_alias?.toLowerCase().includes(term.toLowerCase()))
           );
-          return { values: filtered.slice(0, values?.[2] ?? 20) };
+          return { values: filtered.slice(0, limit) };
         }
         return { values: tables.foods.filter(r => r.id === values?.[0]) };
       }

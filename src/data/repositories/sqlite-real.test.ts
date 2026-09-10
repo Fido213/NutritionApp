@@ -1109,3 +1109,41 @@ describe('FoodRepository personal-first index filter on a real SQLite database',
     expect((await repo.fuzzySearch('ref', 10, { includeSeed: true }))).toHaveLength(2);
   });
 });
+
+describe('FoodRepository fuzzy alias search + light fetch on a real SQLite database', () => {
+  it('finds rows through alias phrases with reordered words', async () => {
+    const { conn } = createRealDb();
+    const foodRepo = new FoodRepository(conn);
+    const aliasRepo = new AliasRepository(conn);
+    const food = await foodRepo.insert({
+      canonical_name: 'Rice, cooked, NFS', normalized_name: 'rice cooked nfs',
+      calories_per_100g: 129, protein_per_100g: 2.67, carbs_per_100g: 28,
+      fat_per_100g: 0.3, water_per_100g: 68, nutrition_basis: 'per_100g',
+      source_type: 'imported', confidence: null,
+    });
+    await aliasRepo.create({
+      food_id: food.id, alias: 'white rice', normalized_alias: 'white rice',
+      source: 'curated', confidence: 1,
+    });
+
+    const hits = await foodRepo.fuzzySearch('white rice', 10);
+    expect(hits.map(f => f.id)).toContain(food.id);
+    // No duplicate rows from the alias join.
+    expect(hits.filter(f => f.id === food.id)).toHaveLength(1);
+  });
+
+  it('returns id-name rows only from the light fetch', async () => {
+    const { conn } = createRealDb();
+    const foodRepo = new FoodRepository(conn);
+    await foodRepo.insert({
+      canonical_name: 'Oats', normalized_name: 'oats',
+      calories_per_100g: 389, protein_per_100g: 13, carbs_per_100g: 66,
+      fat_per_100g: 7, water_per_100g: 9, nutrition_basis: 'per_100g',
+      source_type: 'user_entered', confidence: 1.0,
+    });
+    const rows = await foodRepo.getAllFoodsLight(10);
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(rows[0]).sort()).toEqual(['canonical_name', 'id', 'normalized_name']);
+    expect(rows[0].canonical_name).toBe('Oats');
+  });
+});

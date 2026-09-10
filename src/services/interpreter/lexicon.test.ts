@@ -28,14 +28,22 @@ describe('displayFoodName', () => {
 
 describe('friendlyFoodName', () => {
   it('fronts preparation words before the head phrase', () => {
-    // Mid-phrase title case ('Chicken') is preserved by design: only
-    // ALL-CAPS tokens are lowered, so brands can never be mangled.
-    expect(friendlyFoodName('Chicken, breast, boiled, sliced')).toBe('Boiled sliced Chicken breast');
+    // Title-cased composition; brands stay safe (only ALL-CAPS is lowered).
+    expect(friendlyFoodName('Chicken, breast, boiled, sliced')).toBe('Boiled Sliced Chicken Breast');
   });
 
-  it('keeps attribute order otherwise and drops the commas', () => {
-    expect(friendlyFoodName('Apple, average, with skin')).toBe('Apple average with skin');
-    expect(friendlyFoodName('RICE, WHITE')).toBe('Rice white');
+  it('fronts a lone variety adjective ("White Rice", not "Rice White")', () => {
+    expect(friendlyFoodName('RICE, WHITE')).toBe('White Rice');
+    expect(friendlyFoodName('Rice, brown')).toBe('Brown Rice');
+  });
+
+  it('keeps cuts and long rows head-first ("Chicken Breast")', () => {
+    expect(friendlyFoodName('Chicken, breast')).toBe('Chicken Breast');
+    expect(friendlyFoodName('Grains, rice, white, glutinous, cooked')).toBe('Cooked White Grains Rice Glutinous');
+  });
+
+  it('drops USDA bookkeeping tokens', () => {
+    expect(friendlyFoodName('Rice, cooked, NFS')).toBe('Cooked Rice');
   });
 
   it('leaves single-segment names to casing alone', () => {
