@@ -53,6 +53,20 @@ function ensureCache(foods: Food[]) {
 }
 
 /**
+ * Incrementally embed added/updated foods into a WARM cache (companion to
+ * addFoodsToIndex). Updates overwrite by id. No-op (false) when cold —
+ * caller falls back to ensureCache via the normal search path.
+ */
+export function cacheFoodEmbeddings(newFoods: Food[]): boolean {
+  if (!cachedEmbeds) return false;
+  for (const f of newFoods) {
+    const key = `${f.canonical_name} ${f.normalized_name}`;
+    cachedEmbeds.set(f.id, embedTextSync(key, 384).values);
+  }
+  return true;
+}
+
+/**
  * Search for nearest foods by semantic embedding.
  * When FAISS native index present, delegates to it; otherwise brute-force cosine over cached foods.
  */
@@ -70,9 +84,33 @@ export async function faissSearch(
 
   // Fallback: brute-force hash cosine (offline, deterministic, <30ms for 44k)
   ensureCache(foods);
+  return rankFoods(queryText, foods, topK);
+}
+
+/**
+ * Candidate-restricted variant: cosine only over the given ids (the BM25
+ * shortlist). Same scoring as faissSearch, a fraction of the work — the
+ * 39k-wide brute force per span was the steady-state submit cost.
+ * Callers fall back to full faissSearch when the BM25 shortlist is empty
+ * (e.g. typo queries with zero lexical hits — the hash channel alone
+ * still recovers those).
+ */
+export async function faissSearchRestricted(
+  queryText: string,
+  foods: Food[],
+  ids: Set<string>,
+  topK = 8
+): Promise<FaissHit[]> {
+  if (!queryText || foods.length === 0 || ids.size === 0) return [];
+  await tryLoadFaiss();
+  ensureCache(foods);
+  return rankFoods(queryText, foods.filter(f => ids.has(f.id)), topK);
+}
+
+function rankFoods(queryText: string, candidates: Food[], topK: number): FaissHit[] {
   const q = embedTextSync(queryText, 384).values;
   const hits: FaissHit[] = [];
-  for (const f of foods) {
+  for (const f of candidates) {
     const emb = cachedEmbeds!.get(f.id);
     if (!emb) continue;
     const score = cosineSimilarity(q, emb);
@@ -87,14 +125,13 @@ export async function faissSearch(
 export function faissSearchSync(queryText: string, foods: Food[], topK = 8): FaissHit[] {
   if (!queryText || foods.length === 0) return [];
   ensureCache(foods);
-  const q = embedTextSync(queryText, 384).values;
-  const hits: FaissHit[] = foods.map(f => {
-    const emb = cachedEmbeds!.get(f.id)!;
-    return { food: f, score: cosineSimilarity(q, emb), rank: 0 };
-  });
-  hits.sort((a, b) => b.score - a.score);
-  hits.forEach((h, i) => h.rank = i + 1);
-  return hits.slice(0, topK);
+  return rankFoods(queryText, foods, topK);
+}
+
+export function faissSearchSyncRestricted(queryText: string, foods: Food[], ids: Set<string>, topK = 8): FaissHit[] {
+  if (!queryText || foods.length === 0 || ids.size === 0) return [];
+  ensureCache(foods);
+  return rankFoods(queryText, foods.filter(f => ids.has(f.id)), topK);
 }
 
 /** Invalidate cache when foods change (e.g., after DB restore). */

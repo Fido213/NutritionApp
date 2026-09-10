@@ -9,7 +9,8 @@
 
 import { parseQuantities, resolveBareCount } from './unit-parser';
 import { extractFoodSpans, extractFoodSpansSync } from './ner-client';
-import { hybridRetrieve, hybridRetrieveSync, buildBm25Index } from './hybrid-retriever';
+import { hybridRetrieve, hybridRetrieveSync, buildBm25Index, addFoodsToIndex } from './hybrid-retriever';
+import { cacheFoodEmbeddings } from './faiss-bridge';
 import { resolveVagueMarker, governedByNegation } from './lexicon';
 import type { ScriptTag } from './language';
 import type { Food } from '@data/types';
@@ -51,6 +52,27 @@ export function setFoodsForInterpreter(foods: Food[], version?: number): void {
 /** Generation currently indexed (tests + submit-path decisions). */
 export function getIndexedVersion(): number {
   return indexedVersion;
+}
+
+/**
+ * Incrementally fold changed rows (usually 0–2 upserts from the submit that
+ * just logged) into a WARM index: postings + embeddings update in place and
+ * the cached array gains/replaces the rows, so every downstream reader
+ * (BM25, hash channel, id lookups) stays complete. The array is mutated in
+ * place deliberately — its identity is the faiss cache key.
+ * Returns false when cold (caller falls back to a full fetch + setFoods).
+ */
+export function patchInterpreterFoods(changed: Food[], version: number): boolean {
+  if (!foodsCache || indexedVersion === -1) return false;
+  if (!addFoodsToIndex(changed)) return false;
+  if (!cacheFoodEmbeddings(changed)) return false;
+  for (const f of changed) {
+    const at = foodsCache.findIndex(x => x.id === f.id);
+    if (at === -1) foodsCache.push(f);
+    else foodsCache[at] = f;
+  }
+  indexedVersion = version;
+  return true;
 }
 
 interface ResolvedSpanAmount {

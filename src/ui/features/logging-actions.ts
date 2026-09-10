@@ -136,6 +136,32 @@ async function logTextInputInner(rawText: string) {
   await ctx.dbManager.saveWebStore();
   await refreshStateForDate(date);
   mark('refresh-done');
+  // Hot-path incremental index: this submit created/updated at most a few
+  // rows — fold them in place instead of refetching 39k. Anything else that
+  // mutated the library (scans, imports, edits) bumps the version without a
+  // patch, so the next submit still full-refetches exactly once. Never
+  // breaks the toast below: failures fall through silently.
+  try {
+    const v2 = ctx.foodRepo.getVersion();
+    if (v2 !== interpreterVersion && interpreterFoods) {
+      const { patchInterpreterFoods } = await import('@services/interpreter');
+      const changed: any[] = [];
+      for (const it of items as any[]) {
+        try {
+          const ref = await ctx.foodService.resolveFood(it);
+          const full = await ctx.foodRepo.findById(ref.id);
+          if (full) changed.push(full);
+        } catch { /* one bad row must not poison the patch */ }
+      }
+      if (changed.length > 0 && !patchInterpreterFoods(changed, v2)) {
+        interpreterFoods = null; // cold race: force a full refetch next submit
+      } else if (changed.length > 0) {
+        interpreterVersion = v2;
+      } else {
+        interpreterFoods = null; // version moved with no resolvable rows: reconverge once, fully
+      }
+    }
+  } catch { /* next submit re-evaluates the version gate */ }
   console.debug('[logTextInput:timings] ms since submit:', marks);
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal${assumed > 0 ? ` · ${assumed} amount(s) assumed — tap to correct` : ''}`);
 }

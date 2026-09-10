@@ -12,7 +12,15 @@ import { Food } from '@data/types';
 import { normalizeFoodName } from '@domain/logging';
 import { splitConceptPrep, PREP_WORDS } from './lexicon';
 import { reciprocalRankFusion } from './mE5-client';
-import { faissSearch, faissSearchSync, invalidateFaissCache } from './faiss-bridge';
+import { faissSearch, faissSearchSync, faissSearchRestricted, faissSearchSyncRestricted, invalidateFaissCache } from './faiss-bridge';
+
+/**
+ * BM25 shortlist size for the semantic channel. The hash cosine runs only
+ * over these instead of all 39k rows per span (the steady-state submit
+ * cost). An empty shortlist (e.g. typo queries with zero lexical hits)
+ * falls back to the full hash search so typo recovery survives.
+ */
+export const LEX_SHORTLIST = 200;
 
 export interface RetrievalHit {
   food: Food;
@@ -34,6 +42,7 @@ let bm25Index: {
   byId: Map<string, Food>;
   avgLen: number;
   N: number;
+  totalLen: number;
 } | null = null;
 
 /** Light singularization so plurals reach singular rows and vice versa
@@ -84,7 +93,78 @@ export function buildBm25Index(foods: Food[]): void {
     byId.set(f.id, f);
     totalLen += terms.length;
   }
-  bm25Index = { docFreq, docs, postings, byId, avgLen: foods.length ? totalLen / foods.length : 1, N: foods.length };
+  bm25Index = { docFreq, docs, postings, byId, avgLen: foods.length ? totalLen / foods.length : 1, N: foods.length, totalLen };
+}
+
+/** Average doc length, kept incrementally (see addFoodsToIndex). */
+function recomputeAvg(): void {
+  if (!bm25Index) return;
+  bm25Index.avgLen = bm25Index.N ? bm25Index.totalLen / bm25Index.N : 1;
+}
+
+function removeDocFromIndex(idx: number): void {
+  if (!bm25Index) return;
+  const old = bm25Index.docs[idx];
+  if (!old) return;
+  for (const t of old.terms.keys()) {
+    const df = (bm25Index.docFreq.get(t) || 1) - 1;
+    if (df <= 0) {
+      bm25Index.docFreq.delete(t);
+      bm25Index.postings.delete(t);
+    } else {
+      bm25Index.docFreq.set(t, df);
+      const list = bm25Index.postings.get(t);
+      if (list) {
+        const at = list.indexOf(idx);
+        if (at !== -1) list.splice(at, 1);
+      }
+    }
+  }
+  bm25Index.totalLen -= old.len;
+  bm25Index.N -= 1;
+}
+
+function appendDocToIndex(food: Food): void {
+  if (!bm25Index) return;
+  const text = `${food.canonical_name} ${food.normalized_name}`;
+  const terms = tokenizeBM25(text);
+  const tf = new Map<string, number>();
+  for (const t of terms) tf.set(t, (tf.get(t) || 0) + 1);
+  const idx = bm25Index.docs.length;
+  for (const t of tf.keys()) {
+    bm25Index.docFreq.set(t, (bm25Index.docFreq.get(t) || 0) + 1);
+    let list = bm25Index.postings.get(t);
+    if (!list) { list = []; bm25Index.postings.set(t, list); }
+    list.push(idx);
+  }
+  bm25Index.docs.push({ id: food.id, terms: tf, len: terms.length, head: headOf(food.canonical_name) });
+  bm25Index.byId.set(food.id, food);
+  bm25Index.totalLen += terms.length;
+  bm25Index.N += 1;
+}
+
+/**
+ * Incrementally add or update foods in a WARM index (the base library is
+ * static; growth is a row here and there). Add-or-update by id, so renames
+ * replace the old posting entries instead of duplicating. Scores stay
+ * bit-identical to a full rebuild (same formula over the same multiset —
+ * covered by the parity test). No-op (false) when cold: caller falls back
+ * to a full fetch + setFoodsForInterpreter.
+ */
+export function addFoodsToIndex(newFoods: Food[]): boolean {
+  if (!bm25Index) return false;
+  const idxById = new Map<string, number>();
+  bm25Index.docs.forEach((d, i) => idxById.set(d.id, i));
+  for (const food of newFoods) {
+    const at = idxById.get(food.id);
+    if (at !== undefined) removeDocFromIndex(at);
+    // NOTE: removal shifts no indexes (docs array is append-only; removed
+    // slots keep a stale entry that postings no longer reference — see below).
+    appendDocToIndex(food);
+    idxById.set(food.id, bm25Index.docs.length - 1);
+  }
+  recomputeAvg();
+  return true;
 }
 
 export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food: Food; score: number; rank: number }> {
@@ -117,8 +197,6 @@ export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food
       scores.set(doc.id, (scores.get(doc.id) || 0) + s);
     }
   }
-  const missing = [...scores.keys()].filter(k => !docById.has(k));
-  if (missing.length > 0) console.log('ZZ-KEYS', JSON.stringify({ nDocs: bm25Index.docs.length, nScores: scores.size, missing: missing.slice(0, 5) }));
   const hits = [...scores.entries()]
     .map(([id, score]) => {
       const doc = docById.get(id)!;
@@ -162,8 +240,16 @@ export async function hybridRetrieve(
   opts: { topK?: number; lexicalWeight?: number; semanticWeight?: number } = {}
 ): Promise<RetrievalHit[]> {
   const topK = opts.topK ?? 5;
-  const lexHits = bm25Search(spanText, foods, topK * 2);
-  const semHits = await faissSearch(spanText, foods, topK * 2);
+  // One BM25 call serves both roles: its head (topK*2, as before) feeds the
+  // fusion ranks; the wider shortlist only bounds the hash channel's work.
+  // Slicing — not re-querying — keeps fusion-set membership identical to the
+  // pre-shortlist behavior (a penalized row stays out of the lex side).
+  const pool = bm25Search(spanText, foods, LEX_SHORTLIST);
+  const lexHits = pool.slice(0, topK * 2);
+  const shortlist = new Set(pool.map(h => h.food.id));
+  const semHits = shortlist.size > 0
+    ? await faissSearchRestricted(spanText, foods, shortlist, topK * 2)
+    : await faissSearch(spanText, foods, topK * 2);
 
   // Build rank maps for RRF
   const lexRanks = new Map(lexHits.map(h => [h.food.id, h.rank]));
@@ -199,8 +285,12 @@ export async function hybridRetrieve(
 }
 
 export function hybridRetrieveSync(spanText: string, foods: Food[], topK = 5): RetrievalHit[] {
-  const lexHits = bm25Search(spanText, foods, topK * 2);
-  const semHits = faissSearchSync(spanText, foods, topK * 2);
+  const pool = bm25Search(spanText, foods, LEX_SHORTLIST);
+  const lexHits = pool.slice(0, topK * 2);
+  const shortlist = new Set(pool.map(h => h.food.id));
+  const semHits = shortlist.size > 0
+    ? faissSearchSyncRestricted(spanText, foods, shortlist, topK * 2)
+    : faissSearchSync(spanText, foods, topK * 2);
   const lexRanks = new Map(lexHits.map(h => [h.food.id, h.rank]));
   const semRanks = new Map(semHits.map(h => [h.food.id, h.rank]));
   const fused = reciprocalRankFusion(lexRanks, semRanks, 60);
