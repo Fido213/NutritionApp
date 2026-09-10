@@ -61,8 +61,9 @@ async function logTextInputInner(rawText: string) {
     // Ensure BM25/mE5 caches are warm — load up to 500 foods once per session or after invalidate
     let foods: any[] = [];
     try { foods = await ctx.foodRepo.getAllFoods(1000); setFoodsForInterpreter(foods); } catch {}
+    mark('foods-fetch');
     const spans = await interpretText(rawText, foods.length ? foods : null);
-    mark('foods+interpret');
+    mark('interpret');
     if (spans && spans.length > 0) {
       items = spans.map(s => ({
         canonicalName: s.canonicalName,
