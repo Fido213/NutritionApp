@@ -42,4 +42,13 @@ export class AliasRepository {
     const res = await this.db.query(`SELECT * FROM food_aliases WHERE food_id = ? ORDER BY created_at ASC`, [foodId]);
     return (res.values as FoodAlias[]) || [];
   }
+
+  /**
+   * Delete every alias row for a normalized phrase (any food). User defaults
+   * move: re-pinning a phrase must not leave a stale mapping behind for the
+   * reader (findByNormalized takes the first match) to trip over.
+   */
+  async deleteByNormalized(normalizedAlias: string): Promise<void> {
+    await this.db.run(`DELETE FROM food_aliases WHERE normalized_alias = ?`, [normalizedAlias]);
+  }
 }

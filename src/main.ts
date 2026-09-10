@@ -22,6 +22,7 @@ import { ComboRepository } from '@data/repositories/combo.repo';
 import { BarcodeRepository } from '@data/repositories/barcode.repo';
 import { ObservationRepository } from '@data/repositories/observation.repo';
 import { ImportRepository } from '@data/repositories/import.repo';
+import { AliasRepository } from '@data/repositories/alias.repo';
 
 import { store } from './ui/state';
 import { ctx } from './ui/context';
@@ -85,8 +86,9 @@ async function initApp() {
     ctx.barcodeRepo = new BarcodeRepository(db);
     ctx.observationRepo = new ObservationRepository(db);
     ctx.importRepo = new ImportRepository(db);
+    ctx.aliasRepo = new AliasRepository(db);
     ctx.gemmaClient = new GemmaClient();
-    ctx.foodService = new FoodService(ctx.foodRepo, ctx.logRepo, ctx.observationRepo, ctx.waterRepo);
+    ctx.foodService = new FoodService(ctx.foodRepo, ctx.logRepo, ctx.observationRepo, ctx.waterRepo, ctx.aliasRepo);
 
     console.log('SQLite database ready', {
       dailyRecordRepo: ctx.dailyRecordRepo,
@@ -120,10 +122,11 @@ async function initApp() {
     }
 
     // Warm interpreter caches for hybrid retrieval (BM25 + mE5 fallback). Non-blocking.
+    // Full library: the old newest-1000 window hid most of the seed from retrieval.
     void (async () => {
       try {
-        const foods = await ctx.foodRepo.getAllFoods(1000);
-        setFoodsForInterpreter(foods);
+        const foods = await ctx.foodRepo.getAllFoods(100_000);
+        setFoodsForInterpreter(foods, ctx.foodRepo.getVersion());
         console.log('[interpreter] warmed with', foods.length, 'foods (BM25 + FAISS fallback)');
       } catch (e) { console.debug('[interpreter] warm failed', e); }
     })();

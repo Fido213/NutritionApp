@@ -5,6 +5,24 @@ import { FoodReference } from '@domain/types';
 export class FoodRepository {
   constructor(private db: SQLiteDBConnection) {}
 
+  /**
+   * In-memory library generation counter. The interpreter caches its BM25 /
+   * embedding indexes across submits and rebuilds only when this changes —
+   * every mutation below bumps it, so the cache can never serve a stale
+   * library (the 1000-newest-rows window that hid 97% of the seed is gone).
+   * Raw-SQL paths that bypass this repo (backup restore, wipe) must call
+   * bumpVersion() after committing.
+   */
+  private version = 0;
+
+  getVersion(): number {
+    return this.version;
+  }
+
+  bumpVersion(): void {
+    this.version++;
+  }
+
   private generateUUID(): string {
     return typeof crypto !== 'undefined' && crypto.randomUUID 
       ? crypto.randomUUID() 
@@ -66,7 +84,7 @@ export class FoodRepository {
   async insert(food: InsertFood): Promise<Food> {
     const id = this.generateUUID();
     const now = new Date().toISOString();
-    
+
     await this.db.run(
       `INSERT INTO foods (
         id, canonical_name, normalized_name, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, water_per_100g,
@@ -79,6 +97,7 @@ export class FoodRepository {
       ]
     );
     
+    this.bumpVersion();
     return (await this.findById(id))!;
   }
 
@@ -98,6 +117,7 @@ export class FoodRepository {
     values.push(id);
     
     await this.db.run(`UPDATE foods SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    this.bumpVersion();
     return this.findById(id);
   }
 
@@ -151,6 +171,7 @@ export class FoodRepository {
           console.warn('foodRepo.bulkInsert: COMMIT found no active transaction; writes were already applied.');
         }
       }
+      this.bumpVersion();
       return inserted;
     } catch (e) {
       if (began) {

@@ -4,7 +4,7 @@
  * logic that must never regress lives here.
  */
 import { describe, it, expect } from 'vitest';
-import { assumedAmountLabel, formatLoggedAmount, confidenceLabel } from './day-detail';
+import { assumedAmountLabel, formatLoggedAmount, confidenceLabel, spanTextFromObservation } from './day-detail';
 
 describe('assumedAmountLabel', () => {
   it('flags silent defaults', () => {
@@ -79,5 +79,20 @@ describe('confidenceLabel', () => {
 
   it('stays honest when confidence is missing', () => {
     expect(confidenceLabel(null, 'user_entered')).toBe('no estimate');
+  });
+});
+
+describe('spanTextFromObservation', () => {
+  it('recovers the user phrase from grounded span offsets', () => {
+    expect(
+      spanTextFromObservation('250g chicken, 100g rice', JSON.stringify({ canonicalName: 'Almond Chicken', span: [5, 12] }))
+    ).toBe('chicken');
+  });
+
+  it('returns null for combo markers, fallback items, and garbage', () => {
+    expect(spanTextFromObservation('oats', JSON.stringify({ kind: 'combo' }))).toBeNull();
+    expect(spanTextFromObservation('apple', JSON.stringify({ canonicalName: 'apple' }))).toBeNull();
+    expect(spanTextFromObservation('apple', '{not json')).toBeNull();
+    expect(spanTextFromObservation(null, '{}')).toBeNull();
   });
 });

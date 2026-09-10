@@ -3,7 +3,7 @@ import { calculateNutrition, calculateDelta } from './nutrition';
 import { calculateEffectiveHydration, classifyWaterSource } from './hydration';
 import { resolveGoalForDate, GoalRecord } from './goals';
 import { calculateScore } from './scoring';
-import { expandCombo, applyCorrection, normalizeFoodName } from './logging';
+import { expandCombo, applyCorrection, normalizeFoodName, sliceSpanText } from './logging';
 import { safeJsonParse } from '../utils/sanitize';
 import { FoodReference } from './types';
 
@@ -259,5 +259,23 @@ describe('normalizeFoodName', () => {
 
   it('still strips punctuation-only input to empty', () => {
     expect(normalizeFoodName('!!!')).toBe('');
+  });
+});
+
+describe('sliceSpanText', () => {
+  it('slices the grounded phrase out of the raw input', () => {
+    expect(sliceSpanText('250g chicken, 100g rice', [5, 12])).toBe('chicken');
+  });
+
+  it('returns null for missing, malformed, or out-of-range spans', () => {
+    expect(sliceSpanText('chicken', null)).toBeNull();
+    expect(sliceSpanText('chicken', [3, 3])).toBeNull();
+    expect(sliceSpanText('chicken', [0, 99])).toBeNull();
+    expect(sliceSpanText('chicken', 'x')).toBeNull();
+    expect(sliceSpanText('', [0, 7])).toBeNull();
+  });
+
+  it('rejects degenerate slices', () => {
+    expect(sliceSpanText('a', [0, 1])).toBeNull();
   });
 });

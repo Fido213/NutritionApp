@@ -3,6 +3,7 @@ import { FoodRepository } from '@data/repositories/food.repo';
 import { LogRepository } from '@data/repositories/log.repo';
 import { ObservationRepository } from '@data/repositories/observation.repo';
 import { WaterRepository } from '@data/repositories/water.repo';
+import { AliasRepository } from '@data/repositories/alias.repo';
 import { FoodService } from './food-service';
 
 function createFakeDb() {
@@ -97,6 +98,12 @@ function createFakeDb() {
         insert('food_logs', ['id','date','food_id','observation_id','amount_g','amount_ml','calories','protein_g','carbs_g','fat_g','water_ml','note','created_at'], values || []);
       } else if (s.startsWith('INSERT INTO water_logs')) {
         insert('water_logs', ['id','date','amount_ml','source','food_log_id','note','created_at'], values || []);
+      } else if (s.startsWith('INSERT INTO food_aliases')) {
+        insert('food_aliases', ['id','food_id','alias','normalized_alias','source','confidence','created_at'], values || []);
+      } else if (s.startsWith('DELETE FROM food_aliases')) {
+        for (let i = tables.food_aliases.length - 1; i >= 0; i--) {
+          if (tables.food_aliases[i].normalized_alias === values?.[0]) tables.food_aliases.splice(i, 1);
+        }
       } else if (s.startsWith('UPDATE food_logs')) {
         const row = tables.food_logs.find(r => r.id === values?.[values!.length - 1]);
         if (row) {
@@ -130,7 +137,8 @@ describe('FoodService pipeline (smoke)', () => {
     const logRepo = new LogRepository(db as any);
     const obsRepo = new ObservationRepository(db as any);
     const waterRepo = new WaterRepository(db as any);
-    service = new FoodService(foodRepo, logRepo, obsRepo, waterRepo);
+    const aliasRepo = new AliasRepository(db as any);
+    service = new FoodService(foodRepo, logRepo, obsRepo, waterRepo, aliasRepo);
   });
 
   it('resolves and logs an unknown food, creating library entry + observation + log + water', async () => {
@@ -203,7 +211,8 @@ describe('FoodService label OCR pipeline', () => {
     const logRepo = new LogRepository(db as any);
     const obsRepo = new ObservationRepository(db as any);
     const waterRepo = new WaterRepository(db as any);
-    service = new FoodService(foodRepo, logRepo, obsRepo, waterRepo);
+    const aliasRepo = new AliasRepository(db as any);
+    service = new FoodService(foodRepo, logRepo, obsRepo, waterRepo, aliasRepo);
   });
 
   const LABEL: any = {
@@ -285,7 +294,8 @@ describe('FoodService online barcode pipeline', () => {
     const logRepo = new LogRepository(db as any);
     const obsRepo = new ObservationRepository(db as any);
     const waterRepo = new WaterRepository(db as any);
-    service = new FoodService(foodRepo, logRepo, obsRepo, waterRepo);
+    const aliasRepo = new AliasRepository(db as any);
+    service = new FoodService(foodRepo, logRepo, obsRepo, waterRepo, aliasRepo);
   });
 
   const PRODUCT: any = {
@@ -332,5 +342,72 @@ describe('FoodService online barcode pipeline', () => {
       .rejects.toThrow('missing a name');
     await expect(service.logBarcodeLookup('2026-08-20', PRODUCT, '3017620422003', 0))
       .rejects.toThrow('positive');
+  });
+});
+
+describe('FoodService user-pinned defaults', () => {
+  let service: FoodService;
+  let tables: any;
+
+  beforeAll(() => {
+    const { db, tables: t } = createFakeDb();
+    tables = t;
+    const foodRepo = new FoodRepository(db as any);
+    service = new FoodService(
+      foodRepo,
+      new LogRepository(db as any),
+      new ObservationRepository(db as any),
+      new WaterRepository(db as any),
+      new AliasRepository(db as any)
+    );
+    tables.foods.push(
+      { id: 'almond', canonical_name: 'Almond Chicken', normalized_name: 'almond chicken', calories_per_100g: 200, protein_per_100g: 10, carbs_per_100g: 10, fat_per_100g: 10, water_per_100g: 10, nutrition_basis: 'per_100g', source_type: 'imported', source_reference: null, confidence: null, created_at: '2026-08-19T00:00:00.000Z', updated_at: '2026-08-19T00:00:00.000Z' },
+      { id: 'breast', canonical_name: 'Chicken, breast, lean flesh, grilled', normalized_name: 'chicken breast lean flesh grilled', calories_per_100g: 150, protein_per_100g: 30, carbs_per_100g: 0, fat_per_100g: 3, water_per_100g: 65, nutrition_basis: 'per_100g', source_type: 'imported', source_reference: null, confidence: null, created_at: '2026-08-19T00:00:00.000Z', updated_at: '2026-08-19T00:00:00.000Z' }
+    );
+  });
+
+  it('prefers the pinned default over the interpreted canonical name', async () => {
+    await service.setUserDefault('chicken', 'breast');
+    const ref = await service.resolveFood(
+      { canonicalName: 'Almond Chicken', amountG: 100, amountMl: null, confidence: 0.7, isComposite: false },
+      undefined,
+      'chicken'
+    );
+    expect(ref.id).toBe('breast');
+  });
+
+  it('falls back to normal resolution without a pinned phrase', async () => {
+    const ref = await service.resolveFood(
+      { canonicalName: 'Almond Chicken', amountG: 100, amountMl: null, confidence: 0.7, isComposite: false },
+      undefined,
+      'turkey'
+    );
+    expect(ref.id).toBe('almond');
+  });
+
+  it('extracts the span phrase from the raw input for the next log', async () => {
+    const results = await service.logTextInput('2026-08-19', 'chicken', [
+      { canonicalName: 'Almond Chicken', amountG: 100, amountMl: null, confidence: 0.7, isComposite: false, span: [0, 7] } as any
+    ]);
+    expect(results[0].food.id).toBe('breast');
+    expect(results[0].observation.food_id).toBe('breast');
+  });
+
+  it('moves the mapping when re-pinned, never duplicates', async () => {
+    await service.setUserDefault('chicken', 'almond');
+    expect(tables.food_aliases.filter((a: any) => a.normalized_alias === 'chicken')).toHaveLength(1);
+    expect(tables.food_aliases.find((a: any) => a.normalized_alias === 'chicken').food_id).toBe('almond');
+    const ref = await service.resolveFood(
+      { canonicalName: 'Almond Chicken', amountG: 100, amountMl: null, confidence: 0.7, isComposite: false },
+      undefined,
+      'chicken'
+    );
+    expect(ref.id).toBe('almond');
+  });
+
+  it('rejects empty phrases and unknown foods', async () => {
+    await expect(service.setUserDefault('   ', 'breast')).rejects.toThrow('empty phrase');
+    await expect(service.setUserDefault('!!!', 'breast')).rejects.toThrow('searchable');
+    await expect(service.setUserDefault('chicken', 'missing')).rejects.toThrow('not found');
   });
 });

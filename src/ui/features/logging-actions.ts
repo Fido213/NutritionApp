@@ -21,6 +21,17 @@ import { invalidateIndexCaches } from './index-screen';
  */
 let logTextInFlight = false;
 
+/**
+ * Session interpreter cache: the FULL library (39k rows — the old
+ * newest-1000 window hid 97% of the seed from retrieval) plus the repo
+ * generation it was indexed at. Steady-state submits skip the fetch and
+ * the BM25/embedding rebuild entirely; any library mutation bumps the
+ * repo version and the next submit re-indexes once.
+ */
+const FULL_LIBRARY_FETCH = 100_000;
+let interpreterFoods: any[] | null = null;
+let interpreterVersion = -1;
+
 export async function logTextInput(rawText: string) {
   // Overlapping submits (double-tap, Enter+click, slow first submit) would
   // log the same text twice or interleave stale input — serialize instead.
@@ -54,13 +65,22 @@ async function logTextInputInner(rawText: string) {
   const marks: Record<string, number> = {};
   const mark = (k: string) => { marks[k] = Math.round(performance.now() - t0); };
 
-  // Try new interpreter first (offline, <55ms, L12 + FP16). Needs food list for hybrid retrieval.
+  // Try new interpreter first (offline, L12 + FP16). Needs food list for hybrid retrieval.
   let items: any[] | null = null;
   try {
     const { interpretText, setFoodsForInterpreter } = await import('@services/interpreter');
-    // Ensure BM25/mE5 caches are warm — load up to 500 foods once per session or after invalidate
-    let foods: any[] = [];
-    try { foods = await ctx.foodRepo.getAllFoods(1000); setFoodsForInterpreter(foods); } catch {}
+    // Version-gated: refetch + rebuild only when the library changed.
+    // A failed refetch keeps the previous cache (possibly null → the
+    // interpreter degrades to span-text logging, as before).
+    const version = ctx.foodRepo.getVersion();
+    if (!interpreterFoods || version !== interpreterVersion) {
+      try {
+        interpreterFoods = await ctx.foodRepo.getAllFoods(FULL_LIBRARY_FETCH);
+        setFoodsForInterpreter(interpreterFoods, version);
+        interpreterVersion = version;
+      } catch { /* keep previous cache */ }
+    }
+    const foods = interpreterFoods ?? [];
     mark('foods-fetch');
     const spans = await interpretText(rawText, foods.length ? foods : null);
     mark('interpret');
@@ -111,8 +131,8 @@ async function logTextInputInner(rawText: string) {
     if (r.food?.id) ctx.foodCache.delete(r.food.id);
   }
   invalidateIndexCaches();
-  // Also invalidate BM25 after new foods
-  try { const { invalidateBm25Cache } = await import('@services/interpreter/hybrid-retriever'); invalidateBm25Cache(); } catch {}
+  // No explicit BM25 invalidate: library mutations bump the repo version,
+  // so the next submit re-indexes once via the version gate above.
   await ctx.dbManager.saveWebStore();
   await refreshStateForDate(date);
   mark('refresh-done');

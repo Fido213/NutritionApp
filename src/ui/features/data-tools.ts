@@ -317,6 +317,9 @@ export function setupRestoreHandler() {
       invalidateHistoryWindow();
       invalidateIndexCaches();
       ctx.foodCache.clear();
+      // Raw-SQL restore bypasses FoodRepository: bump the library generation
+      // by hand so the interpreter cache rebuilds on the next submit.
+      ctx.foodRepo.bumpVersion();
       const date = store.getState().selectedDate;
       await refreshStateForDate(date);
       const rowCount = Object.values(archive.data).reduce((n, rows) => n + (Array.isArray(rows) ? rows.length : 0), 0);
@@ -352,6 +355,9 @@ export function setupDeleteAllHandler() {
       invalidateHistoryWindow();
       ctx.foodCache.clear();
       invalidateIndexCaches();
+      // Wipe bypasses the repo: bump so the warm index rebuilds (empty)
+      // instead of serving the deleted library.
+      ctx.foodRepo.bumpVersion();
       await refreshStateForDate(store.getState().selectedDate);
       await renderIndex();
       showToast('All data deleted');

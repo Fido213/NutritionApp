@@ -2,11 +2,12 @@ import { FoodRepository } from '@data/repositories/food.repo';
 import { LogRepository } from '@data/repositories/log.repo';
 import { ObservationRepository } from '@data/repositories/observation.repo';
 import { WaterRepository } from '@data/repositories/water.repo';
+import { AliasRepository } from '@data/repositories/alias.repo';
 import { InsertFood } from '@data/types';
 import { Food, FoodObservation, FoodLog } from '@data/types';
 import { FoodReference, NutritionResult } from '@domain/types';
 import { calculateNutrition } from '@domain/nutrition';
-import { normalizeFoodName } from '@domain/logging';
+import { normalizeFoodName, sliceSpanText } from '@domain/logging';
 import { classifyWaterSource } from '@domain/hydration';
 import { InterpretedFoodItem, InterpretedLabelOCR } from '@services/ai/prompts';
 import { OnlineBarcodeProduct } from '@services/barcode/online-lookup';
@@ -45,6 +46,15 @@ export interface LoggedLabelEntry {
 }
 
 /**
+ * Recover the user's own phrase for an interpreted item from the raw input
+ * and the span offsets the interpreter grounds in it (Gemma-fallback items
+ * carry no span → null → normal resolution).
+ */
+export function extractSpanText(rawInput: string, item: InterpretedFoodItem): string | null {
+  return sliceSpanText(rawInput, (item as unknown as { span?: unknown })?.span);
+}
+
+/**
  * Orchestrates the food-resolution and logging pipeline:
  * interpreted item -> food reference (library lookup or new AI-source entry) -> observation -> food log.
  */
@@ -53,14 +63,45 @@ export class FoodService {
     private foodRepo: FoodRepository,
     private logRepo: LogRepository,
     private observationRepo: ObservationRepository,
-    private waterRepo: WaterRepository
+    private waterRepo: WaterRepository,
+    private aliasRepo: AliasRepository
   ) {}
 
   /**
-   * Resolve an interpreted food item to a FoodReference.
-   * Resolution order: exact canonical name -> legacy stripped form -> exact alias -> upsert new library entry.
+   * Pin a library food as the user's default for a phrase ("chicken" → the
+   * chicken they actually mean). Moves any previous mapping for the phrase
+   * so resolution stays deterministic (first-match readers).
    */
-  async resolveFood(item: InterpretedFoodItem, nutrients: Partial<InsertFood> = DEFAULT_NUTRIENT_ESTIMATE): Promise<FoodReference> {
+  async setUserDefault(spanText: string, foodId: string): Promise<void> {
+    const phrase = spanText.trim();
+    if (!phrase) throw new Error('Cannot set a default for an empty phrase');
+    const normalized = normalizeFoodName(phrase);
+    if (!normalized) throw new Error('Phrase has no searchable text');
+    const food = await this.foodRepo.findById(foodId);
+    if (!food) throw new Error('Food not found in library');
+    await this.aliasRepo.deleteByNormalized(normalized);
+    await this.aliasRepo.create({
+      food_id: foodId,
+      alias: phrase,
+      normalized_alias: normalized,
+      source: 'user',
+      confidence: 1,
+    });
+  }
+
+  /**
+   * Resolve an interpreted food item to a FoodReference.
+   * Resolution order: user default for the raw span phrase -> exact canonical
+   * name -> legacy stripped form -> exact alias -> upsert new library entry.
+   */
+  async resolveFood(item: InterpretedFoodItem, nutrients: Partial<InsertFood> = DEFAULT_NUTRIENT_ESTIMATE, spanText: string | null = null): Promise<FoodReference> {
+    if (spanText) {
+      const spanNorm = normalizeFoodName(spanText);
+      if (spanNorm) {
+        const pinned = await this.foodRepo.findByAlias(spanNorm);
+        if (pinned) return this.foodRepo.toFoodReference(pinned);
+      }
+    }
     const name = item.canonicalName?.trim();
     if (!name) throw new Error('Interpreted food item is missing a name');
 
@@ -92,7 +133,7 @@ export class FoodService {
    * insert the food log, and store any food-derived water separately.
    */
   async logTextEntry(date: string, rawInput: string, item: InterpretedFoodItem): Promise<LoggedTextEntry> {
-    const food = await this.resolveFood(item);
+    const food = await this.resolveFood(item, DEFAULT_NUTRIENT_ESTIMATE, extractSpanText(rawInput, item));
     const amountG = item.amountG ?? null;
     const amountMl = item.amountMl ?? null;
     const effectiveAmount = item.amountG ?? item.amountMl ?? 100;

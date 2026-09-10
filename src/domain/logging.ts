@@ -49,6 +49,27 @@ export function applyCorrection(
 }
 
 /**
+ * Recover a span's source text from the raw input and its char offsets.
+ * The interpreter grounds every span in the original text; slicing it back
+ * out gives the user's own phrase ("chicken") rather than the retrieved
+ * canonical name ("Almond Chicken") — the key user defaults are pinned to.
+ * Returns null for missing/out-of-range/degenerate spans.
+ */
+export function sliceSpanText(
+  rawInput: string | null | undefined,
+  span: unknown,
+): string | null {
+  if (!rawInput || !Array.isArray(span) || span.length !== 2) return null;
+  const [s, e] = span as [unknown, unknown];
+  if (!Number.isInteger(s) || !Number.isInteger(e)) return null;
+  const start = s as number;
+  const end = e as number;
+  if (start < 0 || end <= start || end > rawInput.length) return null;
+  const text = rawInput.slice(start, end).trim();
+  return text.length >= 2 && text.length <= 60 ? text : null;
+}
+
+/**
  * Normalize a food name for consistent lookup.
  *
  * Keep-set covers Latin + Cyrillic + Arabic + CJK so non-Latin library names

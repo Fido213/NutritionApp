@@ -7,7 +7,7 @@ import { store } from '../state';
 import { showToast } from '../components/toast';
 import { openModalLayer, closeModalLayer } from '../modal-layers';
 import { requestConfirmation } from '../dialogs';
-import { renderDayDetail, weekdayLabel, groupDateLabel, assumedAmountLabel } from '@ui/views/day-detail';
+import { renderDayDetail, weekdayLabel, groupDateLabel, assumedAmountLabel, spanTextFromObservation } from '@ui/views/day-detail';
 import type { JournalGroup, JournalEntry, JournalFoodLog, JournalWater, ComboCluster } from '@ui/views/day-detail';
 import { refreshStateForDate, bumpDataVersion, invalidateHistoryWindow } from '../app-refresh';
 import { getTodayDateString } from '@utils/dates';
@@ -105,7 +105,10 @@ export async function renderJournalIfVisible() {
     // Phase 1 flagged-default badge: resolve assumed-amount labels once per
     // render, deduped by observation (duplicated logs share observation ids).
     // Corrected rows (user_corrected) resolve to null inside the helper.
+    // Same pass recovers each observation's span phrase for the user-pinned
+    // default action ("Default for 'chicken'").
     const assumedByObsId = new Map<string, string>();
+    const spanTextByObsId = new Map<string, string>();
     {
       const obsIds = new Set<string>();
       for (const log of logs) if (log.observation_id) obsIds.add(log.observation_id);
@@ -116,10 +119,15 @@ export async function renderJournalIfVisible() {
         if (!obs) continue;
         const label = assumedAmountLabel(obs.interpretation_json, obs.user_corrected);
         if (label) assumedByObsId.set(obsId, label);
+        const spanText = spanTextFromObservation(obs.raw_input, obs.interpretation_json);
+        if (spanText) spanTextByObsId.set(obsId, spanText);
       }
       for (const log of logs as unknown as JournalFoodLog[]) {
         if (log.observation_id && assumedByObsId.has(log.observation_id)) {
           log.amountAssumed = assumedByObsId.get(log.observation_id) ?? null;
+        }
+        if (log.observation_id && spanTextByObsId.has(log.observation_id)) {
+          log.spanText = spanTextByObsId.get(log.observation_id) ?? null;
         }
       }
     }
@@ -185,6 +193,17 @@ export async function renderJournalIfVisible() {
         invalidateHistoryWindow();
         await refreshStateForDate(store.getState().selectedDate);
         showToast('Log deleted');
+      },
+      onSetDefault: async (log) => {
+        if (!log.spanText || !log.food_id) return;
+        const ok = await requestConfirmation(
+          'Pin Default',
+          `Always log "${log.spanText}" as "${log.food_name || log.canonical_name || 'this food'}"?`
+        );
+        if (!ok) return;
+        await ctx.foodService.setUserDefault(log.spanText, log.food_id);
+        await ctx.dbManager.saveWebStore();
+        showToast(`"${log.spanText}" will now log as ${log.food_name || log.canonical_name || 'this food'}`);
       },
       onDeleteWater: async (water) => {
         const ok = await requestConfirmation('Delete Water', `Delete this ${Math.round(water.amount_ml)}ml water entry?`);

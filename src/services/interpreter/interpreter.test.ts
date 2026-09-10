@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseQuantities } from './unit-parser';
 import { extractFoodSpansSync } from './ner-client';
-import { interpretTextSync } from './index';
+import { interpretTextSync, setFoodsForInterpreter, getIndexedVersion } from './index';
 import { normalizeAmount } from '@domain/units';
 
 describe('unit-parser', () => {
@@ -111,5 +111,34 @@ describe('interpretTextSync pipeline', () => {
     for (const s of out) {
       expect(text.slice(s.span[0], s.span[1]).toLowerCase()).toContain(s.canonicalName.toLowerCase().split(' ')[0]);
     }
+  });
+});
+
+describe('interpreter index version gate', () => {
+  const apple = { id: 'a', canonical_name: 'Apple', normalized_name: 'apple' } as any;
+  const banana = { id: 'b', canonical_name: 'Banana', normalized_name: 'banana' } as any;
+
+  it('rebuilds on a new generation, skips on a repeated one', () => {
+    setFoodsForInterpreter([apple], 41);
+    expect(getIndexedVersion()).toBe(41);
+    // No foods arg: resolves through the module cache under test.
+    expect(interpretTextSync('apple')[0].canonicalName).toBe('Apple');
+
+    // Same generation, different array: rebuild skipped, old index stands.
+    setFoodsForInterpreter([banana], 41);
+    expect(getIndexedVersion()).toBe(41);
+    expect(interpretTextSync('apple')[0].canonicalName).toBe('Apple');
+
+    // New generation: rebuild happens, banana resolves.
+    setFoodsForInterpreter([banana], 42);
+    expect(getIndexedVersion()).toBe(42);
+    expect(interpretTextSync('banana')[0].canonicalName).toBe('Banana');
+  });
+
+  it('always rebuilds when no version is given (tests, one-shots)', () => {
+    setFoodsForInterpreter([apple]);
+    expect(interpretTextSync('apple')[0].canonicalName).toBe('Apple');
+    setFoodsForInterpreter([banana]);
+    expect(interpretTextSync('banana')[0].canonicalName).toBe('Banana');
   });
 });

@@ -35,10 +35,22 @@ export interface InterpretedSpan {
 }
 
 let foodsCache: Food[] | null = null;
+/** Library generation the cached BM25 index was built from (-1 = cold). */
+let indexedVersion = -1;
 
-export function setFoodsForInterpreter(foods: Food[]): void {
+export function setFoodsForInterpreter(foods: Food[], version?: number): void {
+  // Version-gated rebuild: steady-state submits reuse the warm index (the
+  // 39k-row refetch + rebuild every submit was the submit-path seconds).
+  // Callers without a version (tests, one-shots) always rebuild.
+  if (version !== undefined && version === indexedVersion && foodsCache) return;
   foodsCache = foods;
+  if (version !== undefined) indexedVersion = version;
   buildBm25Index(foods);
+}
+
+/** Generation currently indexed (tests + submit-path decisions). */
+export function getIndexedVersion(): number {
+  return indexedVersion;
 }
 
 interface ResolvedSpanAmount {

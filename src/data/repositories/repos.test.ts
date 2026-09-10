@@ -101,6 +101,8 @@ function createFakeDb() {
       } else if (s.startsWith('UPDATE food_barcodes')) {
         const row = tables.food_barcodes.find(r => r.id === values?.[0]);
         if (row) row.verified = 1;
+      } else if (s.startsWith('DELETE FROM food_aliases')) {
+        tables.food_aliases = tables.food_aliases.filter((r: any) => r.normalized_alias !== values?.[0]);
       }
       return { changes: { changes: 1, lastId: 1 } };
     },
@@ -163,8 +165,7 @@ describe('AliasRepository', () => {
     expect(await repo.findByNormalized('nonexistent')).toBeNull();
   });
 
-  it('lists aliases for a food', async () => {
-    const { db, tables } = createFakeDb();
+  it('lists aliases for a food', async () => {    const { db, tables } = createFakeDb();
     tables.food_aliases.push(
       { id: 'a1', food_id: 'f1', alias: 'one', normalized_alias: 'one', source: 'user', confidence: 1, created_at: '2026-08-19T00:00:00.000Z' },
       { id: 'a2', food_id: 'f1', alias: 'two', normalized_alias: 'two', source: 'user', confidence: 1, created_at: '2026-08-19T00:00:00.000Z' }
@@ -174,6 +175,49 @@ describe('AliasRepository', () => {
     const aliases = await repo.getAliasesForFood('f1');
     expect(aliases).toHaveLength(2);
     expect(await repo.getAliasesForFood('other')).toEqual([]);
+  });
+
+  it('deletes every mapping for a phrase so defaults move cleanly', async () => {
+    const { db, tables } = createFakeDb();
+    tables.food_aliases.push(
+      { id: 'a1', food_id: 'f1', alias: 'chicken', normalized_alias: 'chicken', source: 'user', confidence: 1, created_at: '2026-08-19T00:00:00.000Z' },
+      { id: 'a2', food_id: 'f2', alias: 'chicken', normalized_alias: 'chicken', source: 'user', confidence: 1, created_at: '2026-08-19T00:00:00.000Z' }
+    );
+
+    const repo = new AliasRepository(db as any);
+    await repo.deleteByNormalized('chicken');
+    expect(tables.food_aliases).toHaveLength(0);
+    await repo.deleteByNormalized('chicken'); // idempotent, never throws
+    expect(tables.food_aliases).toHaveLength(0);
+  });
+});
+
+describe('FoodRepository library version', () => {
+  it('starts at zero and bumps on every mutation', async () => {
+    const { db } = createFakeDb();
+    const repo = new FoodRepository(db as any);
+    expect(repo.getVersion()).toBe(0);
+    await repo.insert({
+      canonical_name: 'Apple', normalized_name: 'apple',
+      calories_per_100g: 52, protein_per_100g: 0.3, carbs_per_100g: 14,
+      fat_per_100g: 0.2, water_per_100g: 86, nutrition_basis: 'per_100g',
+      source_type: 'user_entered', confidence: 1.0
+    });
+    expect(repo.getVersion()).toBe(1);
+    const id = (await repo.findByNormalizedName('apple'))!.id;
+    await repo.update(id, { calories_per_100g: 55 } as any);
+    expect(repo.getVersion()).toBe(2);
+    await repo.bulkInsert([]);
+    expect(repo.getVersion()).toBe(2);
+    await repo.bulkInsert([{
+      canonical_name: 'Pear', normalized_name: 'pear',
+      calories_per_100g: 57, protein_per_100g: 0.4, carbs_per_100g: 15,
+      fat_per_100g: 0.1, water_per_100g: 84, nutrition_basis: 'per_100g',
+      source_type: 'imported', confidence: null,
+    }]);
+    expect(repo.getVersion()).toBe(3);
+    repo.bumpVersion();
+    expect(repo.getVersion()).toBe(4);
   });
 });
 

@@ -21,7 +21,8 @@
  * - Multi-select mode supports Change Date / Duplicate / Delete — explicitly
  *   NO bulk edit. Selecting a combo selects all of its ingredient logs, and a
  *   pass-22 "All" button selects everything currently loaded.
- */
+  */
+import { sliceSpanText } from '@domain/logging';
 
 export interface JournalFoodLog {
   id: string;
@@ -38,6 +39,13 @@ export interface JournalFoodLog {
   note?: string | null;
   created_at?: string;
   observation_id?: string | null;
+  /**
+   * The user's own phrase behind this log (sliced from the observation's
+   * grounded span), e.g. "chicken" when the row resolved to Almond Chicken.
+   * Null for combo rows, Gemma-fallback items, and old logs. Resolved in
+   * journal.ts; backs the "Default for '…'" pin action.
+   */
+  spanText?: string | null;
   /**
    * Phase 1 flagged-default badge. Short label (`amount assumed` /
    * `~side assumed`) resolved in journal.ts from the observation's
@@ -78,6 +86,25 @@ export function confidenceLabel(
   if (sourceType === 'imported' && (confidence === null || confidence === undefined)) return 'reference';
   if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'no estimate';
   return `${Math.round(confidence * 100)}% sure`;
+}
+
+/**
+ * Recover the user's own phrase behind a log from its observation: slice the
+ * interpreter's grounded span offsets out of the raw input. Null for combo
+ * markers, Gemma-fallback items (no span), and garbage payloads.
+ */
+export function spanTextFromObservation(
+  rawInput: string | null | undefined,
+  interpretationJson: string | null | undefined,
+): string | null {
+  if (!rawInput || !interpretationJson) return null;
+  try {
+    const parsed: unknown = JSON.parse(interpretationJson);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    return sliceSpanText(rawInput, (parsed as { span?: unknown }).span);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -154,6 +181,8 @@ export interface DayDetailArgs {
   onEdit(log: JournalFoodLog): void;
   onDuplicate(log: JournalFoodLog): void;
   onDeleteFood(log: JournalFoodLog): void;
+  /** Pin this row's food as the user's default for its span phrase. */
+  onSetDefault(log: JournalFoodLog): void;
   onDeleteWater(water: JournalWater): void;
   onDuplicateWater(water: JournalWater): void;
   onEditWater(water: JournalWater): void;
@@ -193,7 +222,7 @@ export function renderDayDetail(args: DayDetailArgs) {
   const {
     container, groups, dayOrder, expandedLogId, expandedComboKeys,
     selection, selectMode,
-    onToggleExpand, onEdit, onDuplicate, onDeleteFood, onDeleteWater,
+    onToggleExpand, onEdit, onDuplicate, onDeleteFood, onSetDefault, onDeleteWater,
     onDuplicateWater, onEditWater, onToggleDayOrder,
     onEditDayNote, onToggleLowAccuracy, onToggleSelectMode, onToggleSelect, onSelectMany, onSelectAll,
     onBulkChangeDate, onBulkDuplicate, onBulkDelete,
@@ -502,6 +531,16 @@ export function renderDayDetail(args: DayDetailArgs) {
       del.textContent = 'Delete';
       del.addEventListener('click', (e) => { e.stopPropagation(); onDeleteFood(log); });
       actions.append(edit, dup, del);
+      // User-pinned default: future logs of this exact phrase resolve here.
+      // Only for span-backed rows (interpreter items carry span offsets).
+      if (log.spanText) {
+        const pin = document.createElement('button');
+        pin.className = 'log-action-btn blue';
+        pin.textContent = `Default for '${log.spanText}'`;
+        pin.title = `Always log '${log.spanText}' as ${log.food_name || log.canonical_name || 'this food'}`;
+        pin.addEventListener('click', (e) => { e.stopPropagation(); onSetDefault(log); });
+        actions.appendChild(pin);
+      }
       item.appendChild(actions);
     }
 
