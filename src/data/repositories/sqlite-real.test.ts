@@ -1019,3 +1019,41 @@ describe('Backup/restore round trip on a real SQLite database', () => {
     void combo;
   });
 });
+
+describe('FoodRepository.bulkInsert on a real SQLite database', () => {
+  const mkRow = (i: number): InsertFood => ({
+    canonical_name: `Seed Food ${i}`,
+    normalized_name: `seed food ${i}`,
+    calories_per_100g: 100 + i,
+    protein_per_100g: 10,
+    carbs_per_100g: 10,
+    fat_per_100g: 10,
+    water_per_100g: 10,
+    nutrition_basis: 'per_100g',
+    source_type: 'imported',
+    source_reference: `seed:${i}`,
+    confidence: null,
+  });
+
+  it('inserts 120 rows across multiple chunks and reads them back', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+    const rows = Array.from({ length: 120 }, (_, i) => mkRow(i));
+    expect(await repo.bulkInsert(rows)).toBe(120);
+    expect((await repo.getAllFoods(1000))).toHaveLength(120);
+    expect((await repo.findByNormalizedName('seed food 77'))?.calories_per_100g).toBe(177);
+  });
+
+  it('inserts nothing for an empty batch', async () => {
+    const { conn } = createRealDb();
+    expect(await new FoodRepository(conn).bulkInsert([])).toBe(0);
+  });
+
+  it('rolls back the whole batch on a UNIQUE violation', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+    const rows = [mkRow(1), mkRow(2), { ...mkRow(3), normalized_name: 'seed food 2' }];
+    await expect(repo.bulkInsert(rows)).rejects.toThrow();
+    expect((await repo.getAllFoods(1000))).toHaveLength(0);
+  });
+});

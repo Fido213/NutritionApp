@@ -50,12 +50,16 @@ export function applyCorrection(
 
 /**
  * Normalize a food name for consistent lookup.
+ *
+ * Keep-set covers Latin + Cyrillic + Arabic + CJK so non-Latin library names
+ * survive (the 44k seed would otherwise collapse them all to '' against the
+ * UNIQUE constraint). Pure-Latin behavior is byte-identical to before.
  */
 export function normalizeFoodName(name: string): string {
   if (!name) return '';
   return name
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/[^a-z0-9\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, '')
     .replace(/\s+/g, ' ');
 }

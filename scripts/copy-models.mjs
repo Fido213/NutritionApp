@@ -54,3 +54,20 @@ try {
 
 if (copied === 0) console.log('[copy-models] no model files found in "ai models/" — build will use heuristic fallbacks');
 else console.log(`[copy-models] copied ${copied} file(s) to ${DEST_DIR}`);
+
+// Base food-library seed (44k migration): bundle the cleaned corpus so a
+// fresh install seeds SQLite offline on first launch. Skipped when absent
+// (fresh clones without the workbench simply start with an empty library).
+const SEED_SRC = join(SRC_DIR, 'results', 'unified_food_database_per100g_CLEANED.csv');
+const SEED_DEST = join(DEST_DIR, 'unified_food_database_per100g_CLEANED.csv');
+try {
+  if (existsSync(SEED_SRC)) {
+    cpSync(SEED_SRC, SEED_DEST);
+    const sizeMB = ((await import('node:fs')).statSync(SEED_SRC).size / 1024 / 1024).toFixed(1);
+    console.log(`[copy-models] seed corpus -> ${SEED_DEST} (${sizeMB}MB)`);
+  } else {
+    console.log('[copy-models] no seed corpus in "ai models/results/" — first launch starts empty');
+  }
+} catch (e) {
+  console.warn('[copy-models] seed copy failed:', e.message);
+}

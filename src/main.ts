@@ -94,6 +94,15 @@ async function initApp() {
       barcodeRepo: ctx.barcodeRepo
     });
 
+    // First-launch base seed (44k migration): empty library + bundled CSV
+    // seeds once, then the guard skips every later launch. Never touches
+    // existing data (seed module only INSERTs into an empty table).
+    try {
+      const { seedFoodLibraryIfEmpty } = await import('@services/food/seed');
+      const seedRes = await seedFoodLibraryIfEmpty(ctx.foodRepo);
+      if (seedRes.seeded) console.log('[seed] base library ready:', seedRes.inserted, 'foods');
+    } catch (e) { console.debug('[seed] skipped', e); }
+
     // Warm interpreter caches for hybrid retrieval (BM25 + mE5 fallback). Non-blocking.
     void (async () => {
       try {

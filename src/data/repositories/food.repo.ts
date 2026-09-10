@@ -101,6 +101,64 @@ export class FoodRepository {
     return this.findById(id);
   }
 
+  /**
+   * Bulk insert for the first-launch base seed (44k migration). Chunked
+   * multi-row INSERTs inside one manual transaction — 39k single-row bridge
+   * round-trips would take minutes; ~800 chunked statements take seconds.
+   * Chunk of 50 keeps bound params (50×14=700) under SQLite's 999 limit.
+   * Mirrors combo.repo's transaction tolerance (fallback connections that
+   * auto-commit report "no transaction is active" on COMMIT).
+   */
+  async bulkInsert(rows: InsertFood[]): Promise<number> {
+    if (rows.length === 0) return 0;
+    const now = new Date().toISOString();
+    const cols = [
+      'id', 'canonical_name', 'normalized_name', 'calories_per_100g', 'protein_per_100g',
+      'carbs_per_100g', 'fat_per_100g', 'water_per_100g', 'nutrition_basis', 'source_type',
+      'source_reference', 'confidence', 'created_at', 'updated_at'
+    ];
+    const CHUNK = 50;
+    let began = false;
+    try {
+      try {
+        await this.db.run('BEGIN TRANSACTION');
+        began = true;
+      } catch { began = false; }
+      let inserted = 0;
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        const chunk = rows.slice(i, i + CHUNK);
+        const placeholders = chunk.map(() => `(${cols.map(() => '?').join(', ')})`).join(', ');
+        const values: any[] = [];
+        for (const r of chunk) {
+          values.push(
+            this.generateUUID(), r.canonical_name, r.normalized_name,
+            r.calories_per_100g ?? null, r.protein_per_100g ?? null, r.carbs_per_100g ?? null,
+            r.fat_per_100g ?? null, r.water_per_100g ?? null, r.nutrition_basis || 'per_100g',
+            r.source_type || 'imported', (r as any).source_reference || null,
+            (r as any).confidence ?? null, now, now
+          );
+        }
+        await this.db.run(`INSERT INTO foods (${cols.join(', ')}) VALUES ${placeholders}`, values);
+        inserted += chunk.length;
+      }
+      if (began) {
+        try {
+          await this.db.run('COMMIT');
+        } catch (commitErr: any) {
+          const msg = String(commitErr?.message || commitErr);
+          if (!/no transaction is active/i.test(msg)) throw commitErr;
+          console.warn('foodRepo.bulkInsert: COMMIT found no active transaction; writes were already applied.');
+        }
+      }
+      return inserted;
+    } catch (e) {
+      if (began) {
+        try { await this.db.run('ROLLBACK'); } catch { /* best effort */ }
+      }
+      throw e;
+    }
+  }
+
   async upsertFromAI(canonicalName: string, nutrients: Partial<InsertFood>, confidence: number): Promise<Food> {
     const normalized = canonicalName.toLowerCase().replace(/[^a-z0-9]/g, '');
     let existing = await this.findByNormalizedName(normalized);

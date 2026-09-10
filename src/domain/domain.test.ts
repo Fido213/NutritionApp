@@ -244,4 +244,20 @@ describe('normalizeFoodName', () => {
     expect(normalizeFoodName('')).toBe('');
     expect(normalizeFoodName('   ')).toBe('');
   });
+
+  it('keeps CJK names instead of collapsing them to empty', () => {
+    expect(normalizeFoodName('鸡肉')).toBe('鸡肉');
+  });
+
+  it('keeps Arabic names instead of collapsing them to empty', () => {
+    expect(normalizeFoodName('دجاج')).toBe('دجاج');
+  });
+
+  it('keeps mixed-script names with quantities', () => {
+    expect(normalizeFoodName('250g دجاج grille')).toBe('250g دجاج grille');
+  });
+
+  it('still strips punctuation-only input to empty', () => {
+    expect(normalizeFoodName('!!!')).toBe('');
+  });
 });
