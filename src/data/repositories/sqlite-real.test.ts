@@ -1057,3 +1057,55 @@ describe('FoodRepository.bulkInsert on a real SQLite database', () => {
     expect((await repo.getAllFoods(1000))).toHaveLength(0);
   });
 });
+
+describe('FoodRepository personal-first index filter on a real SQLite database', () => {
+  const mkFood = (over: Partial<InsertFood> & { canonical_name: string; normalized_name: string }): InsertFood => ({
+    calories_per_100g: 100, protein_per_100g: 10, carbs_per_100g: 10,
+    fat_per_100g: 10, water_per_100g: 10, nutrition_basis: 'per_100g',
+    source_type: 'user_entered', confidence: 1.0, ...over,
+  });
+
+  async function seedLibrary(conn: any) {
+    const foodRepo = new FoodRepository(conn);
+    const logRepo = new LogRepository(conn);
+    const seedRef = await foodRepo.insert(mkFood({ canonical_name: 'Seed Ref', normalized_name: 'seed ref', source_type: 'imported', confidence: null }));
+    const usedRef = await foodRepo.insert(mkFood({ canonical_name: 'Used Ref', normalized_name: 'used ref', source_type: 'imported', confidence: null }));
+    const mine = await foodRepo.insert(mkFood({ canonical_name: 'My Food', normalized_name: 'my food', source_type: 'user_entered' }));
+    await logRepo.insertFoodLog({
+      date: '2026-09-10', food_id: usedRef.id, amount_g: 100,
+      calories: 100, protein_g: 10, carbs_g: 10, fat_g: 10,
+    } as any);
+    return { seedRef, usedRef, mine };
+  }
+
+  it('hides unlogged seed rows by default but keeps used and user foods', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+    const { seedRef, usedRef, mine } = await seedLibrary(conn);
+
+    const names = (await repo.getAllFoods(10, { includeSeed: false })).map(f => f.id);
+    expect(names).toContain(usedRef.id);
+    expect(names).toContain(mine.id);
+    expect(names).not.toContain(seedRef.id);
+  });
+
+  it('returns everything with includeSeed or by default', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+    await seedLibrary(conn);
+
+    expect((await repo.getAllFoods(10, { includeSeed: true }))).toHaveLength(3);
+    expect((await repo.getAllFoods(10))).toHaveLength(3);
+  });
+
+  it('applies the same rule to fuzzy search', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+    const { seedRef, usedRef } = await seedLibrary(conn);
+
+    const hidden = await repo.fuzzySearch('ref', 10, { includeSeed: false });
+    expect(hidden.map(f => f.id)).toEqual([usedRef.id]);
+    expect(hidden.map(f => f.id)).not.toContain(seedRef.id);
+    expect((await repo.fuzzySearch('ref', 10, { includeSeed: true }))).toHaveLength(2);
+  });
+});

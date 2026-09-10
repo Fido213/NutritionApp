@@ -61,12 +61,16 @@ export function invalidateIndexCaches() {
 }
 
 async function fetchFoodsCached(query: string, limit: number): Promise<Food[]> {
-  const key = `${query}::${limit}`;
+  // Personal-first index: the 39k seed stays out unless explicitly enabled.
+  // Read the toggle on cache miss only (a settings SELECT is cheap, and the
+  // toggle clears this cache when flipped).
+  const showSeed = await ctx.settingsRepo.getShowSeedLibrary().catch(() => false);
+  const key = `${query}::${limit}::${showSeed ? 1 : 0}`;
   const hit = indexFetchCache.get(key);
   if (hit) return hit;
   const foods = query
-    ? await ctx.foodRepo.fuzzySearch(query, limit)
-    : await ctx.foodRepo.getAllFoods(limit);
+    ? await ctx.foodRepo.fuzzySearch(query, limit, { includeSeed: showSeed })
+    : await ctx.foodRepo.getAllFoods(limit, { includeSeed: showSeed });
   if (indexFetchCache.size > 20) indexFetchCache.clear();
   indexFetchCache.set(key, foods);
   return foods;

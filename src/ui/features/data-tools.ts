@@ -333,6 +333,25 @@ export function setupRestoreHandler() {
   });
 }
 
+// ---------- Library visibility (personal-first Index) ----------
+
+/** Seed-library toggle (Settings → Library card). Flipping clears the index
+ *  caches and re-renders so the change is immediate. */
+export function setupLibrarySettingsHandler() {
+  const box = document.getElementById('show-seed-library') as HTMLInputElement | null;
+  if (!box) return;
+  ctx.settingsRepo.getShowSeedLibrary()
+    .then(on => { box.checked = on; })
+    .catch(() => { box.checked = false; });
+  box.addEventListener('change', async () => {
+    await ctx.settingsRepo.setShowSeedLibrary(box.checked);
+    await ctx.dbManager.saveWebStore();
+    invalidateIndexCaches();
+    await renderIndex();
+    showToast(box.checked ? 'Full reference library shown in Index' : 'Index shows your foods only');
+  });
+}
+
 // ---------- Delete All Data (§5d: complete local wipe, double-guarded) ----------
 
 export function setupDeleteAllHandler() {

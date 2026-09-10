@@ -65,13 +65,35 @@ export class FoodRepository {
   }
 
   /** Every library food (Index screen) — newest first; sorted in the UI layer. */
-  async getAllFoods(limit: number = 500): Promise<Food[]> {
+  async getAllFoods(limit: number = 500, opts?: { includeSeed?: boolean }): Promise<Food[]> {
+    // Personal-first index: without includeSeed, bulk-imported rows surface
+    // only once the user has logged them (the 39k seed stays out of sight
+    // until explicitly enabled or actually used).
+    if (opts?.includeSeed === false) {
+      const res = await this.db.query(
+        `SELECT * FROM foods WHERE source_type != 'imported'
+         OR id IN (SELECT DISTINCT food_id FROM food_logs WHERE food_id IS NOT NULL)
+         ORDER BY created_at DESC LIMIT ?`,
+        [limit]
+      );
+      return (res.values as Food[]) || [];
+    }
     const res = await this.db.query(`SELECT * FROM foods ORDER BY created_at DESC LIMIT ?`, [limit]);
     return (res.values as Food[]) || [];
   }
 
-  async fuzzySearch(query: string, limit: number = 20): Promise<Food[]> {
+  async fuzzySearch(query: string, limit: number = 20, opts?: { includeSeed?: boolean }): Promise<Food[]> {
     const searchTerm = `%${query}%`;
+    if (opts?.includeSeed === false) {
+      const res = await this.db.query(
+        `SELECT * FROM foods
+         WHERE (canonical_name LIKE ? OR normalized_name LIKE ?)
+         AND (source_type != 'imported' OR id IN (SELECT DISTINCT food_id FROM food_logs WHERE food_id IS NOT NULL))
+         LIMIT ?`,
+        [searchTerm, searchTerm, limit]
+      );
+      return (res.values as Food[]) || [];
+    }
     const res = await this.db.query(
       `SELECT * FROM foods 
        WHERE canonical_name LIKE ? OR normalized_name LIKE ? 

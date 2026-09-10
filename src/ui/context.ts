@@ -21,6 +21,7 @@ import type { BarcodeRepository } from '@data/repositories/barcode.repo';
 import type { ObservationRepository } from '@data/repositories/observation.repo';
 import type { ImportRepository } from '@data/repositories/import.repo';
 import type { AliasRepository } from '@data/repositories/alias.repo';
+import type { SettingsRepository } from '@data/repositories/settings.repo';
 import type { GemmaClient } from '@services/ai/gemma-client';
 import type { FoodService } from '@services/food/food-service';
 import type { Food } from '@data/types';
@@ -39,6 +40,7 @@ export interface AppContext {
   observationRepo: ObservationRepository;
   importRepo: ImportRepository;
   aliasRepo: AliasRepository;
+  settingsRepo: SettingsRepository;
   gemmaClient: GemmaClient;
   foodService: FoodService;
 

@@ -24,7 +24,17 @@ export interface RetrievalHit {
 }
 
 // In-memory BM25 fallback when SQLite FTS5 not available (web)
-let bm25Index: { docFreq: Map<string, number>; docs: Array<{ id: string; terms: Map<string, number>; len: number; head: string[] }>; avgLen: number; N: number } | null = null;
+interface Bm25Doc { id: string; terms: Map<string, number>; len: number; head: string[] }
+let bm25Index: {
+  docFreq: Map<string, number>;
+  docs: Bm25Doc[];
+  /** Inverted postings: term -> indexes into docs. Queries score only docs
+   *  containing a query term instead of scanning all 39k rows per submit. */
+  postings: Map<string, number[]>;
+  byId: Map<string, Food>;
+  avgLen: number;
+  N: number;
+} | null = null;
 
 /** Light singularization so plurals reach singular rows and vice versa
  *  ("apples" → "apple"). Applied identically to queries and docs, so it
@@ -53,19 +63,28 @@ function headOf(canonicalName: string): string[] {
 }
 
 export function buildBm25Index(foods: Food[]): void {
-  const docs: Array<{ id: string; terms: Map<string, number>; len: number; head: string[] }> = [];
+  const docs: Bm25Doc[] = [];
   const docFreq = new Map<string, number>();
+  const postings = new Map<string, number[]>();
+  const byId = new Map<string, Food>();
   let totalLen = 0;
   for (const f of foods) {
     const text = `${f.canonical_name} ${f.normalized_name}`;
     const terms = tokenizeBM25(text);
     const tf = new Map<string, number>();
     for (const t of terms) tf.set(t, (tf.get(t) || 0) + 1);
-    for (const t of tf.keys()) docFreq.set(t, (docFreq.get(t) || 0) + 1);
+    const idx = docs.length;
+    for (const t of tf.keys()) {
+      docFreq.set(t, (docFreq.get(t) || 0) + 1);
+      let list = postings.get(t);
+      if (!list) { list = []; postings.set(t, list); }
+      list.push(idx);
+    }
     docs.push({ id: f.id, terms: tf, len: terms.length, head: headOf(f.canonical_name) });
+    byId.set(f.id, f);
     totalLen += terms.length;
   }
-  bm25Index = { docFreq, docs, avgLen: foods.length ? totalLen / foods.length : 1, N: foods.length };
+  bm25Index = { docFreq, docs, postings, byId, avgLen: foods.length ? totalLen / foods.length : 1, N: foods.length };
 }
 
 export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food: Food; score: number; rank: number }> {
@@ -78,14 +97,19 @@ export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food
   // of them get a further 1.5x ("boiled chicken" → boiled-headed chicken,
   // never "Chicken egg boiled").
   const { concept, prep } = splitConceptPrep(qTerms);
-  const byId = new Map(bm25Index.docs.map(d => [d.id, d]));
+  // Docs by id for scoring internals (head/terms live here, not on Food).
+  const docById = new Map(bm25Index.docs.map(d => [d.id, d]));
+  const foodById = bm25Index.byId;
   const k1 = 1.2, b = 0.75;
   const scores = new Map<string, number>();
   for (const q of qTerms) {
     const df = bm25Index.docFreq.get(q) || 0;
     if (df === 0) continue;
     const idf = Math.log(1 + (bm25Index.N - df + 0.5) / (df + 0.5));
-    for (const doc of bm25Index.docs) {
+    // Postings: only docs containing this term can score (identical scores
+    // to the old full scan, which skipped tf==0 docs anyway).
+    for (const di of bm25Index.postings.get(q) || []) {
+      const doc = bm25Index.docs[di];
       const tf = doc.terms.get(q) || 0;
       if (tf === 0) continue;
       const denom = tf + k1 * (1 - b + b * (doc.len / bm25Index.avgLen));
@@ -93,9 +117,11 @@ export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food
       scores.set(doc.id, (scores.get(doc.id) || 0) + s);
     }
   }
+  const missing = [...scores.keys()].filter(k => !docById.has(k));
+  if (missing.length > 0) console.log('ZZ-KEYS', JSON.stringify({ nDocs: bm25Index.docs.length, nScores: scores.size, missing: missing.slice(0, 5) }));
   const hits = [...scores.entries()]
     .map(([id, score]) => {
-      const doc = byId.get(id)!;
+      const doc = docById.get(id)!;
       let boosted = score;
       if (concept.length > 0 && doc.head.length === concept.length && doc.head.every((t, i) => t === concept[i])) {
         boosted *= 2;
@@ -109,7 +135,7 @@ export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food
         const docPrep = [...doc.terms.keys()].filter(t => PREP_WORDS.has(t));
         if (docPrep.length > 0) boosted *= 0.6;
       }
-      return { food: foods.find(f => f.id === id)!, score: boosted, rank: 0 };
+      return { food: foodById.get(id)!, score: boosted, rank: 0 };
     })
     .filter(h => h.food)
     .sort((a, b) => b.score - a.score)
