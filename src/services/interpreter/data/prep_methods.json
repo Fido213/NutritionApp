@@ -1,0 +1,9 @@
+{
+  "_comment": "Preparation/state words for concept-head retrieval: a generic query denotes a CONCEPT (the candidate's head segment); shared prep words confirm the variant. Single-source for the retriever (see lexicon.ts). EN USDA vocabulary; extend only with measured need.",
+  "methods": [
+    "grilled", "boiled", "fried", "baked", "roasted", "raw", "steamed",
+    "smoked", "poached", "scrambled", "broiled", "braised", "stewed",
+    "canned", "dried", "frozen", "fresh", "cooked", "microwaved",
+    "pickled", "salted", "sauteed", "candied"
+  ]
+}

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { parseQuantities } from './unit-parser';
 import { extractFoodSpansSync } from './ner-client';
 import { interpretTextSync, setFoodsForInterpreter, getIndexedVersion } from './index';
+import { bm25Search, buildBm25Index } from './hybrid-retriever';
 import { normalizeAmount } from '@domain/units';
 
 describe('unit-parser', () => {
@@ -131,6 +132,25 @@ describe('bare counts without piece weights', () => {
     expect(out).toHaveLength(1);
     expect(out[0].amountG).toBe(364);
     expect(out[0].wasDefault).toBe(false);
+  });
+});
+
+describe('bm25 concept-head ranking', () => {
+  const foods = [
+    { id: 'dried', canonical_name: 'Apples, dried, sulfured', normalized_name: 'apples dried sulfured' },
+    { id: 'raw', canonical_name: 'Apple, raw', normalized_name: 'apple raw' },
+    { id: 'eggboil', canonical_name: 'Chicken egg boiled', normalized_name: 'chicken egg boiled' },
+    { id: 'breastboil', canonical_name: 'Chicken, breast, boiled', normalized_name: 'chicken breast boiled' },
+  ] as any[];
+
+  it('prefers the concept-headed row for plural queries ("apples" -> raw, not dried)', () => {
+    buildBm25Index(foods);
+    expect(bm25Search('apples', foods, 3)[0].food.id).toBe('raw');
+  });
+
+  it('prefers prep-matching heads ("boiled chicken" -> boiled breast, not egg)', () => {
+    buildBm25Index(foods);
+    expect(bm25Search('boiled chicken', foods, 3)[0].food.id).toBe('breastboil');
   });
 });
 

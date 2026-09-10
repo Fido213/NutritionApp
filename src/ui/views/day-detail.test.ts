@@ -4,7 +4,7 @@
  * logic that must never regress lives here.
  */
 import { describe, it, expect } from 'vitest';
-import { assumedAmountLabel, formatLoggedAmount, confidenceLabel, spanTextFromObservation } from './day-detail';
+import { assumedAmountLabel, formatLoggedAmount, confidenceLabel, spanTextFromObservation, displayFoodName } from './day-detail';
 
 describe('assumedAmountLabel', () => {
   it('flags silent defaults', () => {
@@ -94,5 +94,26 @@ describe('spanTextFromObservation', () => {
     expect(spanTextFromObservation('apple', JSON.stringify({ canonicalName: 'apple' }))).toBeNull();
     expect(spanTextFromObservation('apple', '{not json')).toBeNull();
     expect(spanTextFromObservation(null, '{}')).toBeNull();
+  });
+});
+
+describe('displayFoodName', () => {
+  it('sentence-cases shouting reference names', () => {
+    expect(displayFoodName('CHICKEN')).toBe('Chicken');
+    expect(displayFoodName('RICE, WHITE')).toBe('Rice, white');
+  });
+
+  it('capitalizes all-lower names', () => {
+    expect(displayFoodName('banana')).toBe('Banana');
+  });
+
+  it('leaves mixed case exactly alone (brands, title case)', () => {
+    expect(displayFoodName("McDonald's fries")).toBe("McDonald's fries");
+    expect(displayFoodName('Chicken, breast, lean flesh, grilled')).toBe('Chicken, breast, lean flesh, grilled');
+  });
+
+  it('handles empty input', () => {
+    expect(displayFoodName(null)).toBe('');
+    expect(displayFoodName('')).toBe('');
   });
 });

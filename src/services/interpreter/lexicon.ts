@@ -11,6 +11,7 @@
  */
 import vagueUnits from './data/vague_units.json';
 import negationPatterns from './data/negation_patterns.json';
+import prepMethods from './data/prep_methods.json';
 
 export interface VagueMatch {
   id: string;
@@ -61,6 +62,26 @@ const NEGATION_RES: RegExp[] = (
   // require a non-letter AFTER the space and never match "no sauce").
   .map((p) => toBoundaryRe(p.trim()));
 
+/**
+ * Preparation/state words for concept-head retrieval (single-source from
+ * `data/prep_methods.json`). A generic query denotes a CONCEPT carried by
+ * the candidate's head segment; a shared prep word confirms the variant
+ * ("boiled chicken" → boiled-headed chicken rows, not "Chicken egg boiled").
+ */
+export const PREP_WORDS: ReadonlySet<string> = new Set(
+  (prepMethods as { methods: string[] }).methods.map((m) => m.toLowerCase()),
+);
+
+/** Split query tokens into concept (dish identity) vs prep/state words. */
+export function splitConceptPrep(tokens: string[]): { concept: string[]; prep: string[] } {
+  const concept: string[] = [];
+  const prep: string[] = [];
+  for (const t of tokens) {
+    if (PREP_WORDS.has(t)) prep.push(t);
+    else concept.push(t);
+  }
+  return { concept, prep };
+}
 /** Single-token negation words for span truncation / leading-strip in NER. */
 const NEGATION_TOKENS: ReadonlySet<string> = new Set(
   (

@@ -108,6 +108,25 @@ export function spanTextFromObservation(
 }
 
 /**
+ * Display convention for library names (unit-tested; render sites use the
+ * returned string, storage keeps the raw canonical). Reference rows shout
+ * ("CHICKEN", "RICE, WHITE"); users should read sentence case. Only
+ * unambiguous casings are touched — all-caps becomes sentence case,
+ * all-lower gets a capital; mixed case (brands, USDA title case) is left
+ * exactly alone so nothing readable can regress.
+ */
+export function displayFoodName(name: string | null | undefined): string {
+  if (!name) return '';
+  if (/[a-z\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff]/.test(name)) {
+    // Has lowercase/non-Latin-cased content: mixed or all-lower.
+    if (name === name.toLowerCase()) return name.charAt(0).toUpperCase() + name.slice(1);
+    return name;
+  }
+  const lower = name.toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+/**
  * Pure label resolution for the assumed-amount badge (unit-tested; the view
  * only renders the returned string). Returns null when no badge applies:
  * corrected rows, non-interpreter observations, confident parses.
@@ -472,7 +491,7 @@ export function renderDayDetail(args: DayDetailArgs) {
     }
     const name = document.createElement('span');
     name.className = 'log-name';
-    name.textContent = log.food_name || log.canonical_name || 'Logged Item';
+    name.textContent = displayFoodName(log.food_name || log.canonical_name) || 'Logged Item';
     main.appendChild(name);
     const cal = document.createElement('span');
     cal.className = 'log-cal';
@@ -615,7 +634,7 @@ export function renderDayDetail(args: DayDetailArgs) {
         left.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
         const nm = document.createElement('span');
         nm.className = 'combo-ing-name';
-        nm.textContent = log.food_name || log.canonical_name || 'Ingredient';
+        nm.textContent = displayFoodName(log.food_name || log.canonical_name) || 'Ingredient';
         const mac = document.createElement('span');
         mac.className = 'combo-ing-macros';
         mac.textContent =

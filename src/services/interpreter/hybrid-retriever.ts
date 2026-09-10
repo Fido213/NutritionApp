@@ -10,6 +10,7 @@
 
 import { Food } from '@data/types';
 import { normalizeFoodName } from '@domain/logging';
+import { splitConceptPrep, PREP_WORDS } from './lexicon';
 import { reciprocalRankFusion } from './mE5-client';
 import { faissSearch, faissSearchSync, invalidateFaissCache } from './faiss-bridge';
 
@@ -23,7 +24,17 @@ export interface RetrievalHit {
 }
 
 // In-memory BM25 fallback when SQLite FTS5 not available (web)
-let bm25Index: { docFreq: Map<string, number>; docs: Array<{ id: string; terms: Map<string, number>; len: number }>; avgLen: number; N: number } | null = null;
+let bm25Index: { docFreq: Map<string, number>; docs: Array<{ id: string; terms: Map<string, number>; len: number; head: string[] }>; avgLen: number; N: number } | null = null;
+
+/** Light singularization so plurals reach singular rows and vice versa
+ *  ("apples" → "apple"). Applied identically to queries and docs, so it
+ *  can only merge variants, never split them. Non-Latin tokens are
+ *  unaffected (they never end in U+0073). */
+function singularBM25(tok: string): string {
+  if (tok.length > 4 && tok.endsWith('ies')) return tok.slice(0, -3) + 'y';
+  if (tok.length > 3 && tok.endsWith('s') && !tok.endsWith('ss')) return tok.slice(0, -1);
+  return tok;
+}
 
 function tokenizeBM25(text: string): string[] {
   // Keep-set must mirror the eval sim (eval_retrieval_colab.py) or local
@@ -32,11 +43,17 @@ function tokenizeBM25(text: string): string[] {
   // can never match lexically, no matter how many aliases get seeded.
   return text.toLowerCase().normalize('NFKC')
     .replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, ' ')
-    .split(/\s+/).filter(Boolean);
+    .split(/\s+/).filter(Boolean).map(singularBM25);
+}
+
+/** Concept head of a canonical name: pre-comma tokens (USDA convention —
+ *  "Chicken, breast, ..." is chicken; "Almond Chicken" is a dish). */
+function headOf(canonicalName: string): string[] {
+  return tokenizeBM25(canonicalName.split(',')[0]);
 }
 
 export function buildBm25Index(foods: Food[]): void {
-  const docs: Array<{ id: string; terms: Map<string, number>; len: number }> = [];
+  const docs: Array<{ id: string; terms: Map<string, number>; len: number; head: string[] }> = [];
   const docFreq = new Map<string, number>();
   let totalLen = 0;
   for (const f of foods) {
@@ -45,7 +62,7 @@ export function buildBm25Index(foods: Food[]): void {
     const tf = new Map<string, number>();
     for (const t of terms) tf.set(t, (tf.get(t) || 0) + 1);
     for (const t of tf.keys()) docFreq.set(t, (docFreq.get(t) || 0) + 1);
-    docs.push({ id: f.id, terms: tf, len: terms.length });
+    docs.push({ id: f.id, terms: tf, len: terms.length, head: headOf(f.canonical_name) });
     totalLen += terms.length;
   }
   bm25Index = { docFreq, docs, avgLen: foods.length ? totalLen / foods.length : 1, N: foods.length };
@@ -55,6 +72,13 @@ export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food
   if (!bm25Index) buildBm25Index(foods);
   const qTerms = tokenizeBM25(query);
   if (qTerms.length === 0 || !bm25Index) return [];
+  // Concept-head rule (validated probe 3): a generic query denotes the
+  // CONCEPT carried by the candidate's head segment. Head equality doubles
+  // the score; when the query names a preparation, candidates carrying all
+  // of them get a further 1.5x ("boiled chicken" → boiled-headed chicken,
+  // never "Chicken egg boiled").
+  const { concept, prep } = splitConceptPrep(qTerms);
+  const byId = new Map(bm25Index.docs.map(d => [d.id, d]));
   const k1 = 1.2, b = 0.75;
   const scores = new Map<string, number>();
   for (const q of qTerms) {
@@ -70,7 +94,23 @@ export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food
     }
   }
   const hits = [...scores.entries()]
-    .map(([id, score]) => ({ food: foods.find(f => f.id === id)!, score, rank: 0 }))
+    .map(([id, score]) => {
+      const doc = byId.get(id)!;
+      let boosted = score;
+      if (concept.length > 0 && doc.head.length === concept.length && doc.head.every((t, i) => t === concept[i])) {
+        boosted *= 2;
+      }
+      if (prep.length > 0 && prep.every(p => doc.terms.has(p))) boosted *= 1.5;
+      // Unrequested preservation/state words change nutrition substantially
+      // ("Apple, dried" is 10x the kcal of raw). When the query names no
+      // preparation, candidates carrying one are demoted — never boosted away
+      // entirely, just stopped from outranking the plain row on brevity.
+      if (prep.length === 0) {
+        const docPrep = [...doc.terms.keys()].filter(t => PREP_WORDS.has(t));
+        if (docPrep.length > 0) boosted *= 0.6;
+      }
+      return { food: foods.find(f => f.id === id)!, score: boosted, rank: 0 };
+    })
     .filter(h => h.food)
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
