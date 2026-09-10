@@ -82,6 +82,52 @@ export function splitConceptPrep(tokens: string[]): { concept: string[]; prep: s
   }
   return { concept, prep };
 }
+
+/**
+ * Display convention for library names (unit-tested; render sites use the
+ * returned string, storage keeps the raw canonical). Reference rows shout
+ * ("CHICKEN", "RICE, WHITE"); users should read sentence case. Only
+ * unambiguous casings are touched — all-caps becomes sentence case,
+ * all-lower gets a capital; mixed case (brands, USDA title case) is left
+ * exactly alone so nothing readable can regress.
+ */
+export function displayFoodName(name: string | null | undefined): string {
+  if (!name) return '';
+  if (/[a-z\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff]/.test(name)) {
+    // Has lowercase/non-Latin-cased content: mixed or all-lower.
+    if (name === name.toLowerCase()) return name.charAt(0).toUpperCase() + name.slice(1);
+    return name;
+  }
+  const lower = name.toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+/**
+ * UI alias for a canonical name: USDA "Head, attr, ..." becomes a natural
+ * phrase ("Chicken, breast, boiled, sliced" → "Boiled sliced chicken
+ * breast"). Preparation words move before the head phrase; everything else
+ * keeps its relative order. Single-segment names just get display casing.
+ * Pure and total: never throws, never returns empty for non-empty input.
+ */
+export function friendlyFoodName(canonical: string | null | undefined): string {
+  if (!canonical || !canonical.trim()) return '';
+  const segments = canonical.split(',').map(s => s.trim()).filter(Boolean);
+  if (segments.length < 2) return displayFoodName(canonical.trim());
+  const head = segments[0].split(/\s+/).filter(Boolean);
+  const attrs = segments.slice(1).join(' ').split(/\s+/).filter(Boolean);
+  const prep: string[] = [];
+  const rest: string[] = [];
+  for (const w of attrs) {
+    (PREP_WORDS.has(w.toLowerCase()) ? prep : rest).push(w);
+  }
+  // The composed phrase is ours: normalize shouting words, then lead-capital.
+  // Mixed-case words (brands) are never lowered — only pure ALL-CAPS tokens.
+  const words = [...prep, ...head, ...rest].map(w =>
+    /[A-Z]/.test(w) && w === w.toUpperCase() ? w.toLowerCase() : w,
+  );
+  const composed = words.join(' ');
+  return composed.charAt(0).toUpperCase() + composed.slice(1);
+}
 /** Single-token negation words for span truncation / leading-strip in NER. */
 const NEGATION_TOKENS: ReadonlySet<string> = new Set(
   (

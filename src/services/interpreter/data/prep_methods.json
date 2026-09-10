@@ -4,6 +4,7 @@
     "grilled", "boiled", "fried", "baked", "roasted", "raw", "steamed",
     "smoked", "poached", "scrambled", "broiled", "braised", "stewed",
     "canned", "dried", "frozen", "fresh", "cooked", "microwaved",
-    "pickled", "salted", "sauteed", "candied"
+    "pickled", "salted", "sauteed", "candied",
+    "sliced", "diced", "chopped", "minced", "ground"
   ]
 }

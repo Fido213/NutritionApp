@@ -108,23 +108,13 @@ export function spanTextFromObservation(
 }
 
 /**
- * Display convention for library names (unit-tested; render sites use the
- * returned string, storage keeps the raw canonical). Reference rows shout
- * ("CHICKEN", "RICE, WHITE"); users should read sentence case. Only
- * unambiguous casings are touched — all-caps becomes sentence case,
- * all-lower gets a capital; mixed case (brands, USDA title case) is left
- * exactly alone so nothing readable can regress.
+ * Display convention for library names — single home in the food-word
+ * lexicon next to friendlyFoodName. Imported here for render sites and
+ * re-exported so views keep one import point (pure functions only —
+ * no runtime service coupling either direction).
  */
-export function displayFoodName(name: string | null | undefined): string {
-  if (!name) return '';
-  if (/[a-z\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff]/.test(name)) {
-    // Has lowercase/non-Latin-cased content: mixed or all-lower.
-    if (name === name.toLowerCase()) return name.charAt(0).toUpperCase() + name.slice(1);
-    return name;
-  }
-  const lower = name.toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
-}
+import { displayFoodName, friendlyFoodName } from '@services/interpreter/lexicon';
+export { displayFoodName, friendlyFoodName };
 
 /**
  * Pure label resolution for the assumed-amount badge (unit-tested; the view
@@ -489,15 +479,27 @@ export function renderDayDetail(args: DayDetailArgs) {
       t.textContent = time;
       main.appendChild(t);
     }
+    const rawName = log.food_name || log.canonical_name || '';
+    const friendly = friendlyFoodName(rawName);
     const name = document.createElement('span');
     name.className = 'log-name';
-    name.textContent = displayFoodName(log.food_name || log.canonical_name) || 'Logged Item';
+    name.textContent = friendly || 'Logged Item';
+    main.appendChild(name);
     main.appendChild(name);
     const cal = document.createElement('span');
     cal.className = 'log-cal';
     cal.textContent = log.calories ? `${Math.round(log.calories)} kcal` : `${Math.round(log.amount_ml || log.amount_g || 0)} ml`;
     main.appendChild(cal);
     item.appendChild(main);
+
+    // UI alias <-> canonical: the friendly phrase leads; the stored name
+    // follows dimmed whenever they differ, so nothing is ever hidden.
+    if (rawName && friendly && friendly !== rawName) {
+      const canonLine = document.createElement('div');
+      canonLine.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;';
+      canonLine.textContent = rawName;
+      item.appendChild(canonLine);
+    }
 
     const loggedAmount = formatLoggedAmount(log.amount_g, log.amount_ml);
     if (loggedAmount) {
@@ -634,7 +636,7 @@ export function renderDayDetail(args: DayDetailArgs) {
         left.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
         const nm = document.createElement('span');
         nm.className = 'combo-ing-name';
-        nm.textContent = displayFoodName(log.food_name || log.canonical_name) || 'Ingredient';
+        nm.textContent = friendlyFoodName(log.food_name || log.canonical_name) || 'Ingredient';
         const mac = document.createElement('span');
         mac.className = 'combo-ing-macros';
         mac.textContent =

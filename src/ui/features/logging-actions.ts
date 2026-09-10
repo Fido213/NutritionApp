@@ -8,7 +8,8 @@ import { showToast } from '../components/toast';
 import { closeModalLayer } from '../modal-layers';
 import { calculateNutrition } from '@domain/nutrition';
 import { classifyWaterSource } from '@domain/hydration';
-import { expandCombo } from '@domain/logging';
+import { expandCombo, isPlainWaterPhrase } from '@domain/logging';
+import { extractSpanText } from '@services/food/food-service';
 import { refreshStateForDate } from '../app-refresh';
 import type { Food } from '@data/types';
 import { ctx } from '../context';
@@ -106,6 +107,23 @@ async function logTextInputInner(rawText: string) {
   if (!items || items.length === 0) {
     items = await ctx.gemmaClient.interpretTextLog(rawText);
     mark('gemma-fallback');
+  }
+
+  // Plain water ("500ml water", "water") logs as explicit water — never as
+  // a food entry. Single-phrase only; mixed input keeps the food pipeline.
+  if (items.length === 1) {
+    const only = items[0] as any;
+    const phrase = extractSpanText(rawText, only) ?? (only.canonicalName as string | undefined);
+    if (isPlainWaterPhrase(phrase)) {
+      const ml = Math.round(only.amountMl ?? only.amountG ?? 250);
+      await ctx.waterRepo.insertWaterLog({ date, amount_ml: ml, source: 'explicit' });
+      mark('water-log');
+      await ctx.dbManager.saveWebStore();
+      await refreshStateForDate(date);
+      console.debug('[logTextInput:timings] ms since submit:', marks);
+      showToast(`Logged ${ml} ml water`);
+      return;
+    }
   }
 
   if (!items || items.length === 0) {

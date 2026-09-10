@@ -16,7 +16,7 @@ import { ctx, resolveFoodCached } from '../context';
 import type { Food } from '@data/types';
 import type { ComboRepository } from '@data/repositories/combo.repo';
 import { quickLogFood, logFoodAtAmount, logCombo } from './logging-actions';
-import { confidenceLabel } from '@ui/views/day-detail';
+import { confidenceLabel, friendlyFoodName } from '@ui/views/day-detail';
 import { openComboBuilderView } from './combo-builder';
 
 export type FoodSortKey =
@@ -348,12 +348,21 @@ function buildIndexFoodRow(food: Food): HTMLElement {
   main.className = 'log-main';
   const name = document.createElement('span');
   name.className = 'log-name';
-  name.textContent = food.canonical_name;
+  name.textContent = friendlyFoodName(food.canonical_name) || food.canonical_name;
   const cal = document.createElement('span');
   cal.className = 'log-cal';
   cal.textContent = food.calories_per_100g != null ? `${Math.round(food.calories_per_100g)} kcal` : 'no data';
   main.append(name, cal);
   row.appendChild(main);
+
+  // UI alias <-> canonical, same convention as journal rows.
+  const friendly = friendlyFoodName(food.canonical_name);
+  if (friendly && friendly !== food.canonical_name) {
+    const canonLine = document.createElement('div');
+    canonLine.style.cssText = 'font-size:11px;color:var(--text-dim);padding-left:2px;';
+    canonLine.textContent = food.canonical_name;
+    row.appendChild(canonLine);
+  }
 
   const macros = document.createElement('div');
   macros.className = 'log-macros';

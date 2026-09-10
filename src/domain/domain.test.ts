@@ -3,7 +3,7 @@ import { calculateNutrition, calculateDelta } from './nutrition';
 import { calculateEffectiveHydration, classifyWaterSource } from './hydration';
 import { resolveGoalForDate, GoalRecord } from './goals';
 import { calculateScore } from './scoring';
-import { expandCombo, applyCorrection, normalizeFoodName, sliceSpanText } from './logging';
+import { expandCombo, applyCorrection, normalizeFoodName, sliceSpanText, isPlainWaterPhrase } from './logging';
 import { safeJsonParse } from '../utils/sanitize';
 import { FoodReference } from './types';
 
@@ -277,5 +277,25 @@ describe('sliceSpanText', () => {
 
   it('rejects degenerate slices', () => {
     expect(sliceSpanText('a', [0, 1])).toBeNull();
+  });
+});
+
+describe('isPlainWaterPhrase', () => {
+  it('recognizes plain water in any casing', () => {
+    expect(isPlainWaterPhrase('water')).toBe(true);
+    expect(isPlainWaterPhrase('Water')).toBe(true);
+    expect(isPlainWaterPhrase(' water ')).toBe(true);
+  });
+
+  it('rejects foods that merely contain water', () => {
+    expect(isPlainWaterPhrase('coconut water')).toBe(false);
+    expect(isPlainWaterPhrase('watery')).toBe(false);
+    expect(isPlainWaterPhrase('watermelon')).toBe(false);
+  });
+
+  it('rejects empty input', () => {
+    expect(isPlainWaterPhrase(null)).toBe(false);
+    expect(isPlainWaterPhrase('')).toBe(false);
+    expect(isPlainWaterPhrase('!!!')).toBe(false);
   });
 });

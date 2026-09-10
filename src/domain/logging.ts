@@ -70,6 +70,16 @@ export function sliceSpanText(
 }
 
 /**
+ * True when a phrase means plain drinking water ("water", "500ml water") —
+ * and nothing else ("coconut water" is a food). Text-logged plain water
+ * becomes an explicit water log, never a food entry.
+ */
+export function isPlainWaterPhrase(phrase: string | null | undefined): boolean {
+  if (!phrase) return false;
+  return normalizeFoodName(phrase) === 'water';
+}
+
+/**
  * Normalize a food name for consistent lookup.
  *
  * Keep-set covers Latin + Cyrillic + Arabic + CJK so non-Latin library names
