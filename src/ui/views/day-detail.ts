@@ -64,6 +64,23 @@ export function formatLoggedAmount(
 }
 
 /**
+ * Pure confidence chip label (unit-tested; views only render the string).
+ * Pass-22e intent, narrowed: ONLY legacy split-import rows (source
+ * 'imported' + the 0.5 marker confidence) read "estimated". Seeded reference
+ * rows ('imported', NULL confidence) read "reference"; anything else falls
+ * through to the percentage / "no estimate" branches.
+ */
+export function confidenceLabel(
+  confidence: number | null | undefined,
+  sourceType?: string | null,
+): string {
+  if (sourceType === 'imported' && confidence === 0.5) return 'estimated';
+  if (sourceType === 'imported' && (confidence === null || confidence === undefined)) return 'reference';
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'no estimate';
+  return `${Math.round(confidence * 100)}% sure`;
+}
+
+/**
  * Pure label resolution for the assumed-amount badge (unit-tested; the view
  * only renders the returned string). Returns null when no badge applies:
  * corrected rows, non-interpreter observations, confident parses.

@@ -146,7 +146,8 @@ export class FoodRepository {
           await this.db.run('COMMIT');
         } catch (commitErr: any) {
           const msg = String(commitErr?.message || commitErr);
-          if (!/no transaction is active/i.test(msg)) throw commitErr;
+          // Native plugin auto-commits each run() and reports either wording.
+          if (!/no transaction is active|no current transaction/i.test(msg)) throw commitErr;
           console.warn('foodRepo.bulkInsert: COMMIT found no active transaction; writes were already applied.');
         }
       }
@@ -157,6 +158,16 @@ export class FoodRepository {
       }
       throw e;
     }
+  }
+
+  /**
+   * Delete every food (seed-failure self-heal only: the seed runs solely on
+   * an empty table, so a failed run's partial rows are all ours — clearing
+   * leaves a clean empty table for next launch's retry instead of a stuck
+   * partial library that the empty-guard would skip forever).
+   */
+  async clearAll(): Promise<void> {
+    await this.db.run(`DELETE FROM foods`);
   }
 
   async upsertFromAI(canonicalName: string, nutrients: Partial<InsertFood>, confidence: number): Promise<Food> {

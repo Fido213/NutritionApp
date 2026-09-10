@@ -4,7 +4,7 @@
  * logic that must never regress lives here.
  */
 import { describe, it, expect } from 'vitest';
-import { assumedAmountLabel, formatLoggedAmount } from './day-detail';
+import { assumedAmountLabel, formatLoggedAmount, confidenceLabel } from './day-detail';
 
 describe('assumedAmountLabel', () => {
   it('flags silent defaults', () => {
@@ -59,5 +59,25 @@ describe('formatLoggedAmount', () => {
   it('stays silent when neither amount is stored', () => {
     expect(formatLoggedAmount(null, null)).toBeNull();
     expect(formatLoggedAmount(undefined, undefined)).toBeNull();
+  });
+});
+
+describe('confidenceLabel', () => {
+  it('marks legacy split-import rows estimated', () => {
+    expect(confidenceLabel(0.5, 'imported')).toBe('estimated');
+  });
+
+  it('marks seeded reference rows reference, not estimated', () => {
+    expect(confidenceLabel(null, 'imported')).toBe('reference');
+    expect(confidenceLabel(undefined, 'imported')).toBe('reference');
+  });
+
+  it('labels exact imports by percentage', () => {
+    expect(confidenceLabel(1.0, 'imported')).toBe('100% sure');
+    expect(confidenceLabel(0.9, 'ai_estimate')).toBe('90% sure');
+  });
+
+  it('stays honest when confidence is missing', () => {
+    expect(confidenceLabel(null, 'user_entered')).toBe('no estimate');
   });
 });

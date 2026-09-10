@@ -100,6 +100,7 @@ function stubRepo(existing: unknown[] = []) {
   return {
     getAllFoods: vi.fn(async () => existing),
     bulkInsert: vi.fn(async (rows: unknown[]) => (rows as unknown[]).length),
+    clearAll: vi.fn(async () => {}),
   };
 }
 
@@ -148,6 +149,23 @@ describe('seedFoodLibraryIfEmpty', () => {
     const fetchFn = vi.fn(async () => ({ ok: true, text: async () => CSVTEXT } as any));
     const r = await seedFoodLibraryIfEmpty(repo as any, fetchFn as any);
     expect(r).toMatchObject({ seeded: false, reason: 'failed' });
+  });
+
+  it('clears partial rows on failure so the next launch retries clean', async () => {
+    const repo = stubRepo();
+    repo.bulkInsert = vi.fn(async () => { throw new Error('disk full'); });
+    const fetchFn = vi.fn(async () => ({ ok: true, text: async () => CSVTEXT } as any));
+    await seedFoodLibraryIfEmpty(repo as any, fetchFn as any);
+    expect(repo.clearAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports slice progress during the seed', async () => {
+    const repo = stubRepo();
+    const fetchFn = vi.fn(async () => ({ ok: true, text: async () => CSVTEXT } as any));
+    const seen: Array<[number, number]> = [];
+    const r = await seedFoodLibraryIfEmpty(repo as any, fetchFn as any, (d, t) => seen.push([d, t]));
+    expect(r.seeded).toBe(true);
+    expect(seen).toEqual([[2, 2]]);
   });
 });
 

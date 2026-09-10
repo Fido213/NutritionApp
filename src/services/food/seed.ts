@@ -140,12 +140,14 @@ export function toInsertFood(c: SeedCandidate): InsertFood {
 /**
  * Seed the library iff it is empty and the bundled asset exists. Never
  * throws for expected skips (non-empty / no asset / bad asset) — first
- * launch must never crash. Unexpected insert failures are reported, not
- * thrown: an empty table retries next launch.
+ * launch must never crash. A failed bulk insert clears its partial rows
+ * (the table was empty when we started, so they are all ours) so the next
+ * launch retries clean instead of skipping a stuck partial library.
  */
 export async function seedFoodLibraryIfEmpty(
-  foodRepo: Pick<FoodRepository, 'getAllFoods' | 'bulkInsert'>,
+  foodRepo: Pick<FoodRepository, 'getAllFoods' | 'bulkInsert' | 'clearAll'>,
   fetchFn: typeof fetch = fetch,
+  onProgress?: (inserted: number, total: number) => void,
 ): Promise<SeedResult> {
   const existing = await foodRepo.getAllFoods(1);
   if (existing.length > 0) return { seeded: false, reason: 'non-empty', total: 0, inserted: 0, skipped: 0 };
@@ -174,12 +176,22 @@ export async function seedFoodLibraryIfEmpty(
 
   const prepared = prepareSeedRows(records);
   const deduped = dedupeSeedRows(prepared);
+  const foods = deduped.map(toInsertFood);
   try {
-    const inserted = await foodRepo.bulkInsert(deduped.map(toInsertFood));
+    // Sliced so the boot overlay can report progress; each slice is its own
+    // transaction, and any failure clears the table (it was empty at entry)
+    // for a clean retry next launch.
+    const SLICE = 2000;
+    let inserted = 0;
+    for (let i = 0; i < foods.length; i += SLICE) {
+      inserted += await foodRepo.bulkInsert(foods.slice(i, i + SLICE));
+      onProgress?.(inserted, foods.length);
+    }
     console.log(`[seed] base library seeded: ${inserted} foods (${prepared.length - deduped.length} collision-dupes dropped)`);
     return { seeded: true, reason: 'seeded', total: prepared.length, inserted, skipped: prepared.length - deduped.length };
   } catch (e: any) {
-    console.warn('[seed] bulk insert failed, will retry next launch:', e?.message || e);
+    try { await foodRepo.clearAll(); } catch { /* best effort */ }
+    console.warn('[seed] bulk insert failed, table cleared, will retry next launch:', e?.message || e);
     return { seeded: false, reason: 'failed', total: prepared.length, inserted: 0, skipped: 0, error: String(e?.message || e) };
   }
 }

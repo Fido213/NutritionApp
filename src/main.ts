@@ -96,12 +96,28 @@ async function initApp() {
 
     // First-launch base seed (44k migration): empty library + bundled CSV
     // seeds once, then the guard skips every later launch. Never touches
-    // existing data (seed module only INSERTs into an empty table).
+    // existing data (seed module only INSERTs into an empty table). The
+    // overlay appears only while a real seed is running (first progress
+    // callback creates it) and is always removed afterwards.
+    let seedOverlay: HTMLElement | null = null;
+    const showSeedProgress = (done: number, total: number) => {
+      if (!seedOverlay) {
+        seedOverlay = document.createElement('div');
+        seedOverlay.id = 'seed-progress';
+        seedOverlay.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg, #101418);z-index:9999;font-size:15px;color:var(--text, #fff);';
+        document.body.appendChild(seedOverlay);
+      }
+      seedOverlay.textContent = `Setting up food library… ${done.toLocaleString()} / ${total.toLocaleString()}`;
+    };
     try {
       const { seedFoodLibraryIfEmpty } = await import('@services/food/seed');
-      const seedRes = await seedFoodLibraryIfEmpty(ctx.foodRepo);
+      const seedRes = await seedFoodLibraryIfEmpty(ctx.foodRepo, fetch, showSeedProgress);
       if (seedRes.seeded) console.log('[seed] base library ready:', seedRes.inserted, 'foods');
-    } catch (e) { console.debug('[seed] skipped', e); }
+    } catch (e) { console.debug('[seed] skipped', e); } finally {
+      // Cast: assigned inside the progress closure, so narrowing sees null.
+      (seedOverlay as HTMLElement | null)?.remove();
+      seedOverlay = null;
+    }
 
     // Warm interpreter caches for hybrid retrieval (BM25 + mE5 fallback). Non-blocking.
     void (async () => {

@@ -16,6 +16,7 @@ import { ctx, resolveFoodCached } from '../context';
 import type { Food } from '@data/types';
 import type { ComboRepository } from '@data/repositories/combo.repo';
 import { quickLogFood, logFoodAtAmount, logCombo } from './logging-actions';
+import { confidenceLabel } from '@ui/views/day-detail';
 import { openComboBuilderView } from './combo-builder';
 
 export type FoodSortKey =
@@ -293,14 +294,6 @@ const FOOD_CMP: Record<FoodSortKey, (a: Food, b: Food) => number> = {
   'confidence-desc': numericCmp(f => f.confidence ?? null, 'desc'),
   'confidence-asc': numericCmp(f => f.confidence ?? null, 'asc')
 };
-
-function confidenceLabel(confidence: number | null | undefined, sourceType?: string): string {
-  // Pass-22e: imported split estimates read "estimated", not a fake-precise
-  // "50% sure" — the 0.5 confidence is a marker, not a measurement.
-  if (sourceType === 'imported') return 'estimated';
-  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'no estimate';
-  return `${Math.round(confidence * 100)}% sure`;
-}
 
 function fmt1(n: number | null | undefined): string {
   return (Math.round((n || 0) * 10) / 10).toString();
