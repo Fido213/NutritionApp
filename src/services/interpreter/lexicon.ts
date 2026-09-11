@@ -84,6 +84,39 @@ export function splitConceptPrep(tokens: string[]): { concept: string[]; prep: s
 }
 
 /**
+ * Light singularization so plurals reach singular rows and vice versa
+ * ("apples" → "apple"). Applied identically to queries and docs, so it
+ * can only merge variants, never split them. Non-Latin tokens are
+ * unaffected (they never end in U+0073).
+ */
+export function singularBM25(tok: string): string {
+  if (tok.length > 4 && tok.endsWith('ies')) return tok.slice(0, -3) + 'y';
+  if (tok.length > 3 && tok.endsWith('s') && !tok.endsWith('ss')) return tok.slice(0, -1);
+  return tok;
+}
+
+/**
+ * BM25 tokenizer (single home — hybrid-retriever, rerank, and the eval sims
+ * in `ai models/eval/` must all mirror this keep-set and the singular step,
+ * or local numbers stop meaning anything). CJK Unified Ideographs included:
+ * without them Chinese queries AND Chinese alias rows strip to empty and
+ * can never match lexically, no matter how many aliases get seeded.
+ */
+export function tokenizeBM25(text: string): string[] {
+  return text.toLowerCase().normalize('NFKC')
+    .replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, ' ')
+    .split(/\s+/).filter(Boolean).map(singularBM25);
+}
+
+/**
+ * Concept head of a canonical name: pre-comma tokens (USDA convention —
+ * "Chicken, breast, ..." is chicken; "Almond Chicken" is a dish).
+ */
+export function headOf(canonicalName: string): string[] {
+  return tokenizeBM25(canonicalName.split(',')[0]);
+}
+
+/**
  * Display convention for library names (unit-tested; render sites use the
  * returned string, storage keeps the raw canonical). Reference rows shout
  * ("CHICKEN", "RICE, WHITE"); users should read sentence case. Only

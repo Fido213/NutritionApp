@@ -10,7 +10,8 @@
 
 import { Food } from '@data/types';
 import { normalizeFoodName } from '@domain/logging';
-import { splitConceptPrep, PREP_WORDS } from './lexicon';
+import { splitConceptPrep, PREP_WORDS, tokenizeBM25, headOf } from './lexicon';
+import { rerankTop } from './rerank';
 import { reciprocalRankFusion } from './mE5-client';
 import { faissSearch, faissSearchSync, faissSearchRestricted, faissSearchSyncRestricted, invalidateFaissCache } from './faiss-bridge';
 
@@ -44,32 +45,6 @@ let bm25Index: {
   N: number;
   totalLen: number;
 } | null = null;
-
-/** Light singularization so plurals reach singular rows and vice versa
- *  ("apples" → "apple"). Applied identically to queries and docs, so it
- *  can only merge variants, never split them. Non-Latin tokens are
- *  unaffected (they never end in U+0073). */
-function singularBM25(tok: string): string {
-  if (tok.length > 4 && tok.endsWith('ies')) return tok.slice(0, -3) + 'y';
-  if (tok.length > 3 && tok.endsWith('s') && !tok.endsWith('ss')) return tok.slice(0, -1);
-  return tok;
-}
-
-function tokenizeBM25(text: string): string[] {
-  // Keep-set must mirror the eval sim (eval_retrieval_colab.py) or local
-  // numbers stop meaning anything. CJK Unified Ideographs included:
-  // without them Chinese queries AND Chinese alias rows strip to empty and
-  // can never match lexically, no matter how many aliases get seeded.
-  return text.toLowerCase().normalize('NFKC')
-    .replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, ' ')
-    .split(/\s+/).filter(Boolean).map(singularBM25);
-}
-
-/** Concept head of a canonical name: pre-comma tokens (USDA convention —
- *  "Chicken, breast, ..." is chicken; "Almond Chicken" is a dish). */
-function headOf(canonicalName: string): string[] {
-  return tokenizeBM25(canonicalName.split(',')[0]);
-}
 
 export function buildBm25Index(foods: Food[]): void {
   const docs: Bm25Doc[] = [];
@@ -230,10 +205,42 @@ export function invalidateBm25Cache(): void {
 }
 
 /**
- * Main hybrid retrieval for one food span.
- * 1) exact alias/name already handled by caller (FoodService) — here we do BM25 + semantic fallback
- * 2) If BM25 top score >0.9, lexical wins alone; else fuse
+ * Stage-2 finish: exact matches keep their rank untouched; the top-40 fused
+ * rest are rescored by the fitted linear model and reordered. Pure reorder
+ * of an already-fused pool — BM25/hash/RRF/exact logic above is frozen.
  */
+function finishWithStage2(
+  spanText: string,
+  out: RetrievalHit[],
+  lexHits: Array<{ food: Food; rank: number }>,
+  semHits: Array<{ food: Food; rank: number }>,
+  topK: number,
+): RetrievalHit[] {
+  const exact = out.filter(h => h.method === 'exact');
+  const rest = out.filter(h => h.method !== 'exact').slice(0, 40);
+  if (rest.length === 0) {
+    const all = [...exact];
+    all.forEach((h, i) => h.rank = i + 1);
+    return all.slice(0, topK);
+  }
+  const lexRanks = new Map(lexHits.map(h => [h.food.id, h.rank]));
+  const semRanks = new Map(semHits.map(h => [h.food.id, h.rank]));
+  const order = rerankTop(
+    spanText,
+    rest.map(h => ({
+      id: h.food.id,
+      text: `${h.food.canonical_name} ${h.food.normalized_name}`,
+      head: headOf(h.food.canonical_name),
+      lexRank: lexRanks.get(h.food.id) ?? null,
+      semRank: semRanks.get(h.food.id) ?? null,
+    })),
+  );
+  const byId = new Map(rest.map(h => [h.food.id, h]));
+  const reranked = order.map(id => byId.get(id)!).filter(Boolean);
+  const final = [...exact, ...reranked];
+  final.forEach((h, i) => h.rank = i + 1);
+  return final.slice(0, topK);
+}
 export async function hybridRetrieve(
   spanText: string,
   foods: Food[],
@@ -280,8 +287,7 @@ export async function hybridRetrieve(
     });
   }
   out.sort((a, b) => b.score - a.score);
-  out.forEach((h, i) => h.rank = i + 1);
-  return out.slice(0, topK);
+  return finishWithStage2(spanText, out, lexHits, semHits, topK);
 }
 
 export function hybridRetrieveSync(spanText: string, foods: Food[], topK = 5): RetrievalHit[] {
@@ -314,6 +320,5 @@ export function hybridRetrieveSync(spanText: string, foods: Food[], topK = 5): R
     });
   }
   out.sort((a, b) => b.score - a.score);
-  out.forEach((h, i) => h.rank = i + 1);
-  return out.slice(0, topK);
+  return finishWithStage2(spanText, out, lexHits, semHits, topK);
 }
