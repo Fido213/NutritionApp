@@ -3,7 +3,7 @@
  * Retrieval ranking that consumes these lives in interpreter.test.ts.
  */
 import { describe, it, expect } from 'vitest';
-import { displayFoodName, friendlyFoodName, splitConceptPrep, PREP_WORDS } from './lexicon';
+import { displayFoodName, friendlyFoodName, splitConceptPrep, PREP_WORDS, stripReceiptTail } from './lexicon';
 
 describe('displayFoodName', () => {
   it('sentence-cases shouting reference names', () => {
@@ -66,5 +66,19 @@ describe('splitConceptPrep', () => {
 
   it('knows the core preparations', () => {
     for (const w of ['grilled', 'boiled', 'fried', 'raw', 'dried']) expect(PREP_WORDS.has(w)).toBe(true);
+  });
+});
+
+describe('stripReceiptTail', () => {
+  it('cuts macro tails so pasted re-logs parse the food phrase', () => {
+    expect(stripReceiptTail('- Halawa 50g: 265k (6P/22C/18F)')).toBe('- Halawa 50g: 265k ');
+    expect(stripReceiptTail('Logged: Nescafe 110 kcal | 240ml Hydration 2g P')).toBe('Logged: Nescafe ');
+    expect(stripReceiptTail('Brioche Roll Acc: 95%')).toBe('Brioche Roll ');
+  });
+
+  it('leaves ordinary prose untouched', () => {
+    expect(stripReceiptTail('250g chicken, 100g rice')).toBe('250g chicken, 100g rice');
+    expect(stripReceiptTail('track my hydration today')).toBe('track my hydration today');
+    expect(stripReceiptTail('')).toBe('');
   });
 });

@@ -76,9 +76,9 @@ async function logTextInputInner(rawText: string) {
     // interpreter degrades to span-text logging, as before).
     const version = ctx.foodRepo.getVersion();
     if (!interpreterFoods || version !== interpreterVersion) {
-      // True cold start (boot warm missed or failed): same staged card as
-      // boot, plus a programmatic probe, so the user's first submit never
-      // pays the full fetch + embed-all as mystery lag.
+      // True cold start (boot warm missed or failed): card instead of jank,
+      // then a programmatic probe, so the user's first submit never pays the
+      // full fetch + embed-all as mystery lag.
       const cold = !interpreterFoods;
       const card = cold ? createBootOverlay() : null;
       try {
@@ -93,8 +93,14 @@ async function logTextInputInner(rawText: string) {
       } catch { /* keep previous cache */ } finally { card?.done(); }
     }
     const foods = interpreterFoods ?? [];
+    // Personal prior, always live: one indexed GROUP BY per submit (nothing
+    // cached, nothing to go stale). Empty map = no history = zero influence.
+    let counts: Map<string, number> | undefined;
+    try {
+      counts = await ctx.logRepo.getFoodLogCounts();
+    } catch { /* prior degrades to absent */ }
     mark('foods-fetch');
-    const spans = await interpretText(rawText, foods.length ? foods : null);
+    const spans = await interpretText(rawText, foods.length ? foods : null, counts ? { counts } : undefined);
     mark('interpret');
     if (spans && spans.length > 0) {
       items = spans.map(s => ({

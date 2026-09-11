@@ -84,6 +84,31 @@ export function splitConceptPrep(tokens: string[]): { concept: string[]; prep: s
 }
 
 /**
+ * Cut a bot-receipt macro tail ("- Halawa 50g: 265k (6P/22C/18F)",
+ * "Logged: Nescafe 110 kcal | 240ml Hydration ...", "X Acc: 95%") so pasted
+ * re-logs parse the FOOD phrase, not the macro numbers ("2g P" would
+ * otherwise parse as a 2-gram quantity and spawn junk spans). Tail-cut only:
+ * kept offsets stay valid against the raw input. All markers are
+ * number-anchored so prose never false-cuts. Returns the input unchanged
+ * when no marker matches.
+ */
+export function stripReceiptTail(rawInput: string): string {
+  if (!rawInput) return rawInput;
+  const markers = [
+    /\d+\.?\d*\s*kcal\s*\|/i,
+    /\d[\d.,]*\s*(ml|g)\s+hydration/i,
+    /\(\d+\.?\d*\s*P\s*\//,
+    /\bAcc:\s*\d/i,
+  ];
+  let cut = rawInput.length;
+  for (const re of markers) {
+    const m = re.exec(rawInput);
+    if (m && m.index < cut) cut = m.index;
+  }
+  return rawInput.slice(0, cut);
+}
+
+/**
  * Light singularization so plurals reach singular rows and vice versa
  * ("apples" → "apple"). Applied identically to queries and docs, so it
  * can only merge variants, never split them. Non-Latin tokens are

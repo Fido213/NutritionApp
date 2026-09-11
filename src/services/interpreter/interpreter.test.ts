@@ -243,3 +243,51 @@ describe('interpreter index version gate', () => {
     expect(interpretTextSync('banana')[0].canonicalName).toBe('Banana');
   });
 });
+
+describe('demonstrative spans', () => {
+  it('drops bare demonstratives so amounts realign ("220g of that")', () => {
+    const out = interpretTextSync('Farmfrite potato wedges I ate 220g of that', null);
+    expect(out.some(s => s.canonicalName.toLowerCase().includes('that'))).toBe(false);
+    const wedges = out.find(s => s.canonicalName.toLowerCase().includes('farmfrite'));
+    expect(wedges?.amountG).toBe(220);
+  });
+
+  it('drops lone demonstratives with no quantities', () => {
+    expect(extractFoodSpansSync('eat this', [])).toHaveLength(0);
+    expect(extractFoodSpansSync('that', [])).toHaveLength(0);
+  });
+
+  it('keeps demonstratives that modify real food words', () => {
+    const spans = extractFoodSpansSync('that pie', []);
+    expect(spans.length).toBeGreaterThan(0);
+  });
+});
+
+describe('narrator stripping', () => {
+  it('never logs "I ate" as a food ("I ate 100g rice" -> rice only)', () => {
+    const out = interpretTextSync('I ate 100g rice', null);
+    expect(out).toHaveLength(1);
+    expect(out[0].canonicalName.toLowerCase()).toContain('rice');
+    expect(out[0].amountG).toBe(100);
+  });
+
+  it('keeps food-first phrasing ("oatmeal I had 100g")', () => {
+    const out = interpretTextSync('oatmeal I had 100g', null);
+    expect(out).toHaveLength(1);
+    expect(out[0].canonicalName.toLowerCase()).toContain('oatmeal');
+    expect(out[0].amountG).toBe(100);
+  });
+});
+
+describe('receipt pastes and sentence chunks', () => {
+  it('parses the food phrase out of a macro receipt, not the macros', () => {
+    const out = interpretTextSync('- Halawa 50g: 265k (6P/22C/18F)', null);
+    expect(out.some(s => s.canonicalName.toLowerCase().includes('halawa'))).toBe(true);
+    expect(out.some(s => s.amountG === 2)).toBe(false);
+  });
+
+  it('splits quantity-less sentences into separate spans', () => {
+    const out = interpretTextSync('oatmeal. banana', null);
+    expect(out.map(s => s.canonicalName.toLowerCase()).sort()).toEqual(['banana', 'oatmeal']);
+  });
+});

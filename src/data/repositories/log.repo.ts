@@ -182,4 +182,20 @@ export class LogRepository {
     }
     return out;
   }
+
+  /**
+   * Per-food log counts (personal prior): how often the user actually logged
+   * each food. One indexed GROUP BY per submit — negligible next to the
+   * library fetch — so the prior is always live, never cached-and-stale.
+   */
+  async getFoodLogCounts(): Promise<Map<string, number>> {
+    const res = await this.db.query(
+      `SELECT food_id, COUNT(*) as n FROM food_logs WHERE food_id IS NOT NULL GROUP BY food_id`
+    );
+    const out = new Map<string, number>();
+    for (const row of res.values || []) {
+      out.set(row.food_id, row.n ?? 0);
+    }
+    return out;
+  }
 }

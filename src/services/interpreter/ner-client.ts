@@ -66,10 +66,21 @@ async function tryLoadOnnx(): Promise<boolean> {
 
 const STOP_WORDS = new Set([
   'and', 'und', 'et', 'y', 'e', 'en', 'plus', 'with', 'mit', 'avec', 'con', 'contenant', 'containing',
-  'of', 'the', 'a', 'an', 'de', 'du', 'des', 'la', 'le', 'les', 'der', 'die', 'das', 'el', 'para'
+  'of', 'the', 'a', 'an', 'de', 'du', 'des', 'la', 'le', 'les', 'der', 'die', 'das', 'el', 'para',
+  // Narrator verbs/pronouns/prepositions ("I ate 100g rice", "around 150g"):
+  // stripping them keeps real food-first phrasing ("oatmeal I had 100g")
+  // while starving phantom spans ("I ate" must never log as a food).
+  'i', 'eat', 'ate', 'had', 'have', 'having', 'consumed', 'around',
 ]);
 
 const COMPOSITE_HINT_RE = /(?:containing|contenant|mit|with|consisting|including|and\s+\w+\s+oats)/i;
+
+/**
+ * Bare demonstratives ("220g of that", "eat this") carry no food identity —
+ * keeping them as spans steals quantities from the real food ("that" would
+ * take the 220g). Drop them so the amount realigns to the nearest food span.
+ */
+const DEMONSTRATIVE_RE = /^(that|this|it)$/i;
 
 function heuristicSpans(text: string, quantities: Array<{ span: [number, number] }>): FoodSpan[] {
   const spans: FoodSpan[] = [];
@@ -103,6 +114,7 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
     words = words.slice(0, 4);
     const textClean = words.join(' ');
     if (textClean.length < 2 || textClean.length > 60) return null;
+    if (DEMONSTRATIVE_RE.test(textClean)) return null;
     // Allow Arabic/CJK etc.
     if (/^\d+$/.test(textClean)) return null;
     // Find exact case-preserving span in original
@@ -127,23 +139,32 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
   };
 
   if (sortedQty.length === 0) {
-    // No quantities — whole input is one food span (e.g., "apple"),
-    // truncated at any negation marker ("chicken without skin" → "chicken").
-    const whole = text.trim().replace(/^[^A-Za-z\u00C0-\u024F\u0600-\u06FF\u4e00-\u9fff0-9]+|[^A-Za-z\u00C0-\u024F\u0600-\u06FF\u4e00-\u9fff0-9]+$/g, '');
-    const wholeWords = whole.split(/\s+/);
-    const negAt = wholeWords.findIndex(isNegationToken);
-    const withoutNeg = (negAt === -1 ? wholeWords : wholeWords.slice(0, negAt)).join(' ');
-    if (withoutNeg.length >= 2 && withoutNeg.length <= 60) {
-      const start = text.indexOf(withoutNeg);
-      if (start !== -1) {
-        spans.push({
-          text: withoutNeg,
-          normalized: withoutNeg.toLowerCase().normalize('NFKC').trim().replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, '').replace(/\s+/g, ' '),
-          span: [start, start + withoutNeg.length],
-          confidence: 0.75,
-          isCompositeHint: isComposite,
-        });
-      }
+    // No quantities — split on sentence boundaries first ("oatmeal. banana"
+    // is two foods, not one 120-char mega-span), then one span per chunk
+    // (e.g., "apple"), truncated at any negation marker ("chicken without
+    // skin" → "chicken"). Long descriptive chunks cap at 120 chars; grouping
+    // downstream decides meal structure, never this splitter.
+    let searchFrom = 0;
+    for (const chunk of text.split(/[;.!?\n]+/)) {
+      const seg = chunk.trim().replace(/^[^A-Za-z\u00C0-\u024F\u0600-\u06FF\u4e00-\u9fff0-9]+|[^A-Za-z\u00C0-\u024F\u0600-\u06FF\u4e00-\u9fff0-9]+$/g, '');
+      if (!seg) continue;
+      const segWords = seg.split(/\s+/);
+      const segNegAt = segWords.findIndex(isNegationToken);
+      const segClean = (segNegAt === -1 ? segWords : segWords.slice(0, segNegAt)).join(' ');
+      const narrStripped = segClean.split(/\s+/).slice();
+      while (narrStripped.length && STOP_WORDS.has(narrStripped[0].toLowerCase())) narrStripped.shift();
+      const candidate = narrStripped.join(' ');
+      if (candidate.length < 2 || candidate.length > 120 || DEMONSTRATIVE_RE.test(candidate)) continue;
+      const start = text.indexOf(candidate, searchFrom);
+      if (start === -1) continue;
+      searchFrom = start + candidate.length;
+      spans.push({
+        text: candidate,
+        normalized: candidate.toLowerCase().normalize('NFKC').trim().replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u4e00-\u9fff\s]/g, '').replace(/\s+/g, ' '),
+        span: [start, start + candidate.length],
+        confidence: 0.75,
+        isCompositeHint: isComposite,
+      });
     }
     for (const s of spans) s.script = detectScript(s.text);
     return spans;
@@ -154,8 +175,12 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
   if (first.span[0] > 0) {
     const seg = text.slice(0, first.span[0]);
     const f = extractFood(seg, 0);
-    // Usually quantity is before food ("250g chicken") so before-first rarely food — skip unless no other
-    if (f && sortedQty.length === 1 && seg.trim().length < 20) spans.push(f);
+    // Usually quantity is before food ("250g chicken") so before-first rarely food.
+    // Food-first phrasing is real ("oatmeal I had 100g", "Farmfrite wedges I ate 220g"):
+    // with narrator words stripped, long segments are food-dense, so the cap is
+    // generous. Residual risk: narrator-free long preludes ("yesterday for lunch")
+    // can log literally — the user corrects once and pins the phrase.
+    if (f && sortedQty.length === 1 && seg.trim().length < 40) spans.push(f);
   }
 
   // Between qtys and after last qty
@@ -170,8 +195,12 @@ function heuristicSpans(text: string, quantities: Array<{ span: [number, number]
       const trimmed = seg.replace(/^[,\s;+\-]+|[,\s;+\-]+$/g, '').trim();
       // Never resurrect a negation-governed segment extractFood rejected
       // ("100g no sauce" must not yield a "sauce" span via the back door).
+      // Same for bare demonstratives ("220g of that" must not yield "that":
+      // the amount belongs to the previous food span).
       const firstWord = trimmed.split(/\s+/)[0] ?? '';
-      if (trimmed.length >= 2 && !STOP_WORDS.has(trimmed.toLowerCase()) && !isNegationToken(firstWord)) {
+      const contentWords = trimmed.split(/\s+/).filter(w => !STOP_WORDS.has(w.toLowerCase()));
+      if (trimmed.length >= 2 && !STOP_WORDS.has(trimmed.toLowerCase()) && !isNegationToken(firstWord) &&
+          !(contentWords.length > 0 && contentWords.every(w => DEMONSTRATIVE_RE.test(w)))) {
         const start = text.indexOf(trimmed, q.span[1]);
         if (start !== -1) {
           spans.push({

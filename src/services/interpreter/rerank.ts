@@ -21,6 +21,14 @@ export interface RerankWeights {
   lexRR: number;
   semRR: number;
   extraPrep: number;
+  /**
+   * Personal prior: saturating lift for foods the user actually logs,
+   * 0.01 * count/(count+5) — flips near-ties toward YOUR foods, never
+   * overrides lexical evidence (exact matches bypass this module) and adds
+   * exactly 0 for never-logged rows (discovery unaffected). Hand-set (no
+   * personal data exists in the workbench to fit on); gate-hold validated.
+   */
+  priorCount: number;
 }
 
 /**
@@ -40,6 +48,7 @@ export const RERANK_WEIGHTS: RerankWeights = {
   lexRR: 1,
   semRR: 1,
   extraPrep: 0,
+  priorCount: 0.01,
 };
 
 export interface RerankCandidate {
@@ -50,20 +59,17 @@ export interface RerankCandidate {
   head: string[];
   lexRank: number | null;
   semRank: number | null;
+  /** Times the user logged this food (personal prior, 0 = unknown). */
+  logCount?: number | null;
 }
 
-export interface RerankedHit {
-  id: string;
-  score: number;
-}
-
-/** Feature vector [headExact, prepRecall, coverage, orderKept, lexRR, semRR, extraPrep]. */
+/** Feature vector [headExact, prepRecall, coverage, orderKept, lexRR, semRR, extraPrep, priorCount]. */
 export function rerankFeatures(
   qToks: string[],
   concept: string[],
   prep: string[],
   cand: RerankCandidate,
-): [number, number, number, number, number, number, number] {
+): [number, number, number, number, number, number, number, number] {
   const tset = new Set(cand.toks);
   const headExact =
     concept.length > 0 &&
@@ -93,14 +99,16 @@ export function rerankFeatures(
   const semRR = cand.semRank != null ? 1 / (60 + cand.semRank) : 0;
   const extraPrep =
     prep.length === 0 && [...tset].some(t => PREP_WORDS.has(t) && !prep.includes(t)) ? 1 : 0;
-  return [headExact, prepRecall, coverage, orderKept, lexRR, semRR, extraPrep];
+  const logged = cand.logCount ?? 0;
+  const priorCount = logged > 0 ? logged / (logged + 5) : 0;
+  return [headExact, prepRecall, coverage, orderKept, lexRR, semRR, extraPrep, priorCount];
 }
 
 export function rerankScore(
-  features: [number, number, number, number, number, number, number],
+  features: [number, number, number, number, number, number, number, number],
   weights: RerankWeights = RERANK_WEIGHTS,
 ): number {
-  const w = [weights.headExact, weights.prepRecall, weights.coverage, weights.orderKept, weights.lexRR, weights.semRR, weights.extraPrep];
+  const w = [weights.headExact, weights.prepRecall, weights.coverage, weights.orderKept, weights.lexRR, weights.semRR, weights.extraPrep, weights.priorCount];
   return features.reduce((sum, f, i) => sum + f * w[i], 0);
 }
 
@@ -111,6 +119,8 @@ export interface Stage2Item {
   head: string[];
   lexRank: number | null;
   semRank: number | null;
+  /** Times the user logged this food (personal prior, default 0). */
+  logCount?: number | null;
 }
 
 /**
@@ -135,6 +145,7 @@ export function rerankTop(
           head: item.head,
           lexRank: item.lexRank,
           semRank: item.semRank,
+          logCount: item.logCount ?? 0,
         }),
         weights,
       );

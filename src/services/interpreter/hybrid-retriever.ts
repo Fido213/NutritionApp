@@ -215,6 +215,7 @@ function finishWithStage2(
   lexHits: Array<{ food: Food; rank: number }>,
   semHits: Array<{ food: Food; rank: number }>,
   topK: number,
+  counts?: Map<string, number>,
 ): RetrievalHit[] {
   const exact = out.filter(h => h.method === 'exact');
   const rest = out.filter(h => h.method !== 'exact').slice(0, 40);
@@ -233,6 +234,7 @@ function finishWithStage2(
       head: headOf(h.food.canonical_name),
       lexRank: lexRanks.get(h.food.id) ?? null,
       semRank: semRanks.get(h.food.id) ?? null,
+      logCount: counts?.get(h.food.id) ?? 0,
     })),
   );
   const byId = new Map(rest.map(h => [h.food.id, h]));
@@ -244,7 +246,7 @@ function finishWithStage2(
 export async function hybridRetrieve(
   spanText: string,
   foods: Food[],
-  opts: { topK?: number; lexicalWeight?: number; semanticWeight?: number } = {}
+  opts: { topK?: number; lexicalWeight?: number; semanticWeight?: number; counts?: Map<string, number> } = {}
 ): Promise<RetrievalHit[]> {
   const topK = opts.topK ?? 5;
   // One BM25 call serves both roles: its head (topK*2, as before) feeds the
@@ -287,10 +289,10 @@ export async function hybridRetrieve(
     });
   }
   out.sort((a, b) => b.score - a.score);
-  return finishWithStage2(spanText, out, lexHits, semHits, topK);
+  return finishWithStage2(spanText, out, lexHits, semHits, topK, opts.counts);
 }
 
-export function hybridRetrieveSync(spanText: string, foods: Food[], topK = 5): RetrievalHit[] {
+export function hybridRetrieveSync(spanText: string, foods: Food[], topK = 5, counts?: Map<string, number>): RetrievalHit[] {
   const pool = bm25Search(spanText, foods, LEX_SHORTLIST);
   const lexHits = pool.slice(0, topK * 2);
   const shortlist = new Set(pool.map(h => h.food.id));
@@ -320,5 +322,5 @@ export function hybridRetrieveSync(spanText: string, foods: Food[], topK = 5): R
     });
   }
   out.sort((a, b) => b.score - a.score);
-  return finishWithStage2(spanText, out, lexHits, semHits, topK);
+  return finishWithStage2(spanText, out, lexHits, semHits, topK, counts);
 }

@@ -19,7 +19,7 @@ describe('rerankFeatures', () => {
       q('boiled chicken'), ['chicken'], ['boiled'],
       cand({ id: 'x', toks: q('chicken breast boiled'), head: ['chicken'], lexRank: 2, semRank: 5 }),
     );
-    // [headExact, prepRecall, coverage, orderKept, lexRR, semRR, extraPrep]
+    // [headExact, prepRecall, coverage, orderKept, lexRR, semRR, extraPrep, priorCount]
     expect(f[0]).toBe(1);
     expect(f[1]).toBe(1);
     expect(f[2]).toBe(1);
@@ -28,6 +28,20 @@ describe('rerankFeatures', () => {
     expect(f[4]).toBeCloseTo(1 / 62, 6);
     expect(f[5]).toBeCloseTo(1 / 65, 6);
     expect(f[6]).toBe(0);
+    expect(f[7]).toBe(0);
+  });
+
+  it('saturates the personal prior and defaults the unknown to zero', () => {
+    const known = rerankFeatures(
+      q('chicken'), ['chicken'], [],
+      cand({ id: 'x', toks: ['chicken'], lexRank: 3, semRank: 3, logCount: 28 }),
+    );
+    expect(known[7]).toBeCloseTo(28 / 33, 9);
+    const fresh = rerankFeatures(
+      q('chicken'), ['chicken'], [],
+      cand({ id: 'y', toks: ['chicken'], lexRank: 3, semRank: 3 }),
+    );
+    expect(fresh[7]).toBe(0);
   });
 
   it('marks unrequested preservation words for the penalty', () => {
@@ -49,8 +63,8 @@ describe('rerankFeatures', () => {
 
 describe('rerankScore', () => {
   it('is the dot product with the weights', () => {
-    expect(rerankScore([1, 1, 1, 1, 0, 0, 0],
-      { headExact: 2, prepRecall: 1.5, coverage: 1, orderKept: 0.5, lexRR: 0, semRR: 0, extraPrep: -1 })).toBeCloseTo(5, 9);
+    expect(rerankScore([1, 1, 1, 1, 0, 0, 0, 0.5],
+      { headExact: 2, prepRecall: 1.5, coverage: 1, orderKept: 0.5, lexRR: 0, semRR: 0, extraPrep: -1, priorCount: 2 })).toBeCloseTo(6, 9);
   });
 });
 
@@ -69,5 +83,13 @@ describe('rerankTop', () => {
       { id: 'b', text: 'Rice brown', head: ['rice'], lexRank: 1, semRank: 1 },
     ]);
     expect(order).toEqual(['a', 'b']);
+  });
+
+  it('lets logged counts break ties (personal prior)', () => {
+    const items = [
+      { id: 'a', text: 'Apple', head: ['apple'], lexRank: 1, semRank: 1, logCount: 0 },
+      { id: 'b', text: 'Apple', head: ['apple'], lexRank: 1, semRank: 1, logCount: 10 },
+    ];
+    expect(rerankTop('apple', items)).toEqual(['b', 'a']);
   });
 });

@@ -1147,3 +1147,39 @@ describe('FoodRepository fuzzy alias search + light fetch on a real SQLite datab
     expect(rows[0].canonical_name).toBe('Oats');
   });
 });
+
+describe('LogRepository.getFoodLogCounts on a real SQLite database', () => {
+  it('counts logs per food, ignoring null food ids', async () => {
+    const { conn } = createRealDb();
+    const foodRepo = new FoodRepository(conn);
+    const logRepo = new LogRepository(conn);
+    const oats = await foodRepo.insert({
+      canonical_name: 'Oats', normalized_name: 'oats',
+      calories_per_100g: 389, protein_per_100g: 13, carbs_per_100g: 66,
+      fat_per_100g: 7, water_per_100g: 9, nutrition_basis: 'per_100g',
+      source_type: 'user_entered', confidence: 1.0,
+    });
+    const apple = await foodRepo.insert({
+      canonical_name: 'Apple', normalized_name: 'apple',
+      calories_per_100g: 52, protein_per_100g: 0.3, carbs_per_100g: 14,
+      fat_per_100g: 0.2, water_per_100g: 86, nutrition_basis: 'per_100g',
+      source_type: 'user_entered', confidence: 1.0,
+    });
+    const log = (food_id: string | null) => logRepo.insertFoodLog({
+      date: '2026-09-11', food_id, amount_g: 100,
+      calories: 100, protein_g: 10, carbs_g: 10, fat_g: 10,
+    } as any);
+    await log(oats.id);
+    await log(oats.id);
+    await log(apple.id);
+    const counts = await logRepo.getFoodLogCounts();
+    expect(counts.get(oats.id)).toBe(2);
+    expect(counts.get(apple.id)).toBe(1);
+    expect(counts.size).toBe(2);
+  });
+
+  it('returns an empty map with no logs', async () => {
+    const { conn } = createRealDb();
+    expect((await new LogRepository(conn).getFoodLogCounts()).size).toBe(0);
+  });
+});

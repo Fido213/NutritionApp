@@ -11,7 +11,7 @@ import { parseQuantities, resolveBareCount } from './unit-parser';
 import { extractFoodSpans, extractFoodSpansSync } from './ner-client';
 import { hybridRetrieve, hybridRetrieveSync, buildBm25Index, addFoodsToIndex } from './hybrid-retriever';
 import { cacheFoodEmbeddings } from './faiss-bridge';
-import { resolveVagueMarker, governedByNegation } from './lexicon';
+import { resolveVagueMarker, governedByNegation, stripReceiptTail } from './lexicon';
 import type { ScriptTag } from './language';
 import type { Food } from '@data/types';
 
@@ -160,10 +160,14 @@ function dropNegatedSpans<T extends { span: [number, number] }>(text: string, sp
 export async function interpretText(
   rawInput: string,
   foods: Food[] | null = foodsCache,
-  opts: { defaultGrams?: number } = {}
+  opts: { defaultGrams?: number; counts?: Map<string, number> } = {}
 ): Promise<InterpretedSpan[]> {
   if (!rawInput || rawInput.trim().length === 0) return [];
-  const text = rawInput.normalize('NFKC');
+  // Receipt pastes ("... 110 kcal | 240ml Hydration ... Acc: 95%") parse the
+  // food phrase only — macro numbers must never become quantities. Tail-cut
+  // preserves offsets, so spans stay valid against the raw input.
+  const text = stripReceiptTail(rawInput).normalize('NFKC');
+  if (text.trim().length === 0) return [];
   const qtys = parseQuantities(text);
   const spans = dropNegatedSpans(text, await extractFoodSpans(text, qtys));
 
@@ -175,7 +179,7 @@ export async function interpretText(
 
   const out: InterpretedSpan[] = [];
   for (const span of spans) {
-    const hybrid = await hybridRetrieve(span.text, foods, { topK: 3 });
+    const hybrid = await hybridRetrieve(span.text, foods, { topK: 3, counts: opts.counts });
     const best = hybrid[0];
     // Validate threshold: cos>0.72 or BM25>6/10 normalized >0.6
     // If below, mark low confidence but still return span text as canonical (will upsert as new food)
@@ -208,9 +212,10 @@ export async function interpretText(
 }
 
 /** Sync variant for tests / fallback shim. */
-export function interpretTextSync(rawInput: string, foods: Food[] | null = foodsCache, opts: { defaultGrams?: number } = {}): InterpretedSpan[] {
+export function interpretTextSync(rawInput: string, foods: Food[] | null = foodsCache, opts: { defaultGrams?: number; counts?: Map<string, number> } = {}): InterpretedSpan[] {
   if (!rawInput || rawInput.trim().length === 0) return [];
-  const text = rawInput.normalize('NFKC');
+  const text = stripReceiptTail(rawInput).normalize('NFKC');
+  if (text.trim().length === 0) return [];
   const qtys = parseQuantities(text);
   const spans = dropNegatedSpans(text, extractFoodSpansSync(text, qtys));
   if (spans.length === 0) return [];
@@ -218,7 +223,7 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
 
   const out: InterpretedSpan[] = [];
   for (const span of spans) {
-    const hybrid = hybridRetrieveSync(span.text, foods, 3);
+    const hybrid = hybridRetrieveSync(span.text, foods, 3, opts.counts);
     const best = hybrid[0];
     const retrievalScore = best?.score ?? 0;
     const method = best?.method ?? 'hybrid';
@@ -247,10 +252,12 @@ export function nearestQty(span: [number, number], qtys: ReturnType<typeof parse
   let bestDist = Infinity;
   for (const q of qtys) {
     // Distance: if qty immediately before span, distance = span[0]-q.span[1] (small positive)
-    // If qty after span, larger penalty
+    // If qty after span, small penalty (food-first order: "chicken 250g").
+    // The penalty preserves before-preference on ties ("chicken 100g rice"
+    // still binds the qty forward to rice) without vetoing food-first logs.
     let dist: number;
     if (q.span[1] <= span[0]) dist = span[0] - q.span[1];
-    else if (q.span[0] >= span[1]) dist = q.span[0] - span[1] + 50; // after is less likely
+    else if (q.span[0] >= span[1]) dist = q.span[0] - span[1] + 10;
     else dist = 0; // overlap
     // Prefer used once — track but simple nearest
     if (dist < bestDist) { bestDist = dist; best = q; }
