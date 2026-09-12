@@ -69,7 +69,11 @@ export async function migrateSupabaseData(
         water_per_100g: 0,
         nutrition_basis: 'per_100g',
         source_type: 'imported',
-        confidence: 1.0
+        // Estimation v1 (P1.3): personal-table values are user-recorded
+        // old-app numbers, not weighed references — 1.0 would outrank
+        // everything and render "100% sure". 0.8 matches the log-import
+        // path's convention for unweighed provenance below.
+        confidence: 0.8
       });
       foodCount++;
     }

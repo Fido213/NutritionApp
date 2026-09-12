@@ -421,18 +421,28 @@ export function createFallbackConnection(store: FallbackTableStore): SQLiteDBCon
         ) };
       }
       // Daily AVG/MIN food confidence (export) — join against the foods table.
+      // Also carries estimated/total kcal so the export can show the share
+      // of each day that came from ai_estimate rows (P1.2 — same query).
       if (statement.includes('AVG(f.confidence)') && statement.includes('GROUP BY')) {
         const foods = store.getTable('foods');
-        const byDate: Record<string, { sum: number; count: number; min: number | null }> = {};
+        const byDate: Record<string, { sum: number; count: number; min: number | null; est: number; total: number }> = {};
         for (const row of rows) {
-          const conf = foods.find(f => f.id === row.food_id)?.confidence;
-          if (typeof conf !== 'number' || !Number.isFinite(conf)) continue;
-          const agg = byDate[row.date] || (byDate[row.date] = { sum: 0, count: 0, min: null });
-          agg.sum += conf;
-          agg.count++;
-          agg.min = agg.min === null ? conf : Math.min(agg.min, conf);
+          const food = foods.find(f => f.id === row.food_id);
+          const conf = food?.confidence;
+          if (typeof conf === 'number' && Number.isFinite(conf)) {
+            const agg = byDate[row.date] || (byDate[row.date] = { sum: 0, count: 0, min: null, est: 0, total: 0 });
+            agg.sum += conf;
+            agg.count++;
+            agg.min = agg.min === null ? conf : Math.min(agg.min, conf);
+          }
+          const kcal = row.calories || 0;
+          if (kcal > 0 || food) {
+            const agg = byDate[row.date] || (byDate[row.date] = { sum: 0, count: 0, min: null, est: 0, total: 0 });
+            agg.total += kcal;
+            if (food?.source_type === 'ai_estimate') agg.est += kcal;
+          }
         }
-        return { values: Object.entries(byDate).map(([date, a]) => ({ date, avg_confidence: a.sum / a.count, min_confidence: a.min })) };
+        return { values: Object.entries(byDate).map(([date, a]) => ({ date, avg_confidence: a.count > 0 ? a.sum / a.count : null, min_confidence: a.min, est_kcal: a.est, total_kcal: a.total })) };
       }
       if (statement.includes('SUM(calories)')) {
         const sumCal = rows.reduce((acc, curr) => acc + (curr.calories || 0), 0);

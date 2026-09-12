@@ -24,7 +24,8 @@ const sampleRow: ExportRow = {
   lowAccuracy: false,
   dailyNote: '',
   avgConfidence: 0.85,
-  minConfidence: 0.7
+  minConfidence: 0.7,
+  estimatedShare: 0.4
 };
 
 describe('generateCSV', () => {
@@ -47,18 +48,20 @@ describe('generateCSV', () => {
     expect(header).toContain('Daily Note');
     expect(header).toContain('Avg Confidence');
     expect(header).toContain('Min Confidence');
+    expect(header).toContain('Estimated Share');
     expect(header).not.toContain('Exercise');
     // §5c-4: confidence columns extend the locked format 21 -> 23.
-    expect(header.split(',')).toHaveLength(23);
+    // Estimation v1 (P1.2): + Estimated Share -> 24.
+    expect(header.split(',')).toHaveLength(24);
   });
 
   it('renders confidence values at 2 decimals and empty when unknown', () => {
     const line = generateCSV([sampleRow]).split('\n')[1];
-    expect(line.endsWith(',0.85,0.7')).toBe(true);
+    expect(line.endsWith(',0.85,0.7,0.4')).toBe(true);
 
-    const unknown = generateCSV([{ ...sampleRow, avgConfidence: null, minConfidence: null }]).split('\n')[1];
+    const unknown = generateCSV([{ ...sampleRow, avgConfidence: null, minConfidence: null, estimatedShare: null }]).split('\n')[1];
     // Empty confidence cells render as bare empty fields.
-    expect(unknown.endsWith(',"",,')).toBe(true);
+    expect(unknown.endsWith(',"",,,')).toBe(true);
 
     const highPrecision = generateCSV([{ ...sampleRow, avgConfidence: 0.8333333, minConfidence: null }]).split('\n')[1];
     expect(highPrecision).toContain(',0.83,');

@@ -28,6 +28,8 @@ export interface ExportRow {
   /** Avg/MIN of the day's logged foods' confidence (null when no foods or unknown). */
   avgConfidence: number | null;
   minConfidence: number | null;
+  /** Share of the day's logged kcal from ai_estimate rows, 0..1 (null when the day logged no kcal). */
+  estimatedShare: number | null;
 }
 
 /** Confidence cell: 2-decimal value, or empty when unknown (no foods that day). */
@@ -60,7 +62,8 @@ export function generateCSV(rows: ExportRow[]): string {
     'Low Accuracy Flag',
     'Daily Note',
     'Avg Confidence',
-    'Min Confidence'
+    'Min Confidence',
+    'Estimated Share'
   ];
 
   const lines = [headers.join(',')];
@@ -89,7 +92,8 @@ export function generateCSV(rows: ExportRow[]): string {
       r.lowAccuracy ? 'YES' : 'NO',
       escapeCSV(r.dailyNote),
       formatConfidence(r.avgConfidence),
-      formatConfidence(r.minConfidence)
+      formatConfidence(r.minConfidence),
+      formatConfidence(r.estimatedShare)
     ].join(',');
     lines.push(rowStr);
   });

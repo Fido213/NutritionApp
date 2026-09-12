@@ -77,6 +77,12 @@ export function formatLoggedAmount(
  * 'imported' + the 0.5 marker confidence) read "estimated". Seeded reference
  * rows ('imported', NULL confidence) read "reference"; anything else falls
  * through to the percentage / "no estimate" branches.
+ *
+ * Estimation v1 (P1.1): 'ai_estimate' rows — flat-default guesses with no
+ * reference behind them — must never render as a bare percentage. They read
+ * "estimated" (plus the percentage when known) so an invented number is
+ * visually distinct from a measured one everywhere the chip renders
+ * (Index rows, combo-ingredient lines).
  */
 export function confidenceLabel(
   confidence: number | null | undefined,
@@ -84,6 +90,10 @@ export function confidenceLabel(
 ): string {
   if (sourceType === 'imported' && confidence === 0.5) return 'estimated';
   if (sourceType === 'imported' && (confidence === null || confidence === undefined)) return 'reference';
+  if (sourceType === 'ai_estimate') {
+    if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'estimated';
+    return `estimated · ${Math.round(confidence * 100)}%`;
+  }
   if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'no estimate';
   return `${Math.round(confidence * 100)}% sure`;
 }

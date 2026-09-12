@@ -95,7 +95,7 @@ async function perDateWater(dates: string[], repos: ExportRepos): Promise<Record
  * Daily food-confidence aggregates with the same shim fallback strategy:
  * degraded connections simply export empty confidence cells.
  */
-async function batchedConfidence(dates: string[], repos: ExportRepos): Promise<Record<string, { avgConfidence: number | null; minConfidence: number | null }>> {
+async function batchedConfidence(dates: string[], repos: ExportRepos): Promise<Record<string, { avgConfidence: number | null; minConfidence: number | null; estimatedShare: number | null }>> {
   try {
     return await repos.log.getDailyConfidenceForRange(dates[0], dates[dates.length - 1]);
   } catch {
@@ -235,7 +235,8 @@ export async function buildExportRows(dates: string[], repos: ExportRepos): Prom
       lowAccuracy: record?.low_accuracy === 1,
       dailyNote: record?.note ?? '',
       avgConfidence: confidenceByDate[date]?.avgConfidence ?? null,
-      minConfidence: confidenceByDate[date]?.minConfidence ?? null
+      minConfidence: confidenceByDate[date]?.minConfidence ?? null,
+      estimatedShare: confidenceByDate[date]?.estimatedShare ?? null
     });
   }
 

@@ -4,7 +4,7 @@ import { LogRepository } from '@data/repositories/log.repo';
 import { ObservationRepository } from '@data/repositories/observation.repo';
 import { WaterRepository } from '@data/repositories/water.repo';
 import { AliasRepository } from '@data/repositories/alias.repo';
-import { FoodService } from './food-service';
+import { FoodService, graduateProvenanceOnUserEdit } from './food-service';
 
 function createFakeDb() {
   const tables: Record<string, any[]> = {
@@ -409,5 +409,17 @@ describe('FoodService user-pinned defaults', () => {
     await expect(service.setUserDefault('   ', 'breast')).rejects.toThrow('empty phrase');
     await expect(service.setUserDefault('!!!', 'breast')).rejects.toThrow('searchable');
     await expect(service.setUserDefault('chicken', 'missing')).rejects.toThrow('not found');
+  });
+});
+
+describe('graduateProvenanceOnUserEdit (P1.5)', () => {
+  it('graduates ai_estimate rows to user_entered on hand edit', () => {
+    expect(graduateProvenanceOnUserEdit('ai_estimate')).toBe('user_entered');
+  });
+
+  it('leaves every other provenance untouched', () => {
+    for (const source of ['barcode', 'nutrition_label', 'user_entered', 'imported', null, undefined]) {
+      expect(graduateProvenanceOnUserEdit(source as any)).toBeNull();
+    }
   });
 });

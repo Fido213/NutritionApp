@@ -17,6 +17,7 @@ import type { Food } from '@data/types';
 import type { ComboRepository } from '@data/repositories/combo.repo';
 import { quickLogFood, logFoodAtAmount, logCombo } from './logging-actions';
 import { confidenceLabel, friendlyFoodName } from '@ui/views/day-detail';
+import { graduateProvenanceOnUserEdit } from '@services/food/food-service';
 import { openComboBuilderView } from './combo-builder';
 
 export type FoodSortKey =
@@ -178,6 +179,16 @@ async function saveFoodEdit() {
   (updates as any).carbs_per_100g = Number.isFinite(carb) ? carb : null;
   (updates as any).fat_per_100g = Number.isFinite(fat) ? fat : null;
   (updates as any).water_per_100g = Number.isFinite(water) ? water : null;
+
+  // Estimation v1 (P1.5): hand-entered per-100g values replace the
+  // flat-default guess — an ai_estimate row the user corrects graduates to
+  // user_entered so the "estimated" chip and export share stop counting it.
+  // Other provenances (label, barcode, seeded reference) are untouched.
+  try {
+    const current = await ctx.foodRepo.findById(id);
+    const graduated = graduateProvenanceOnUserEdit(current?.source_type);
+    if (graduated) (updates as any).source_type = graduated;
+  } catch { /* provenance upgrade is best-effort; the nutrient save below still runs */ }
 
   try {
     const updated = await ctx.foodRepo.update(id, updates as any);

@@ -1,6 +1,7 @@
 import { SQLiteDBConnection } from '@capacitor-community/sqlite';
 import { Food, InsertFood, UpdateFood } from '../types';
 import { FoodReference } from '@domain/types';
+import { normalizeFoodName } from '@domain/logging';
 
 export class FoodRepository {
   constructor(private db: SQLiteDBConnection) {}
@@ -224,8 +225,16 @@ export class FoodRepository {
   }
 
   async upsertFromAI(canonicalName: string, nutrients: Partial<InsertFood>, confidence: number): Promise<Food> {
-    const normalized = canonicalName.toLowerCase().replace(/[^a-z0-9]/g, '');
-    let existing = await this.findByNormalizedName(normalized);
+    // Estimation v1 (P1.4): same key ladder as FoodService.resolveFood —
+    // normalizeFoodName first, legacy stripped form second — so a lookup and
+    // an upsert can never disagree on the key and fork duplicate rows.
+    // Stored keys use normalizeFoodName like every other writer (seed,
+    // library edits, imports); the stripped lookup only catches rows stored
+    // under the pre-P1.4 key shape.
+    const normalized = normalizeFoodName(canonicalName);
+    const stripped = canonicalName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const existing = (normalized ? await this.findByNormalizedName(normalized) : null)
+      ?? (stripped && stripped !== normalized ? await this.findByNormalizedName(stripped) : null);
     
     if (existing) {
       if (confidence > (existing.confidence || 0)) {
@@ -240,7 +249,7 @@ export class FoodRepository {
     
     return this.insert({
       canonical_name: canonicalName,
-      normalized_name: normalized,
+      normalized_name: normalized || stripped,
       calories_per_100g: nutrients.calories_per_100g || null,
       protein_per_100g: nutrients.protein_per_100g || null,
       carbs_per_100g: nutrients.carbs_per_100g || null,

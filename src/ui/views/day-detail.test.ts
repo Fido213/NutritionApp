@@ -74,7 +74,14 @@ describe('confidenceLabel', () => {
 
   it('labels exact imports by percentage', () => {
     expect(confidenceLabel(1.0, 'imported')).toBe('100% sure');
-    expect(confidenceLabel(0.9, 'ai_estimate')).toBe('90% sure');
+    expect(confidenceLabel(0.9, 'user_entered')).toBe('90% sure');
+  });
+
+  it('marks ai_estimate rows estimated, never a bare percentage', () => {
+    expect(confidenceLabel(0.9, 'ai_estimate')).toBe('estimated · 90%');
+    expect(confidenceLabel(0.68, 'ai_estimate')).toBe('estimated · 68%');
+    expect(confidenceLabel(null, 'ai_estimate')).toBe('estimated');
+    expect(confidenceLabel(undefined, 'ai_estimate')).toBe('estimated');
   });
 
   it('stays honest when confidence is missing', () => {

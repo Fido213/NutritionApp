@@ -66,21 +66,30 @@ export class LogRepository {
   /**
    * Per-date AVG/MIN of the logged foods' confidence for a range — one query.
    * Dates without food logs (or with all-NULL confidences) are absent / null.
+   *
+   * Estimation v1 (P1.2): also carries the share of the day's logged kcal
+   * that came from `ai_estimate` rows (0..1, null when the day logged no
+   * kcal) so exports can show how much of a day was guessed vs referenced.
    */
-  async getDailyConfidenceForRange(startDate: string, endDate: string): Promise<Record<string, { avgConfidence: number | null; minConfidence: number | null }>> {
+  async getDailyConfidenceForRange(startDate: string, endDate: string): Promise<Record<string, { avgConfidence: number | null; minConfidence: number | null; estimatedShare: number | null }>> {
     const res = await this.db.query(
       `SELECT fl.date,
               AVG(f.confidence) AS avg_confidence,
-              MIN(f.confidence) AS min_confidence
+              MIN(f.confidence) AS min_confidence,
+              SUM(CASE WHEN f.source_type = 'ai_estimate' THEN fl.calories ELSE 0 END) AS est_kcal,
+              SUM(fl.calories) AS total_kcal
        FROM food_logs fl LEFT JOIN foods f ON f.id = fl.food_id
        WHERE fl.date >= ? AND fl.date <= ? GROUP BY fl.date`,
       [startDate, endDate]
     );
-    const out: Record<string, { avgConfidence: number | null; minConfidence: number | null }> = {};
+    const out: Record<string, { avgConfidence: number | null; minConfidence: number | null; estimatedShare: number | null }> = {};
     for (const row of res.values || []) {
+      const total = typeof row.total_kcal === 'number' ? row.total_kcal : null;
+      const est = typeof row.est_kcal === 'number' ? row.est_kcal : null;
       out[row.date] = {
         avgConfidence: typeof row.avg_confidence === 'number' ? row.avg_confidence : null,
-        minConfidence: typeof row.min_confidence === 'number' ? row.min_confidence : null
+        minConfidence: typeof row.min_confidence === 'number' ? row.min_confidence : null,
+        estimatedShare: total !== null && total > 0 && est !== null ? est / total : null
       };
     }
     return out;

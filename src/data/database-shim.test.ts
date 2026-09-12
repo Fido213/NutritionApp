@@ -425,6 +425,37 @@ describe('createFallbackConnection', () => {
     expect(rows.find(r => r.date === '2026-08-02').avg_confidence).toBeCloseTo(0.8, 5);
   });
 
+  // Estimation v1 (P1.2): the export confidence query also carries
+  // estimated/total kcal so the fallback shim must emit those columns too.
+  it('emits estimated/total kcal alongside the confidence aggregates', async () => {
+    const store = createStore();
+    const db = createFallbackConnection(store);
+
+    store.setTable('foods', [
+      { id: 'f1', canonical_name: 'Chicken', normalized_name: 'chicken', confidence: 1.0, source_type: 'user_entered' },
+      { id: 'f2', canonical_name: 'Mystery Stew', normalized_name: 'mysterystew', confidence: 0.6, source_type: 'ai_estimate' }
+    ]);
+    store.setTable('food_logs', [
+      { id: 'l1', date: '2026-08-01', food_id: 'f1', calories: 165 },
+      { id: 'l2', date: '2026-08-01', food_id: 'f2', calories: 335 },
+      { id: 'l3', date: '2026-08-02', food_id: 'f2', calories: 200 }
+    ]);
+
+    const rows = await queryValues(db,
+      `SELECT fl.date, AVG(f.confidence) AS avg_confidence, MIN(f.confidence) AS min_confidence,
+              SUM(CASE WHEN f.source_type = 'ai_estimate' THEN fl.calories ELSE 0 END) AS est_kcal,
+              SUM(fl.calories) AS total_kcal
+       FROM food_logs fl LEFT JOIN foods f ON f.id = fl.food_id
+       WHERE fl.date >= ? AND fl.date <= ? GROUP BY fl.date`,
+      ['2026-08-01', '2026-08-31']
+    );
+    expect(rows).toHaveLength(2);
+    const day1 = rows.find(r => r.date === '2026-08-01');
+    expect(day1.est_kcal).toBe(335);
+    expect(day1.total_kcal).toBe(500);
+    expect(rows.find(r => r.date === '2026-08-02').est_kcal).toBe(200);
+  });
+
   it('lists water logs for a range in date order (journal)', async () => {
     const store = createStore();
     const db = createFallbackConnection(store);

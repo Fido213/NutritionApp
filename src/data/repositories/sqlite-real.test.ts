@@ -166,6 +166,43 @@ describe('FoodRepository on a real SQLite database', () => {
     expect(reused.calories_per_100g).toBe(130);
   });
 
+  it('upsertFromAI keys agree with resolveFood lookups (P1.4, no forked dupes)', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+
+    // Stored under the normalizeFoodName key (spaced), like every other writer.
+    const created = await repo.upsertFromAI('Chicken Breast', { calories_per_100g: 165 }, 0.7);
+    expect(created.normalized_name).toBe('chicken breast');
+
+    // Spacing/casing variants converge on the same row instead of forking.
+    const variants = await Promise.all([
+      repo.upsertFromAI('chicken breast', {}, 0.6),
+      repo.upsertFromAI('CHICKEN  BREAST', {}, 0.6),
+    ]);
+    expect(variants[0].id).toBe(created.id);
+    expect(variants[1].id).toBe(created.id);
+    const all = await conn.query('SELECT * FROM foods');
+    expect(all.values).toHaveLength(1);
+  });
+
+  it('upsertFromAI still finds pre-P1.4 stripped-key rows (legacy key shape)', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+
+    // Row stored the old way (stripped, no spaces).
+    const legacy = await repo.insert({
+      canonical_name: 'Chicken Breast',
+      normalized_name: 'chickenbreast',
+      calories_per_100g: 165, protein_per_100g: 31, carbs_per_100g: 0, fat_per_100g: 3.6,
+      nutrition_basis: 'per_100g', source_type: 'ai_estimate', confidence: 0.5,
+    } as any);
+
+    const reused = await repo.upsertFromAI('Chicken Breast', { calories_per_100g: 170 }, 0.7);
+    expect(reused.id).toBe(legacy.id);
+    const all = await conn.query('SELECT * FROM foods');
+    expect(all.values).toHaveLength(1);
+  });
+
   it('finds a food through an exact alias join', async () => {
     const { conn } = createRealDb();
     const foodId = await seedChicken(conn);
@@ -919,6 +956,10 @@ describe('Backup/restore round trip on a real SQLite database', () => {
     expect(conf['2026-08-01'].avgConfidence).toBeCloseTo(0.9, 5);
     expect(conf['2026-08-01'].minConfidence).toBeCloseTo(0.8, 5);
     expect(conf['2026-08-02'].avgConfidence).toBeCloseTo(0.8, 5);
+    // P1.2: day 1 mixes user_entered chicken (165 kcal) + ai_estimate oats
+    // (389 kcal); day 2 is oats only.
+    expect(conf['2026-08-01'].estimatedShare).toBeCloseTo(389 / 554, 5);
+    expect(conf['2026-08-02'].estimatedShare).toBeCloseTo(1, 5);
     expect(conf['2026-08-05']).toBeUndefined();
   });
 

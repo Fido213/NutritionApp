@@ -288,6 +288,20 @@ describe('buildExportRows', () => {
     expect(rows[2].avgConfidence).toBeCloseTo(0.8, 5);
   });
 
+  it('carries the estimated-kcal share per day (P1.2)', async () => {
+    const { conn } = createRealDb();
+    const repos = await buildRepos(conn);
+    await seedTwoDayScenario(conn);
+
+    const rows = await buildExportRows(['2026-07-10', '2026-07-11', '2026-08-02'], repos);
+
+    // Day 1: only chicken (user_entered) -> nothing estimated.
+    expect(rows[0].estimatedShare).toBeCloseTo(0, 5);
+    // Day 2 + day 4: only oats (ai_estimate) -> fully estimated.
+    expect(rows[1].estimatedShare).toBeCloseTo(1, 5);
+    expect(rows[2].estimatedShare).toBeCloseTo(1, 5);
+  });
+
   it('skips days with no data and returns an empty list for an empty range', async () => {
     const { conn } = createRealDb();
     const repos = await buildRepos(conn);
@@ -308,14 +322,16 @@ describe('buildExportRows', () => {
     const csv = generateCSV(rows);
     const lines = csv.split('\n');
     // §5c-4: 21 legacy columns + Avg Confidence + Min Confidence.
-    expect(lines[0].split(',')).toHaveLength(23);
+    // Estimation v1 (P1.2): + Estimated Share -> 24.
+    expect(lines[0].split(',')).toHaveLength(24);
     expect(lines).toHaveLength(4); // header + 3 data days
     expect(csv).toContain('Cut');
     expect(csv).toContain('Bulk');
     expect(csv).toContain('Avg Confidence');
     expect(csv).toContain('Min Confidence');
-    // Day-1 row carries chicken's confidence at the tail of the line.
-    expect(lines[1].endsWith(',1,1')).toBe(true);
+    expect(csv).toContain('Estimated Share');
+    // Day-1 row carries chicken's confidence at the tail of the line (share 0: user_entered only).
+    expect(lines[1].endsWith(',1,1,0')).toBe(true);
   });
 
   it('resolves the goal-for-date per phase across the range (no relabeling of history)', async () => {

@@ -55,6 +55,18 @@ export function extractSpanText(rawInput: string, item: InterpretedFoodItem): st
 }
 
 /**
+ * Estimation v1 (P1.5): provenance graduation on hand edit. When the user
+ * hand-enters per-100g nutrients for a row whose values are a flat-default
+ * guess, the row stops being an estimate — returns 'user_entered' to store.
+ * Every other provenance is authoritative already (label, barcode, seeded
+ * reference, prior user entry) and returns null (leave untouched).
+ * Pure — unit-tested; the Index library-edit save applies the result.
+ */
+export function graduateProvenanceOnUserEdit(sourceType: string | null | undefined): 'user_entered' | null {
+  return sourceType === 'ai_estimate' ? 'user_entered' : null;
+}
+
+/**
  * Orchestrates the food-resolution and logging pipeline:
  * interpreted item -> food reference (library lookup or new AI-source entry) -> observation -> food log.
  */
