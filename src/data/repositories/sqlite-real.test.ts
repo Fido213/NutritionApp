@@ -185,8 +185,7 @@ describe('FoodRepository on a real SQLite database', () => {
     expect(all.values).toHaveLength(1);
   });
 
-  it('upsertFromAI still finds pre-P1.4 stripped-key rows (legacy key shape)', async () => {
-    const { conn } = createRealDb();
+  it('upsertFromAI still finds pre-P1.4 stripped-key rows (legacy key shape)', async () => {    const { conn } = createRealDb();
     const repo = new FoodRepository(conn);
 
     // Row stored the old way (stripped, no spaces).
@@ -201,6 +200,20 @@ describe('FoodRepository on a real SQLite database', () => {
     expect(reused.id).toBe(legacy.id);
     const all = await conn.query('SELECT * FROM foods');
     expect(all.values).toHaveLength(1);
+  });
+
+  it('getFoodsByToken returns LIKE-matched rows for the P2 fallback pool', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+
+    await repo.insert(CHICKEN);
+    await repo.insert(OATS);
+
+    const chickens = await repo.getFoodsByToken('chicken');
+    expect(chickens.map(f => f.canonical_name)).toEqual(['Chicken Breast']);
+    expect(await repo.getFoodsByToken('quinoa')).toEqual([]);
+    // Limit is honored.
+    expect(await repo.getFoodsByToken('e', 1)).toHaveLength(1);
   });
 
   it('finds a food through an exact alias join', async () => {

@@ -412,6 +412,63 @@ describe('FoodService user-pinned defaults', () => {
   });
 });
 
+describe('resolveFood P2 head-median fallback', () => {
+  const CHICKEN_ROWS = [150, 160, 165, 170, 180, 200].map((kcal, i) => ({
+    id: `c${i}`,
+    canonical_name: `Chicken Kebab, cut ${kcal}`,
+    normalized_name: `chicken kebab cut ${kcal}`,
+    calories_per_100g: kcal,
+    protein_per_100g: 30,
+    carbs_per_100g: 0,
+    fat_per_100g: 3,
+    water_per_100g: 65,
+    source_type: 'imported',
+  }));
+
+  function stubService(pool: any[]) {
+    let upserted: any = null;
+    const foodRepo: any = {
+      findByAlias: async () => null,
+      findByNormalizedName: async () => null,
+      getFoodsByToken: async () => pool,
+      upsertFromAI: async (_name: string, nutrients: any, confidence: number) => {
+        upserted = { nutrients, confidence };
+        return { id: 'new', ...nutrients, confidence };
+      },
+      toFoodReference: (f: any) => ({ id: f.id, confidence: f.confidence }),
+    };
+    const service = new FoodService(foodRepo, {} as any, {} as any, {} as any, {} as any);
+    return { service, upserted: () => upserted };
+  }
+
+  const item = (confidence = 0.7) => ({
+    canonicalName: 'Chicken Kebab', amountG: 100, amountMl: null, confidence, isComposite: false,
+  });
+
+  it('upserts head medians (not flat) when supporters exist, capping confidence', async () => {
+    const { service, upserted } = stubService(CHICKEN_ROWS);
+    await service.resolveFood(item(0.7));
+    // Median of [150,160,165,170,180,200] = 167.5; support conf 0.52 < 0.7.
+    expect(upserted().nutrients.calories_per_100g).toBeCloseTo(167.5, 5);
+    expect(upserted().nutrients.protein_per_100g).toBe(30);
+    expect(upserted().confidence).toBeCloseTo(0.52, 5);
+  });
+
+  it('keeps the flat floor when head support is thin', async () => {
+    const { service, upserted } = stubService(CHICKEN_ROWS.slice(0, 2));
+    await service.resolveFood(item(0.7));
+    expect(upserted().nutrients.calories_per_100g).toBe(200);
+    expect(upserted().nutrients.protein_per_100g).toBe(10);
+    expect(upserted().confidence).toBe(0.7);
+  });
+
+  it('never overrides caller-supplied nutrients', async () => {
+    const { service, upserted } = stubService(CHICKEN_ROWS);
+    await service.resolveFood(item(0.7), { calories_per_100g: 999 } as any);
+    expect(upserted().nutrients.calories_per_100g).toBe(999);
+  });
+});
+
 describe('graduateProvenanceOnUserEdit (P1.5)', () => {
   it('graduates ai_estimate rows to user_entered on hand edit', () => {
     expect(graduateProvenanceOnUserEdit('ai_estimate')).toBe('user_entered');

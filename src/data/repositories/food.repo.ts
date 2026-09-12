@@ -97,6 +97,22 @@ export class FoodRepository {
     return (res.values as Food[]) || [];
   }
 
+  /**
+   * Candidate pool for the P2 head-median fallback: rows mentioning the
+   * query's first concept token, newest-unsorted (the caller filters to an
+   * exact concept head + prep containment and takes medians). Only runs on
+   * the OOV path (unknown foods), never per keystroke — a few hundred LIKE
+   * rows at most, not a 39k scan.
+   */
+  async getFoodsByToken(token: string, limit: number = 2000): Promise<Food[]> {
+    const term = `%${token}%`;
+    const res = await this.db.query(
+      `SELECT * FROM foods WHERE normalized_name LIKE ? OR canonical_name LIKE ? LIMIT ?`,
+      [term, term, limit]
+    );
+    return (res.values as Food[]) || [];
+  }
+
   async fuzzySearch(query: string, limit: number = 20, opts?: { includeSeed?: boolean }): Promise<Food[]> {
     // Alias-aware: curated/user phrases ("white rice") reach their rows even
     // when the canonical name orders words differently ("Rice, cooked, NFS").

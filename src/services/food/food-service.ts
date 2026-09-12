@@ -8,6 +8,8 @@ import { Food, FoodObservation, FoodLog } from '@data/types';
 import { FoodReference, NutritionResult } from '@domain/types';
 import { calculateNutrition } from '@domain/nutrition';
 import { normalizeFoodName, sliceSpanText } from '@domain/logging';
+import { tokenizeBM25, splitConceptPrep } from '@services/interpreter/lexicon';
+import { medianFallbackEstimate, type FallbackEstimate } from './fallback-estimate';
 import { classifyWaterSource } from '@domain/hydration';
 import { InterpretedFoodItem, InterpretedLabelOCR } from '@services/ai/prompts';
 import { OnlineBarcodeProduct } from '@services/barcode/online-lookup';
@@ -102,6 +104,19 @@ export class FoodService {
   }
 
   /**
+   * P2 head-median fallback for an unknown food name: per-nutrient medians
+   * over same-concept-head library rows (>= 5 supporters), else null (the
+   * caller keeps the flat default floor). Gated, workbench-only report:
+   * `ai models/results/eval_fallback_report.json`.
+   */
+  async nutrientFallback(canonicalName: string): Promise<FallbackEstimate | null> {
+    const { concept } = splitConceptPrep(tokenizeBM25(canonicalName));
+    if (concept.length === 0) return null;
+    const candidates = await this.foodRepo.getFoodsByToken(concept[0], 2000);
+    return medianFallbackEstimate(candidates, canonicalName, normalizeFoodName(canonicalName));
+  }
+
+  /**
    * Resolve an interpreted food item to a FoodReference.
    * Resolution order: user default for the raw span phrase -> exact canonical
    * name -> legacy stripped form -> exact alias -> upsert new library entry.
@@ -126,7 +141,29 @@ export class FoodService {
 
     if (found) return this.foodRepo.toFoodReference(found);
 
-    const created = await this.foodRepo.upsertFromAI(name, nutrients, item.confidence);
+    // Unknown food, no caller-supplied reference: head-median fallback when
+    // the library holds >= 5 same-head supporters, else the flat default
+    // floor (unchanged values). Support-capped confidence can only lower the
+    // stored confidence, never raise it. Explicit caller nutrients bypass.
+    let effectiveNutrients = nutrients;
+    let confidence = item.confidence;
+    if (nutrients === DEFAULT_NUTRIENT_ESTIMATE) {
+      try {
+        const fb = await this.nutrientFallback(name);
+        if (fb) {
+          effectiveNutrients = {
+            calories_per_100g: fb.nutrients.kcal,
+            protein_per_100g: fb.nutrients.protein,
+            carbs_per_100g: fb.nutrients.carbs,
+            fat_per_100g: fb.nutrients.fat,
+            water_per_100g: 0,
+          };
+          confidence = Math.min(confidence, fb.confidence);
+        }
+      } catch { /* fallback is best-effort; the flat floor below still logs */ }
+    }
+
+    const created = await this.foodRepo.upsertFromAI(name, effectiveNutrients, confidence);
     return this.foodRepo.toFoodReference(created);
   }
 
