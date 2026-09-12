@@ -33,8 +33,9 @@ describe('medianFallbackEstimate (P2)', () => {
     expect(est).not.toBeNull();
     expect(est!.level).toBe('L1');
     expect(est!.support).toBe(CHICKENS.length);
-    // Median of [150,160,165,170,180,200] = (165+170)/2.
-    expect(est!.nutrients.kcal).toBeCloseTo(167.5, 5);
+    // Macros medianned (P10/C20/F5 defaults); kcal DERIVED: 4*10+4*20+9*5.
+    expect(est!.nutrients.kcal).toBeCloseTo(165, 5);
+    expect(est!.nutrients.protein).toBe(10);
     expect(est!.confidence).toBeLessThanOrEqual(0.6);
   });
 
@@ -48,7 +49,7 @@ describe('medianFallbackEstimate (P2)', () => {
     const mixed = [...CHICKENS, mkFood('Almond Chicken', 500), mkFood('Chicken egg boiled', 400)];
     const est = medianFallbackEstimate(mixed, 'chicken');
     expect(est!.support).toBe(CHICKENS.length);
-    expect(est!.nutrients.kcal).toBeCloseTo(167.5, 5);
+    expect(est!.nutrients.kcal).toBeCloseTo(165, 5);
   });
 
   it('prefers the prep-filtered pool when the query names a preparation', () => {
@@ -58,7 +59,9 @@ describe('medianFallbackEstimate (P2)', () => {
     ];
     const est = medianFallbackEstimate(rows, 'boiled chicken');
     expect(est!.level).toBe('L1p');
-    expect(est!.nutrients.kcal).toBe(160);
+    // kcal derived from the boiled-pool macro medians: 4*30+4*0+9*3.
+    expect(est!.nutrients.kcal).toBe(147);
+    expect(est!.nutrients.protein).toBe(30);
   });
 
   it('excludes the self row so a re-log can never vote for itself', () => {
@@ -70,7 +73,7 @@ describe('medianFallbackEstimate (P2)', () => {
   });
 
   it('returns null when supporters carry no usable numbers', () => {
-    const empty = CHICKENS.map(f => ({ ...f, calories_per_100g: null }));
+    const empty = CHICKENS.map(f => ({ ...f, calories_per_100g: null, protein_per_100g: null }));
     expect(medianFallbackEstimate(empty, 'chicken')).toBeNull();
   });
 

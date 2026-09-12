@@ -448,8 +448,9 @@ describe('resolveFood P2 head-median fallback', () => {
   it('upserts head medians (not flat) when supporters exist, capping confidence', async () => {
     const { service, upserted } = stubService(CHICKEN_ROWS);
     await service.resolveFood(item(0.7));
-    // Median of [150,160,165,170,180,200] = 167.5; support conf 0.52 < 0.7.
-    expect(upserted().nutrients.calories_per_100g).toBeCloseTo(167.5, 5);
+    // Macro medians (P30/C0/F3); kcal derived: 4*30+4*0+9*3 = 147.
+    // Support conf 0.52 < 0.7.
+    expect(upserted().nutrients.calories_per_100g).toBeCloseTo(147, 5);
     expect(upserted().nutrients.protein_per_100g).toBe(30);
     expect(upserted().confidence).toBeCloseTo(0.52, 5);
   });

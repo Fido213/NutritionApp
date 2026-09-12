@@ -52,12 +52,14 @@ function medianNutrients(rows: Food[]): FallbackNutrients | null {
     const vals = rows.map(get).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
     return medianOf(vals);
   };
-  const kcal = pick(f => f.calories_per_100g);
+  // Macros medianned independently; kcal DERIVED (Atwater 4/4/9) so the
+  // estimate stays coherent. Gated: independent kcal medians decouple from
+  // macros on prep-filtered pools (L1p kcal +4% before, -62% after).
   const protein = pick(f => f.protein_per_100g);
   const carbs = pick(f => f.carbs_per_100g);
   const fat = pick(f => f.fat_per_100g);
-  if (kcal === null || protein === null || carbs === null || fat === null) return null;
-  return { kcal, protein, carbs, fat };
+  if (protein === null || carbs === null || fat === null) return null;
+  return { kcal: 4 * protein + 4 * carbs + 9 * fat, protein, carbs, fat };
 }
 
 /** Fixed support-based confidence: 0.4 at floor support, saturating at 0.6. */
