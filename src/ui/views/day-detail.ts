@@ -99,6 +99,33 @@ export function confidenceLabel(
 }
 
 /**
+ * E3 split-group flags carried on a combo-marker observation: per-member
+ * assumed-amount state + span phrase, keyed by food_id. Lets combo members
+ * keep individual "assumed" badges and "Default for '…'" pins even though
+ * they share one observation. Null for non-split markers and garbage.
+ */
+export interface SplitFlag {
+  food_id?: string;
+  wasDefault?: boolean;
+  rawUnit?: string | null;
+  spanText?: string | null;
+}
+
+export function splitFlagsFromObservation(
+  interpretationJson: string | null | undefined,
+): SplitFlag[] | null {
+  if (!interpretationJson) return null;
+  try {
+    const parsed: unknown = JSON.parse(interpretationJson);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const rec = parsed as { kind?: unknown; splitFlags?: unknown };
+    if (rec.kind !== 'combo' || !Array.isArray(rec.splitFlags)) return null;
+    return rec.splitFlags as SplitFlag[];
+  } catch {
+    return null;
+  }
+}
+/**
  * Recover the user's own phrase behind a log from its observation: slice the
  * interpreter's grounded span offsets out of the raw input. Null for combo
  * markers, Gemma-fallback items (no span), and garbage payloads.

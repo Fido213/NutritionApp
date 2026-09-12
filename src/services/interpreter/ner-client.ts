@@ -18,6 +18,12 @@ export interface FoodSpan {
   confidence: number;
   isCompositeHint?: boolean;
   /**
+   * E3 split group, stamped by index.ts (not the extractor): members split
+   * off one quantity-less span share the original span text so logging can
+   * cluster them under one journal row.
+   */
+  splitGroup?: string;
+  /**
    * Script router hint (Phase 2 pre-step). Recorded for future lexicon /
    * model dispatch and per-script accuracy — never gates matching today,
    * so mixed-script input keeps full cross-lexicon coverage.

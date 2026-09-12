@@ -291,3 +291,50 @@ describe('receipt pastes and sentence chunks', () => {
     expect(out.map(s => s.canonicalName.toLowerCase()).sort()).toEqual(['banana', 'oatmeal']);
   });
 });
+
+describe('E3 combo split (quantity-less multi-food spans)', () => {
+  const EGG = { id: 'e', canonical_name: 'Egg, whole, raw, fresh', normalized_name: 'egg whole raw fresh' } as any;
+  const BACON = { id: 'b', canonical_name: 'Bacon, pork, cured', normalized_name: 'bacon pork cured' } as any;
+  const OATS = { id: 'o', canonical_name: 'Oats, raw', normalized_name: 'oats raw' } as any;
+  const LIB = [EGG, BACON, OATS];
+
+  it('splits one quantity-less span into an item per known food (sync)', () => {
+    setFoodsForInterpreter(LIB);
+    const out = interpretTextSync('eggs, bacon', LIB);
+    expect(out).toHaveLength(2);
+    expect(out.map(s => s.canonicalName).sort()).toEqual(['Bacon, pork, cured', 'Egg, whole, raw, fresh']);
+    // Flagged defaults — never confident grams.
+    expect(out.every(s => s.wasDefault && s.amountG === 100)).toBe(true);
+    // Sub-spans tile the input without overlap (pinning works per ingredient).
+    const [a, b] = out.map(s => s.span);
+    expect(a[1]).toBeLessThanOrEqual(b[0]);
+    expect('eggs, bacon'.slice(a[0], a[1])).toBe('eggs');
+    expect('eggs, bacon'.slice(b[0], b[1])).toBe('bacon');
+    // Split-group stamp: logging clusters these under one journal row.
+    expect(out.map(s => (s as any).splitGroup)).toEqual(['eggs, bacon', 'eggs, bacon']);
+  });
+
+  it('splits on the async path identically (mirror discipline)', async () => {
+    const { interpretText } = await import('./index');
+    setFoodsForInterpreter(LIB);
+    const out = await interpretText('eggs and bacon', LIB);
+    expect(out).toHaveLength(2);
+    expect(out.map(s => s.canonicalName).sort()).toEqual(['Bacon, pork, cured', 'Egg, whole, raw, fresh']);
+  });
+
+  it('vetoes the split when any segment is unknown (logs whole, as today)', () => {
+    setFoodsForInterpreter([OATS]);
+    const out = interpretTextSync('oatmeal with honey', [OATS]);
+    expect(out).toHaveLength(1);
+  });
+
+  it('never touches quantity-led inputs (each qty already owns its span)', () => {
+    const CHICKEN = { id: 'c', canonical_name: 'Chicken, breast, grilled', normalized_name: 'chicken breast grilled' } as any;
+    const RICE = { id: 'r', canonical_name: 'Rice, white, cooked', normalized_name: 'rice white cooked' } as any;
+    setFoodsForInterpreter([CHICKEN, RICE]);
+    const out = interpretTextSync('250g chicken, 100g rice', [CHICKEN, RICE]);
+    expect(out).toHaveLength(2);
+    expect(out.map(s => s.amountG).sort((x, y) => (x ?? 0) - (y ?? 0))).toEqual([100, 250]);
+    expect(out.every(s => !s.wasDefault)).toBe(true);
+  });
+});

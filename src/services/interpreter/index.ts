@@ -8,10 +8,11 @@
  */
 
 import { parseQuantities, resolveBareCount } from './unit-parser';
-import { extractFoodSpans, extractFoodSpansSync } from './ner-client';
-import { hybridRetrieve, hybridRetrieveSync, buildBm25Index, addFoodsToIndex } from './hybrid-retriever';
+import { extractFoodSpans, extractFoodSpansSync, type FoodSpan } from './ner-client';
+import { hybridRetrieve, hybridRetrieveSync, buildBm25Index, addFoodsToIndex, type RetrievalHit } from './hybrid-retriever';
 import { cacheFoodEmbeddings } from './faiss-bridge';
 import { resolveVagueMarker, governedByNegation, stripReceiptTail } from './lexicon';
+import { splitComboSegments, groundSegments, segmentResolves } from './combo-split';
 import type { ScriptTag } from './language';
 import type { Food } from '@data/types';
 
@@ -33,6 +34,14 @@ export interface InterpretedSpan {
   wasDefault: boolean;
   /** Script router hint, copied from the source span (future dispatch). */
   script?: ScriptTag;
+  /**
+   * E3 split group: the original span text when this span was split off a
+   * quantity-less multi-food span ("eggs, bacon" -> "eggs" + "bacon" both
+   * carry splitGroup "eggs, bacon"). Logging logs group members under one
+   * shared combo-marker observation so the journal renders ONE collapsible
+   * row (split for math, clustered for display). Absent otherwise.
+   */
+  splitGroup?: string;
 }
 
 let foodsCache: Food[] | null = null;
@@ -177,9 +186,42 @@ export async function interpretText(
     return alignQuantities(text, spans, qtys, opts.defaultGrams ?? 100);
   }
 
+  // E3 combo split: one quantity-less span that is really several known
+  // foods ("Sweet Potato, Eggs, Ham, Cheese") logs one item per segment.
+  // Fires only when EVERY segment resolves (exact key or same concept
+  // head — segmentResolves); a single miss vetoes the split and the span
+  // logs whole, exactly as today. Quantity-led inputs never reach here —
+  // each qty already owns its span. Pre-retrieved best hits are reused by
+  // the main loop below (no double retrieval cost on the fire path).
+  let work: FoodSpan[] = spans;
+  const preRetrieved = new Map<string, RetrievalHit>();
+  if (qtys.length === 0 && spans.length === 1) {
+    const parts = splitComboSegments(spans[0].text);
+    const grounded = parts ? groundSegments(text, spans[0].span[0], parts, spans[0].script) : null;
+    if (grounded && grounded.every(g => segmentResolves(foods, g.text))) {
+      const gated: FoodSpan[] = [];
+      for (const g of grounded) {
+        const hit = (await hybridRetrieve(g.text, foods, { topK: 1, counts: opts.counts }))[0];
+        if (!hit) { gated.length = 0; break; }
+        preRetrieved.set(g.text, hit);
+        gated.push({
+          text: g.text,
+          normalized: g.text.toLowerCase().normalize('NFKC').trim(),
+          span: g.span,
+          confidence: spans[0].confidence,
+          isCompositeHint: spans[0].isCompositeHint,
+          script: g.script,
+          splitGroup: spans[0].text,
+        });
+      }
+      if (gated.length === grounded.length) work = gated;
+      else preRetrieved.clear();
+    }
+  }
+
   const out: InterpretedSpan[] = [];
-  for (const span of spans) {
-    const hybrid = await hybridRetrieve(span.text, foods, { topK: 3, counts: opts.counts });
+  for (const span of work) {
+    const hybrid = preRetrieved.get(span.text) ? [preRetrieved.get(span.text)!] : await hybridRetrieve(span.text, foods, { topK: 3, counts: opts.counts });
     const best = hybrid[0];
     // Validate threshold: cos>0.72 or BM25>6/10 normalized >0.6
     // If below, mark low confidence but still return span text as canonical (will upsert as new food)
@@ -205,6 +247,7 @@ export async function interpretText(
       rawUnit: amt.rawUnit,
       wasDefault: amt.wasDefault,
       script: span.script,
+      splitGroup: span.splitGroup,
     });
   }
 
@@ -221,9 +264,36 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
   if (spans.length === 0) return [];
   if (!foods || foods.length === 0) return alignQuantities(text, spans, qtys, opts.defaultGrams ?? 100);
 
+  // E3 combo split (sync mirror of the async path above — same gate).
+  let work: FoodSpan[] = spans;
+  const preRetrieved = new Map<string, RetrievalHit>();
+  if (qtys.length === 0 && spans.length === 1) {
+    const parts = splitComboSegments(spans[0].text);
+    const grounded = parts ? groundSegments(text, spans[0].span[0], parts, spans[0].script) : null;
+    if (grounded && grounded.every(g => segmentResolves(foods, g.text))) {
+      const gated: FoodSpan[] = [];
+      for (const g of grounded) {
+        const hit = hybridRetrieveSync(g.text, foods, 1, opts.counts)[0];
+        if (!hit) { gated.length = 0; break; }
+        preRetrieved.set(g.text, hit);
+        gated.push({
+          text: g.text,
+          normalized: g.text.toLowerCase().normalize('NFKC').trim(),
+          span: g.span,
+          confidence: spans[0].confidence,
+          isCompositeHint: spans[0].isCompositeHint,
+          script: g.script,
+          splitGroup: spans[0].text,
+        });
+      }
+      if (gated.length === grounded.length) work = gated;
+      else preRetrieved.clear();
+    }
+  }
+
   const out: InterpretedSpan[] = [];
-  for (const span of spans) {
-    const hybrid = hybridRetrieveSync(span.text, foods, 3, opts.counts);
+  for (const span of work) {
+    const hybrid = preRetrieved.get(span.text) ? [preRetrieved.get(span.text)!] : hybridRetrieveSync(span.text, foods, 3, opts.counts);
     const best = hybrid[0];
     const retrievalScore = best?.score ?? 0;
     const method = best?.method ?? 'hybrid';
@@ -239,6 +309,7 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
       retrievalScore, method, rawUnit: amt.rawUnit,
       wasDefault: amt.wasDefault,
       script: span.script,
+      splitGroup: span.splitGroup,
     });
   }
   return out;
@@ -286,6 +357,7 @@ function alignQuantities(
       rawUnit: amt.rawUnit,
       wasDefault: amt.wasDefault,
       script: span.script,
+      splitGroup: span.splitGroup,
     };
   });
 }

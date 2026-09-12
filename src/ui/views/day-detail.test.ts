@@ -4,7 +4,7 @@
  * logic that must never regress lives here.
  */
 import { describe, it, expect } from 'vitest';
-import { assumedAmountLabel, formatLoggedAmount, confidenceLabel, spanTextFromObservation } from './day-detail';
+import { assumedAmountLabel, formatLoggedAmount, confidenceLabel, spanTextFromObservation, splitFlagsFromObservation } from './day-detail';
 
 describe('assumedAmountLabel', () => {
   it('flags silent defaults', () => {
@@ -89,8 +89,7 @@ describe('confidenceLabel', () => {
   });
 });
 
-describe('spanTextFromObservation', () => {
-  it('recovers the user phrase from grounded span offsets', () => {
+describe('spanTextFromObservation', () => {  it('recovers the user phrase from grounded span offsets', () => {
     expect(
       spanTextFromObservation('250g chicken, 100g rice', JSON.stringify({ canonicalName: 'Almond Chicken', span: [5, 12] }))
     ).toBe('chicken');
@@ -101,5 +100,23 @@ describe('spanTextFromObservation', () => {
     expect(spanTextFromObservation('apple', JSON.stringify({ canonicalName: 'apple' }))).toBeNull();
     expect(spanTextFromObservation('apple', '{not json')).toBeNull();
     expect(spanTextFromObservation(null, '{}')).toBeNull();
+  });
+});
+
+describe('splitFlagsFromObservation (E3)', () => {
+  it('returns per-member flags from split markers', () => {
+    const flags = splitFlagsFromObservation(JSON.stringify({
+      kind: 'combo', comboId: null, comboName: 'eggs, bacon',
+      splitFlags: [{ food_id: 'e', wasDefault: true, rawUnit: null, spanText: 'eggs' }],
+    }));
+    expect(flags).toHaveLength(1);
+    expect(flags![0]).toMatchObject({ food_id: 'e', wasDefault: true, spanText: 'eggs' });
+  });
+
+  it('returns null for non-split markers and garbage', () => {
+    expect(splitFlagsFromObservation(JSON.stringify({ kind: 'combo', comboId: 'c1' }))).toBeNull();
+    expect(splitFlagsFromObservation(JSON.stringify({ canonicalName: 'oats' }))).toBeNull();
+    expect(splitFlagsFromObservation('{not json')).toBeNull();
+    expect(splitFlagsFromObservation(null)).toBeNull();
   });
 });

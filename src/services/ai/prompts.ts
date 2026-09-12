@@ -20,6 +20,13 @@ export interface InterpretedFoodItem {
   wasDefault?: boolean;
   /** Script router hint from the source span (future lexicon/model dispatch). */
   script?: ScriptTag;
+  /**
+   * E3 split group (interpreter-stamped only; Gemma never sets this):
+   * members of one split share the value and are logged under a single
+   * combo-marker observation (one collapsible journal row). Additive
+   * optional field — older payloads without it log exactly as before.
+   */
+  splitGroup?: string;
 }
 
 export interface InterpretedLabelOCR {

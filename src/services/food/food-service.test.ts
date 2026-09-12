@@ -481,3 +481,79 @@ describe('graduateProvenanceOnUserEdit (P1.5)', () => {
     }
   });
 });
+
+describe('E3 split-group logging (split for math, clustered for display)', () => {
+  function setup() {
+    const { db, tables } = createFakeDb();
+    const service = new FoodService(
+      new FoodRepository(db as any), new LogRepository(db as any),
+      new ObservationRepository(db as any), new WaterRepository(db as any),
+      new AliasRepository(db as any),
+    );
+    return { service, tables };
+  }
+
+  async function seedEggBacon(service: FoodService) {
+    const repo = (service as any).foodRepo as FoodRepository;
+    await repo.insert({
+      canonical_name: 'Egg, whole, raw, fresh', normalized_name: 'egg whole raw fresh',
+      calories_per_100g: 143, protein_per_100g: 12.6, carbs_per_100g: 0.7, fat_per_100g: 9.5,
+      water_per_100g: 76, nutrition_basis: 'per_100g', source_type: 'imported', confidence: null,
+    });
+    await repo.insert({
+      canonical_name: 'Bacon, pork, cured', normalized_name: 'bacon pork cured',
+      calories_per_100g: 200, protein_per_100g: 15, carbs_per_100g: 1, fat_per_100g: 15,
+      water_per_100g: 60, nutrition_basis: 'per_100g', source_type: 'imported', confidence: null,
+    });
+  }
+
+  const splitItems = (group: string | null = 'eggs, bacon') => ([
+    { canonicalName: 'Egg, whole, raw, fresh', amountG: 100, amountMl: null, confidence: 0.65, isComposite: false, wasDefault: true, rawUnit: null, span: [0, 4], splitGroup: group },
+    { canonicalName: 'Bacon, pork, cured', amountG: 100, amountMl: null, confidence: 0.65, isComposite: false, wasDefault: true, rawUnit: null, span: [6, 11], splitGroup: group },
+  ]) as any;
+
+  it('logs split members under ONE shared combo marker titled with the user phrase', async () => {
+    const { service, tables } = setup();
+    await seedEggBacon(service);
+
+    const results = await service.logTextInput('2026-08-19', 'eggs, bacon', splitItems());
+
+    expect(results).toHaveLength(2);
+    expect(tables.food_observations).toHaveLength(1);
+    const marker = tables.food_observations[0];
+    expect(marker.source_type).toBe('combo');
+    expect(marker.food_id).toBeNull();
+    const meta = JSON.parse(marker.interpretation_json);
+    expect(meta.kind).toBe('combo');
+    expect(meta.comboName).toBe('eggs, bacon');
+    expect(meta.splitFlags).toHaveLength(2);
+    expect(meta.splitFlags[0]).toMatchObject({ wasDefault: true, spanText: 'eggs' });
+    expect(meta.splitFlags[1]).toMatchObject({ wasDefault: true, spanText: 'bacon' });
+    // Both logs share the marker; per-member numbers, not one flat guess.
+    expect(tables.food_logs).toHaveLength(2);
+    expect(tables.food_logs[0].observation_id).toBe(marker.id);
+    expect(tables.food_logs[1].observation_id).toBe(marker.id);
+    expect(results[0].food.id).not.toBe(results[1].food.id);
+    expect(results[0].nutrition.calories).toBeCloseTo(143, 5);
+    expect(results[1].nutrition.calories).toBeCloseTo(200, 5);
+  });
+
+  it('logs unmarked items with individual observations (unchanged)', async () => {
+    const { service, tables } = setup();
+    await seedEggBacon(service);
+
+    const results = await service.logTextInput('2026-08-19', 'eggs, bacon', splitItems(null));
+
+    expect(results).toHaveLength(2);
+    expect(tables.food_observations).toHaveLength(2);
+    expect(tables.food_observations[0].source_type).toBe('text');
+  });
+
+  it('groupPhrase reads the user words between member spans, else the group key', async () => {
+    const { groupPhrase } = await import('./food-service');
+    const members = splitItems();
+    expect(groupPhrase('eggs, bacon', members)).toBe('eggs, bacon');
+    const spanless = members.map((m: any) => ({ ...m, span: undefined })) as any;
+    expect(groupPhrase('eggs, bacon', spanless)).toBe('eggs, bacon');
+  });
+});

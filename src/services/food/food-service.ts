@@ -57,6 +57,30 @@ export function extractSpanText(rawInput: string, item: InterpretedFoodItem): st
 }
 
 /**
+ * E3: the user's own phrase behind a split group (first member span start
+ * → last member span end, e.g. "Roast Beef With Gravy"). Titles the shared
+ * combo-marker observation so the journal row reads the user's words.
+ * Falls back to the interpreter's group key when spans are missing.
+ */
+export function groupPhrase(rawInput: string, members: InterpretedFoodItem[]): string {
+  const fallback = members[0]?.splitGroup ?? rawInput;
+  if (!rawInput) return fallback;
+  let start = Infinity;
+  let end = -Infinity;
+  for (const m of members) {
+    const span = (m as unknown as { span?: unknown })?.span;
+    if (!Array.isArray(span) || span.length !== 2) continue;
+    const [s, e] = span as [unknown, unknown];
+    if (!Number.isInteger(s) || !Number.isInteger(e)) continue;
+    start = Math.min(start, s as number);
+    end = Math.max(end, e as number);
+  }
+  if (!Number.isFinite(start) || end <= start || end > rawInput.length) return fallback;
+  const phrase = rawInput.slice(start, end).trim();
+  return phrase.length >= 2 ? phrase : fallback;
+}
+
+/**
  * Estimation v1 (P1.5): provenance graduation on hand edit. When the user
  * hand-enters per-100g nutrients for a row whose values are a flat-default
  * guess, the row stops being an estimate — returns 'user_entered' to store.
@@ -180,25 +204,41 @@ export class FoodService {
    * Log a single interpreted food item for a date:
    * resolve the food, record the observation, calculate nutrition deterministically,
    * insert the food log, and store any food-derived water separately.
+   *
+   * E3: pass a combo-marker observation id to log under a shared marker
+   * (split group members render as ONE collapsible journal row); otherwise
+   * a per-item observation is recorded exactly as before. A missing marker
+   * id falls back to a per-item observation (never breaks the log).
    */
-  async logTextEntry(date: string, rawInput: string, item: InterpretedFoodItem): Promise<LoggedTextEntry> {
+  async logTextEntry(date: string, rawInput: string, item: InterpretedFoodItem, markerId: string | null = null): Promise<LoggedTextEntry> {
     const food = await this.resolveFood(item, DEFAULT_NUTRIENT_ESTIMATE, extractSpanText(rawInput, item));
+    let observation = markerId ? await this.observationRepo.findById(markerId) : null;
+    if (!observation) {
+      observation = await this.observationRepo.insert({
+        food_id: food.id,
+        source_type: 'text',
+        estimated_amount: item.amountG ?? item.amountMl ?? 100,
+        final_amount: item.amountG ?? item.amountMl ?? 100,
+        amount_unit: item.amountMl !== null ? 'ml' : 'g',
+        confidence: item.confidence,
+        raw_input: rawInput,
+        interpretation_json: JSON.stringify(item),
+        user_corrected: 0
+      });
+    }
+    return this.insertEntryLogs(date, food, item, observation);
+  }
+
+  /**
+   * Shared tail of every text-log insert: deterministic nutrition,
+   * food log row, and food-derived water split. Pure orchestration over
+   * an already-resolved food + observation (used by single logs and by
+   * split-group members alike).
+   */
+  private async insertEntryLogs(date: string, food: FoodReference, item: InterpretedFoodItem, observation: FoodObservation): Promise<LoggedTextEntry> {
     const amountG = item.amountG ?? null;
     const amountMl = item.amountMl ?? null;
     const effectiveAmount = item.amountG ?? item.amountMl ?? 100;
-    const amountUnit = amountMl !== null ? 'ml' : 'g';
-
-    const observation = await this.observationRepo.insert({
-      food_id: food.id,
-      source_type: 'text',
-      estimated_amount: effectiveAmount,
-      final_amount: effectiveAmount,
-      amount_unit: amountUnit,
-      confidence: item.confidence,
-      raw_input: rawInput,
-      interpretation_json: JSON.stringify(item),
-      user_corrected: 0
-    });
 
     const nutrition = calculateNutrition(food, effectiveAmount);
 
@@ -227,10 +267,71 @@ export class FoodService {
     return { item, food, observation, log, nutrition };
   }
 
+  /**
+   * E3 split-group logging: members of one interpreter split ("Roast Beef
+   * With Gravy" -> beef + gravy) share ONE combo-marker observation so the
+   * journal renders a single collapsible row titled with the user's own
+   * phrase — split for math, clustered for display. The marker carries
+   * per-member flags (assumed-amount state + span phrase) so badges and
+   * "Default for '…'" pins keep working per ingredient. Resolution runs
+   * once per member up front (logTextEntry-equivalent, no double upsert).
+   */
+  async logSplitGroup(date: string, rawInput: string, members: InterpretedFoodItem[]): Promise<LoggedTextEntry[]> {
+    const phrase = groupPhrase(rawInput, members);
+    const resolved: Array<{ item: InterpretedFoodItem; food: FoodReference }> = [];
+    for (const item of members) {
+      resolved.push({
+        item,
+        food: await this.resolveFood(item, DEFAULT_NUTRIENT_ESTIMATE, extractSpanText(rawInput, item)),
+      });
+    }
+    const marker = await this.observationRepo.insert({
+      food_id: null,
+      source_type: 'combo',
+      estimated_amount: null,
+      final_amount: null,
+      amount_unit: 'g',
+      confidence: null,
+      raw_input: phrase,
+      interpretation_json: JSON.stringify({
+        kind: 'combo',
+        comboId: null,
+        comboName: phrase,
+        splitFlags: resolved.map(({ item, food }) => ({
+          food_id: food.id,
+          wasDefault: !!item.wasDefault,
+          rawUnit: (item as unknown as { rawUnit?: unknown })?.rawUnit ?? null,
+          spanText: extractSpanText(rawInput, item),
+        })),
+      }),
+      user_corrected: 0
+    });
+    const out: LoggedTextEntry[] = [];
+    for (const { item, food } of resolved) {
+      out.push(await this.insertEntryLogs(date, food, item, marker));
+    }
+    return out;
+  }
+
   async logTextInput(date: string, rawInput: string, items: InterpretedFoodItem[]): Promise<LoggedTextEntry[]> {
     const results: LoggedTextEntry[] = [];
-    for (const item of items) {
-      results.push(await this.logTextEntry(date, rawInput, item));
+    let i = 0;
+    while (i < items.length) {
+      // E3: consecutive members of one interpreter split log under a shared
+      // marker (one journal row). Lone items and unmarked items log alone.
+      const group = items[i]?.splitGroup ?? null;
+      if (group) {
+        const members: InterpretedFoodItem[] = [];
+        while (i < items.length && items[i]?.splitGroup === group) members.push(items[i++]);
+        if (members.length >= 2) {
+          results.push(...await this.logSplitGroup(date, rawInput, members));
+          continue;
+        }
+        results.push(await this.logTextEntry(date, rawInput, members[0]));
+        continue;
+      }
+      results.push(await this.logTextEntry(date, rawInput, items[i]));
+      i++;
     }
     return results;
   }

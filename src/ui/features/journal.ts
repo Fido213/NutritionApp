@@ -7,7 +7,7 @@ import { store } from '../state';
 import { showToast } from '../components/toast';
 import { openModalLayer, closeModalLayer } from '../modal-layers';
 import { requestConfirmation } from '../dialogs';
-import { renderDayDetail, weekdayLabel, groupDateLabel, assumedAmountLabel, spanTextFromObservation } from '@ui/views/day-detail';
+import { renderDayDetail, weekdayLabel, groupDateLabel, assumedAmountLabel, spanTextFromObservation, splitFlagsFromObservation } from '@ui/views/day-detail';
 import type { JournalGroup, JournalEntry, JournalFoodLog, JournalWater, ComboCluster } from '@ui/views/day-detail';
 import { refreshStateForDate, bumpDataVersion, invalidateHistoryWindow } from '../app-refresh';
 import { getTodayDateString } from '@utils/dates';
@@ -109,6 +109,12 @@ export async function renderJournalIfVisible() {
     // default action ("Default for 'chicken'").
     const assumedByObsId = new Map<string, string>();
     const spanTextByObsId = new Map<string, string>();
+    // E3 split-group members share one combo-marker observation: per-member
+    // badges/pins resolve from the marker's splitFlags, keyed obs+food.
+    // A user-corrected marker clears every member (one edit = human review
+    // of the shared assumption — same accepted wrinkle as duplicateLog).
+    const splitAssumed = new Map<string, string>();
+    const splitSpanText = new Map<string, string>();
     {
       const obsIds = new Set<string>();
       for (const log of logs) if (log.observation_id) obsIds.add(log.observation_id);
@@ -121,6 +127,21 @@ export async function renderJournalIfVisible() {
         if (label) assumedByObsId.set(obsId, label);
         const spanText = spanTextFromObservation(obs.raw_input, obs.interpretation_json);
         if (spanText) spanTextByObsId.set(obsId, spanText);
+        if (obs.source_type === 'combo') {
+          const flags = splitFlagsFromObservation(obs.interpretation_json);
+          if (flags) {
+            for (const flag of flags) {
+              if (!flag?.food_id) continue;
+              const key = `${obsId}:${flag.food_id}`;
+              const memberLabel = assumedAmountLabel(
+                JSON.stringify({ wasDefault: !!flag.wasDefault, rawUnit: flag.rawUnit ?? null }),
+                obs.user_corrected,
+              );
+              if (memberLabel) splitAssumed.set(key, memberLabel);
+              if (flag.spanText) splitSpanText.set(key, flag.spanText);
+            }
+          }
+        }
       }
       for (const log of logs as unknown as JournalFoodLog[]) {
         if (log.observation_id && assumedByObsId.has(log.observation_id)) {
@@ -128,6 +149,18 @@ export async function renderJournalIfVisible() {
         }
         if (log.observation_id && spanTextByObsId.has(log.observation_id)) {
           log.spanText = spanTextByObsId.get(log.observation_id) ?? null;
+        }
+        // Split members: marker-level lookups above never hit (combo JSON
+        // carries no span), so per-member flags fill the gap — without
+        // overriding anything already resolved.
+        if (log.observation_id && log.food_id) {
+          const key = `${log.observation_id}:${log.food_id}`;
+          if (log.amountAssumed == null && splitAssumed.has(key)) {
+            log.amountAssumed = splitAssumed.get(key) ?? null;
+          }
+          if (log.spanText == null && splitSpanText.has(key)) {
+            log.spanText = splitSpanText.get(key) ?? null;
+          }
         }
       }
     }

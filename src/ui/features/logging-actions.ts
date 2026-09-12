@@ -114,6 +114,9 @@ async function logTextInputInner(rawText: string) {
         rawUnit: s.rawUnit,
         retrievalScore: s.retrievalScore,
         span: s.span,
+        // E3: members of one split share this; FoodService logs them under
+        // a single combo-marker observation (one collapsible journal row).
+        splitGroup: (s as any).splitGroup ?? null,
       }));
     }
   } catch (e) {
