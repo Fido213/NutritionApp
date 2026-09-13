@@ -240,7 +240,7 @@ function applyDecisiveLex(
 function finishWithStage2(
   spanText: string,
   out: RetrievalHit[],
-  lexHits: Array<{ food: Food; rank: number }>,
+  lexHits: Array<{ food: Food; rank: number; score: number }>,
   semHits: Array<{ food: Food; rank: number }>,
   topK: number,
   counts?: Map<string, number>,
