@@ -92,4 +92,14 @@ describe('rerankTop', () => {
     ];
     expect(rerankTop('apple', items)).toEqual(['b', 'a']);
   });
+
+  it('never lets counts overturn a score gap (2026-09-13 device bug)', () => {
+    // Heavily-logged generic must not beat better lexical evidence:
+    // the prior is a tiebreak, not a score.
+    const order = rerankTop('shawarma chicken', [
+      { id: 'generic', text: 'Chicken', head: ['chicken'], lexRank: 3, semRank: 1, logCount: 28 },
+      { id: 'takeaway', text: 'Shawarma kebab meat, takeaway', head: ['shawarma', 'kebab', 'meat', 'takeaway'], lexRank: 1, semRank: 2, logCount: 0 },
+    ]);
+    expect(order[0]).toBe('takeaway');
+  });
 });

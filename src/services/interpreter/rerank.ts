@@ -22,11 +22,14 @@ export interface RerankWeights {
   semRR: number;
   extraPrep: number;
   /**
-   * Personal prior: saturating lift for foods the user actually logs,
-   * 0.01 * count/(count+5) — flips near-ties toward YOUR foods, never
-   * overrides lexical evidence (exact matches bypass this module) and adds
-   * exactly 0 for never-logged rows (discovery unaffected). Hand-set (no
-   * personal data exists in the workbench to fit on); gate-hold validated.
+   * Personal prior: RESERVED for the offline fitter, always 0 in the app.
+   * History (2026-09-13, device-verified): 0.01 here flipped real rankings —
+   * RRF rank-compression collapses BM25 score gaps to ~0.0005, so a "tiny"
+   * additive prior overruled lexical evidence ("Shawarma chicken" lost to
+   * generic Chicken off 4 personal logs). The prior now applies ONLY as a
+   * post-score tiebreak in rerankTop (your foods win exact ties, nothing
+   * else moves). The fitter may re-tune this weight with evidence; the app
+   * ignores it until then.
    */
   priorCount: number;
 }
@@ -39,6 +42,9 @@ export interface RerankWeights {
  * nudges from a mismatched-slice fit run were reverted, not shipped. Refit
  * when the eval grows; never hand-tune these numbers without rerunning
  * the gate.
+ *
+ * priorCount is 0 here by device-verified necessity (see field doc):
+ * personalization lives in the rerankTop tiebreak below, not the score.
  */
 export const RERANK_WEIGHTS: RerankWeights = {
   headExact: 0,
@@ -48,7 +54,7 @@ export const RERANK_WEIGHTS: RerankWeights = {
   lexRR: 1,
   semRR: 1,
   extraPrep: 0,
-  priorCount: 0.01,
+  priorCount: 0,
 };
 
 export interface RerankCandidate {
@@ -125,8 +131,10 @@ export interface Stage2Item {
 
 /**
  * Rerank up to ~40 fused candidates. Returns ids ordered best-first.
- * Stable for ties (input order preserved) so the starter weights reproduce
- * stage-1 order exactly.
+ * Ordering: score desc, then personal log-count desc (YOUR foods win exact
+ * ties — the only influence history has), then input order (stable).
+ * With starter weights and zero counts this reproduces stage-1 order
+ * exactly; with counts it can never overturn a score gap of any size.
  */
 export function rerankTop(
   query: string,
@@ -138,6 +146,7 @@ export function rerankTop(
   return items
     .map((item, index) => {
       const toks = tokenizeBM25(item.text);
+      const logCount = item.logCount ?? 0;
       const score = rerankScore(
         rerankFeatures(qToks, concept, prep, {
           id: item.id,
@@ -145,12 +154,12 @@ export function rerankTop(
           head: item.head,
           lexRank: item.lexRank,
           semRank: item.semRank,
-          logCount: item.logCount ?? 0,
+          logCount,
         }),
         weights,
       );
-      return { id: item.id, score, index };
+      return { id: item.id, score, logCount, index };
     })
-    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .sort((a, b) => b.score - a.score || b.logCount - a.logCount || a.index - b.index)
     .map(h => h.id);
 }
