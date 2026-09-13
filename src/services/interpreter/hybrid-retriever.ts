@@ -205,6 +205,34 @@ export function invalidateBm25Cache(): void {
 }
 
 /**
+ * A lexical hit is decisive when it more than doubles its runner-up
+ * (normalized BM25: runner < 0.5) — a rare discriminating term, e.g. the
+ * only 'shawarma' row in 39k. The trigram-hash channel favors short generic
+ * names (cosine dilution punishes long names), and RRF rank-compression
+ * erases the BM25 margin, so without this guard short generics overrule
+ * decisive lexical evidence (device-verified 2026-09-13: 'chicken shawarma'
+ * lost to generic CHICKEN 11.9-vs-4.8). The guard only ever promotes the
+ * lex #1 to the head of the non-exact section — never above exact matches,
+ * and a no-op for genuinely ambiguous queries (runner ratio ~1).
+ */
+export const DECISIVE_LEX_RATIO = 0.5;
+
+function applyDecisiveLex(
+  final: RetrievalHit[],
+  lexHits: Array<{ food: Food; rank: number; score: number }>,
+  exactCount: number,
+): RetrievalHit[] {
+  const top = lexHits[0];
+  if (!top) return final;
+  if ((lexHits[1]?.score ?? 0) >= DECISIVE_LEX_RATIO) return final;
+  const at = final.findIndex((h, i) => i >= exactCount && h.food.id === top.food.id);
+  if (at === -1) return final;
+  const [hit] = final.splice(at, 1);
+  final.splice(exactCount, 0, hit);
+  return final;
+}
+
+/**
  * Stage-2 finish: exact matches keep their rank untouched; the top-40 fused
  * rest are rescored by the fitted linear model and reordered. Pure reorder
  * of an already-fused pool — BM25/hash/RRF/exact logic above is frozen.
@@ -240,6 +268,7 @@ function finishWithStage2(
   const byId = new Map(rest.map(h => [h.food.id, h]));
   const reranked = order.map(id => byId.get(id)!).filter(Boolean);
   const final = [...exact, ...reranked];
+  applyDecisiveLex(final, lexHits, exact.length);
   final.forEach((h, i) => h.rank = i + 1);
   return final.slice(0, topK);
 }
