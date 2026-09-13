@@ -64,6 +64,16 @@ export function getIndexedVersion(): number {
 }
 
 /**
+ * The currently indexed library rows (null until the first warm). Lets the
+ * submit path reuse the BOOT warm instead of refetching 39k rows and
+ * replaying the warmup probe on the first submit (the double-warm users
+ * saw: boot card, then the same card again on first tap).
+ */
+export function getInterpreterFoods(): Food[] | null {
+  return foodsCache;
+}
+
+/**
  * Incrementally fold changed rows (usually 0–2 upserts from the submit that
  * just logged) into a WARM index: postings + embeddings update in place and
  * the cached array gains/replaces the rows, so every downstream reader

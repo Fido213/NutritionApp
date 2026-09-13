@@ -70,11 +70,22 @@ async function logTextInputInner(rawText: string) {
   // Try new interpreter first (offline, L12 + FP16). Needs food list for hybrid retrieval.
   let items: any[] | null = null;
   try {
-    const { interpretText, setFoodsForInterpreter } = await import('@services/interpreter');
+    const { interpretText, setFoodsForInterpreter, getInterpreterFoods, getIndexedVersion } = await import('@services/interpreter');
     // Version-gated: refetch + rebuild only when the library changed.
     // A failed refetch keeps the previous cache (possibly null → the
     // interpreter degrades to span-text logging, as before).
     const version = ctx.foodRepo.getVersion();
+    // Adopt the BOOT warm when this module hasn't fetched yet (same JS
+    // context, so a boot-warmed index is directly reusable): without this
+    // the first submit replayed the whole fetch + probe behind a second
+    // "Warming up" card right after the boot card did the same work.
+    if (!interpreterFoods) {
+      const warmed = getInterpreterFoods();
+      if (warmed && warmed.length > 0 && getIndexedVersion() === version) {
+        interpreterFoods = warmed;
+        interpreterVersion = version;
+      }
+    }
     if (!interpreterFoods || version !== interpreterVersion) {
       // True cold start (boot warm missed or failed): card instead of jank,
       // then a programmatic probe, so the user's first submit never pays the

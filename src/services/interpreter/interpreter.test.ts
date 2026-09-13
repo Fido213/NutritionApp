@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseQuantities } from './unit-parser';
 import { extractFoodSpansSync } from './ner-client';
-import { interpretTextSync, setFoodsForInterpreter, getIndexedVersion, patchInterpreterFoods } from './index';
+import { interpretTextSync, setFoodsForInterpreter, getIndexedVersion, getInterpreterFoods, patchInterpreterFoods } from './index';
 import { bm25Search, buildBm25Index, addFoodsToIndex } from './hybrid-retriever';
 import { faissSearchSync, cacheFoodEmbeddings } from './faiss-bridge';
 import { normalizeAmount } from '@domain/units';
@@ -241,6 +241,12 @@ describe('interpreter index version gate', () => {
     expect(interpretTextSync('apple')[0].canonicalName).toBe('Apple');
     setFoodsForInterpreter([banana]);
     expect(interpretTextSync('banana')[0].canonicalName).toBe('Banana');
+  });
+
+  it('exposes the warmed library for submit-path reuse (no double warm)', () => {
+    const foods = [{ id: 'w', canonical_name: 'Water', normalized_name: 'water' } as any];
+    setFoodsForInterpreter(foods);
+    expect(getInterpreterFoods()).toBe(foods);
   });
 });
 
