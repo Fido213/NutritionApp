@@ -126,6 +126,15 @@ export function splitFlagsFromObservation(
   }
 }
 /**
+ * E4 review sort rank: estimated rows (source 'ai_estimate') sort before
+ * everything else so the Index "Needs review" sort surfaces exactly the
+ * rows a human should confirm or correct. Pure — unit-tested.
+ */
+export function estimatedRank(sourceType?: string | null): number {
+  return sourceType === 'ai_estimate' ? 0 : 1;
+}
+
+/**
  * Recover the user's own phrase behind a log from its observation: slice the
  * interpreter's grounded span offsets out of the raw input. Null for combo
  * markers, Gemma-fallback items (no span), and garbage payloads.

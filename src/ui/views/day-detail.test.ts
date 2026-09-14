@@ -4,7 +4,7 @@
  * logic that must never regress lives here.
  */
 import { describe, it, expect } from 'vitest';
-import { assumedAmountLabel, formatLoggedAmount, confidenceLabel, spanTextFromObservation, splitFlagsFromObservation } from './day-detail';
+import { assumedAmountLabel, formatLoggedAmount, confidenceLabel, spanTextFromObservation, splitFlagsFromObservation, estimatedRank } from './day-detail';
 
 describe('assumedAmountLabel', () => {
   it('flags silent defaults', () => {
@@ -103,8 +103,7 @@ describe('spanTextFromObservation', () => {  it('recovers the user phrase from g
   });
 });
 
-describe('splitFlagsFromObservation (E3)', () => {
-  it('returns per-member flags from split markers', () => {
+describe('splitFlagsFromObservation (E3)', () => {  it('returns per-member flags from split markers', () => {
     const flags = splitFlagsFromObservation(JSON.stringify({
       kind: 'combo', comboId: null, comboName: 'eggs, bacon',
       splitFlags: [{ food_id: 'e', wasDefault: true, rawUnit: null, spanText: 'eggs' }],
@@ -118,5 +117,14 @@ describe('splitFlagsFromObservation (E3)', () => {
     expect(splitFlagsFromObservation(JSON.stringify({ canonicalName: 'oats' }))).toBeNull();
     expect(splitFlagsFromObservation('{not json')).toBeNull();
     expect(splitFlagsFromObservation(null)).toBeNull();
+  });
+});
+
+describe('estimatedRank (E4)', () => {
+  it('sorts estimated rows before everything else', () => {
+    expect(estimatedRank('ai_estimate')).toBe(0);
+    for (const s of ['imported', 'barcode', 'nutrition_label', 'user_entered', null, undefined]) {
+      expect(estimatedRank(s as any)).toBe(1);
+    }
   });
 });

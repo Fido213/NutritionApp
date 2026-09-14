@@ -16,7 +16,7 @@ import { ctx, resolveFoodCached } from '../context';
 import type { Food } from '@data/types';
 import type { ComboRepository } from '@data/repositories/combo.repo';
 import { quickLogFood, logFoodAtAmount, logCombo } from './logging-actions';
-import { confidenceLabel, friendlyFoodName } from '@ui/views/day-detail';
+import { confidenceLabel, friendlyFoodName, estimatedRank } from '@ui/views/day-detail';
 import { graduateProvenanceOnUserEdit } from '@services/food/food-service';
 import { openComboBuilderView } from './combo-builder';
 
@@ -26,7 +26,8 @@ export type FoodSortKey =
   | 'protein-desc' | 'protein-asc'
   | 'carbs-desc' | 'carbs-asc'
   | 'fat-desc' | 'fat-asc'
-  | 'confidence-desc' | 'confidence-asc';
+  | 'confidence-desc' | 'confidence-asc'
+  | 'needs-review';
 
 export type ComboSortKey =
   | 'created-desc' | 'created-asc'
@@ -86,6 +87,7 @@ async function fetchCombosCached(): Promise<Awaited<ReturnType<ComboRepository['
 let openComboDetailId: string | null = null;
 
 const FOOD_SORT_OPTIONS: Array<{ value: FoodSortKey; label: string }> = [
+  { value: 'needs-review', label: 'Needs review' },
   { value: 'created-desc', label: 'Newest first' },
   { value: 'created-asc', label: 'Oldest first' },
   { value: 'kcal-desc', label: 'Highest kcal' },
@@ -142,6 +144,33 @@ function setIndexTab(tab: 'foods' | 'combos') {
   expandedIndexFoodId = null;
   populateIndexSort();
   renderIndex();
+}
+
+/** E4 one-tap confirm: values verified by the user graduate out of
+ *  ai_estimate (same provenance rule as hand edits — graduateProvenanceOnUserEdit).
+ *  Re-reads the row so only current estimates flip; refreshes caches + view. */
+async function confirmFoodEstimate(id: string) {
+  try {
+    const current = await ctx.foodRepo.findById(id);
+    if (!current) {
+      showToast('Food not found');
+      return;
+    }
+    if (graduateProvenanceOnUserEdit(current.source_type) !== 'user_entered') return;
+    const updated = await ctx.foodRepo.update(id, { source_type: 'user_entered' } as any);
+    if (!updated) {
+      showToast('Food not found');
+      return;
+    }
+    ctx.foodCache.delete(id);
+    ctx.foodCache.set(id, updated);
+    invalidateIndexCaches();
+    await ctx.dbManager.saveWebStore();
+    await renderIndex();
+    showToast(`Confirmed "${current.canonical_name}" — no longer estimated`);
+  } catch {
+    showToast('Could not confirm — try again');
+  }
 }
 
 /** Open the food edit modal pre-filled for this library entry. */
@@ -307,7 +336,12 @@ const FOOD_CMP: Record<FoodSortKey, (a: Food, b: Food) => number> = {
   'fat-desc': numericCmp(f => f.fat_per_100g, 'desc'),
   'fat-asc': numericCmp(f => f.fat_per_100g, 'asc'),
   'confidence-desc': numericCmp(f => f.confidence ?? null, 'desc'),
-  'confidence-asc': numericCmp(f => f.confidence ?? null, 'asc')
+  'confidence-asc': numericCmp(f => f.confidence ?? null, 'asc'),
+  // E4: estimated rows first (they need human confirm/correct), newest
+  // estimated first within the band via the created-desc tiebreak.
+  'needs-review': (a, b) =>
+    estimatedRank(a.source_type) - estimatedRank(b.source_type) ||
+    (b.created_at || '').localeCompare(a.created_at || '')
 };
 
 function fmt1(n: number | null | undefined): string {
@@ -431,6 +465,20 @@ function buildIndexFoodRow(food: Food): HTMLElement {
       openFoodEdit(food);
     });
     actions.append(quick, custom, editBtn);
+    // E4: one-tap confirm for estimated rows — values look right → graduate
+    // to user_entered without typing. Re-reads first: only ai_estimate rows
+    // graduate, everything else never shows this button in the first place.
+    if (food.source_type === 'ai_estimate') {
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'log-action-btn blue';
+      confirmBtn.textContent = '✓ Looks right';
+      confirmBtn.title = 'Confirm these values as correct — stops showing as estimated';
+      confirmBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await confirmFoodEstimate(food.id);
+      });
+      actions.appendChild(confirmBtn);
+    }
     details.appendChild(actions);
     row.appendChild(details);
   }
