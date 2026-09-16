@@ -204,32 +204,82 @@ export function invalidateBm25Cache(): void {
   invalidateFaissCache();
 }
 
+/** Document frequency of a token in the warm BM25 index (0 when cold). */
+export function docFreqOf(token: string): number {
+  return bm25Index?.docFreq.get(token) ?? 0;
+}
+
 /**
- * A lexical hit is decisive when it more than doubles its runner-up
- * (normalized BM25: runner < 0.5) — a rare discriminating term, e.g. the
- * only 'shawarma' row in 39k. The trigram-hash channel favors short generic
- * names (cosine dilution punishes long names), and RRF rank-compression
- * erases the BM25 margin, so without this guard short generics overrule
- * decisive lexical evidence (device-verified 2026-09-13: 'chicken shawarma'
- * lost to generic CHICKEN 11.9-vs-4.8). The guard only ever promotes the
- * lex #1 to the head of the non-exact section — never above exact matches,
- * and a no-op for genuinely ambiguous queries (runner ratio ~1).
+ * Lex-authority guard (general, structural — no word lists). One coherent
+ * rule over the lex #1, replacing two stacked patches that fought each
+ * other (a promote-then-defer composition deadlocked on the very case it
+ * was built for: the fused head was already generic, so a head-examining
+ * deferral never engaged).
+ *
+ * Given the lex-top row W and the query concept tokens:
+ * - support = concept tokens W actually contains;
+ * - thinOnly = support is non-empty and every supporting token heads ≤
+ *   THIN_FAMILY_MAX rows (the library has no real coverage of W's match);
+ * - dom = the biggest-df concept token W lacks (≥ DOMINANT_FAMILY_MIN).
+ * - decisive = runner-up lex score < DECISIVE_LEX_RATIO (rare
+ *   discriminating term; the hash channel's brevity preference and RRF
+ *   rank-compression would otherwise erase the margin).
+ *
+ * Verdicts, in order: (1) thinOnly + dom → defer to the fused-best row
+ * containing dom (the dominant family's representative — whose pool also
+ * backs any later estimate); the query names a well-stocked family plus a
+ * rare dish-word (`chicken shawarma`, `beef kebab`-shaped) and the
+ * singleton stranger's values describe the wrong food. (2) else decisive
+ * → W keeps head-of-non-exact rank. (3) else → fused order stands.
+ * Never above exact matches; single-token queries and winners matching any
+ * well-stocked token fall through to (2)/(3). Bare `shawarma` still finds
+ * its only row (no competing family exists).
+ *
+ * Thresholds are structural (observed thin tail {1,1,2,2,2,3,4} vs
+ * dominance at two orders of magnitude), not fitted — frozen 2026-09-13.
  */
 export const DECISIVE_LEX_RATIO = 0.5;
+export const THIN_FAMILY_MAX = 4;
+export const DOMINANT_FAMILY_MIN = 100;
 
-function applyDecisiveLex(
+function applyLexAuthority(
   final: RetrievalHit[],
+  spanText: string,
   lexHits: Array<{ food: Food; rank: number; score: number }>,
   exactCount: number,
-): RetrievalHit[] {
+): void {
   const top = lexHits[0];
-  if (!top) return final;
-  if ((lexHits[1]?.score ?? 0) >= DECISIVE_LEX_RATIO) return final;
+  if (!top) return;
+  const { concept } = splitConceptPrep(tokenizeBM25(spanText));
+  if (concept.length === 0) return;
+  const rowToks = new Set(tokenizeBM25(`${top.food.canonical_name} ${top.food.normalized_name}`));
+  const support = concept.filter(t => rowToks.has(t));
+  const thinOnly = support.length > 0 && support.every(t => docFreqOf(t) <= THIN_FAMILY_MAX);
+  let dom: string | null = null;
+  let domDf = 0;
+  for (const t of concept) {
+    if (rowToks.has(t)) continue;
+    const df = docFreqOf(t);
+    if (df >= DOMINANT_FAMILY_MIN && df > domDf) { dom = t; domDf = df; }
+  }
+  if (thinOnly && dom) {
+    const target: string = dom;
+    const at = final.findIndex((h, i) => {
+      if (i < exactCount) return false;
+      return tokenizeBM25(`${h.food.canonical_name} ${h.food.normalized_name}`).includes(target);
+    });
+    if (at !== -1) {
+      const [hit] = final.splice(at, 1);
+      final.splice(exactCount, 0, hit);
+      return;
+    }
+    // Dominant family absent from the pool: fall through to decisive below.
+  }
+  if ((lexHits[1]?.score ?? 0) >= DECISIVE_LEX_RATIO) return;
   const at = final.findIndex((h, i) => i >= exactCount && h.food.id === top.food.id);
-  if (at === -1) return final;
+  if (at === -1) return;
   const [hit] = final.splice(at, 1);
   final.splice(exactCount, 0, hit);
-  return final;
 }
 
 /**
@@ -268,7 +318,8 @@ function finishWithStage2(
   const byId = new Map(rest.map(h => [h.food.id, h]));
   const reranked = order.map(id => byId.get(id)!).filter(Boolean);
   const final = [...exact, ...reranked];
-  applyDecisiveLex(final, lexHits, exact.length);
+  // Lex authority: defer-or-promote the lex-top row (single coherent rule).
+  applyLexAuthority(final, spanText, lexHits, exact.length);
   final.forEach((h, i) => h.rank = i + 1);
   return final.slice(0, topK);
 }
