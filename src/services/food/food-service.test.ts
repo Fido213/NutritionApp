@@ -453,6 +453,8 @@ describe('resolveFood P2 head-median fallback', () => {
     expect(upserted().nutrients.calories_per_100g).toBeCloseTo(147, 5);
     expect(upserted().nutrients.protein_per_100g).toBe(30);
     expect(upserted().confidence).toBeCloseTo(0.52, 5);
+    // Medoid provenance: values trace to a real row, linked by id.
+    expect(upserted().nutrients.source_reference).toBe('c0');
   });
 
   it('keeps the flat floor when head support is thin', async () => {

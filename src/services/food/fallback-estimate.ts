@@ -38,6 +38,14 @@ export interface FallbackEstimate {
   support: number;
   /** Display-only, fixed formula (matches the gated eval script). */
   confidence: number;
+  /**
+   * Medoid (gated workbench `eval_novel.py`: tracks the median within ~1%
+   * on all four nutrients): id of the real pool row closest to the macro
+   * medians. Stored values are that row's measured macros (Atwater kcal
+   * derived) — no synthetic medians enter storage; the upserted row points
+   * back here via `source_reference`. Provenance upgrade, not accuracy fix.
+   */
+  supporterId: string;
 }
 
 function medianOf(vals: number[]): number | null {
@@ -54,12 +62,39 @@ function medianNutrients(rows: Food[]): FallbackNutrients | null {
   };
   // Macros medianned independently; kcal DERIVED (Atwater 4/4/9) so the
   // estimate stays coherent. Gated: independent kcal medians decouple from
-  // macros on prep-filtered pools (L1p kcal +4% before, -62% after).
+  // macros on prep pools (L1p kcal +4% before, -62% after).
   const protein = pick(f => f.protein_per_100g);
   const carbs = pick(f => f.carbs_per_100g);
   const fat = pick(f => f.fat_per_100g);
   if (protein === null || carbs === null || fat === null) return null;
   return { kcal: 4 * protein + 4 * carbs + 9 * fat, protein, carbs, fat };
+}
+
+/**
+ * Medoid snap: the complete pool row closest to the macro medians (mean
+ * relative distance over P/C/F). Rows with any missing macro are skipped;
+ * null when no complete row exists (caller keeps the flat floor).
+ */
+function medoidOf(rows: Food[], medians: FallbackNutrients): Food | null {
+  let best: Food | null = null;
+  let bestDist = Infinity;
+  for (const f of rows) {
+    const p = f.protein_per_100g;
+    const c = f.carbs_per_100g;
+    const g = f.fat_per_100g;
+    if (typeof p !== 'number' || !Number.isFinite(p)) continue;
+    if (typeof c !== 'number' || !Number.isFinite(c)) continue;
+    if (typeof g !== 'number' || !Number.isFinite(g)) continue;
+    const dist =
+      (Math.abs(p - medians.protein) / (Math.abs(medians.protein) + 1) +
+        Math.abs(c - medians.carbs) / (Math.abs(medians.carbs) + 1) +
+        Math.abs(g - medians.fat) / (Math.abs(medians.fat) + 1)) / 3;
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = f;
+    }
+  }
+  return best;
 }
 
 /** Fixed support-based confidence: 0.4 at floor support, saturating at 0.6. */
@@ -86,17 +121,35 @@ export function medianFallbackEstimate(
       return prep.every(p => toks.has(p));
     });
     if (prepped.length >= MIN_FALLBACK_SUPPORT) {
-      const nutrients = medianNutrients(prepped);
-      if (nutrients) {
-        return { nutrients, level: 'L1p', support: prepped.length, confidence: fallbackConfidence(prepped.length) };
-      }
+      const snapped = snapMedoid(prepped, 'L1p');
+      if (snapped) return snapped;
     }
   }
   if (pool.length >= MIN_FALLBACK_SUPPORT) {
-    const nutrients = medianNutrients(pool);
-    if (nutrients) {
-      return { nutrients, level: 'L1', support: pool.length, confidence: fallbackConfidence(pool.length) };
-    }
+    const snapped = snapMedoid(pool, 'L1');
+    if (snapped) return snapped;
   }
   return null;
+}
+
+/**
+ * Medians locate the pool's center; the medoid (closest real row) supplies
+ * the stored values, so storage never holds synthetic medians. Returns null
+ * when the pool has no usable macros or no complete row to snap to.
+ */
+function snapMedoid(rows: Food[], level: 'L1p' | 'L1'): FallbackEstimate | null {
+  const medians = medianNutrients(rows);
+  if (!medians) return null;
+  const medoid = medoidOf(rows, medians);
+  if (!medoid) return null;
+  const protein = medoid.protein_per_100g as number;
+  const carbs = medoid.carbs_per_100g as number;
+  const fat = medoid.fat_per_100g as number;
+  return {
+    nutrients: { kcal: 4 * protein + 4 * carbs + 9 * fat, protein, carbs, fat },
+    level,
+    support: rows.length,
+    confidence: fallbackConfidence(rows.length),
+    supporterId: medoid.id,
+  };
 }

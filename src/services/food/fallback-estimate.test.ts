@@ -39,6 +39,23 @@ describe('medianFallbackEstimate (P2)', () => {
     expect(est!.confidence).toBeLessThanOrEqual(0.6);
   });
 
+  it('snaps stored values to the medoid row and points back at it', () => {
+    // Varied proteins (median 20), uniform else: medoid is exactly the P20
+    // row, and stored values are ITS measured values, not medians.
+    const rows = [
+      mkFood('Chicken, batch low', 150, 10),
+      mkFood('Chicken, batch mid', 165, 20),
+      mkFood('Chicken, batch high', 180, 30),
+      mkFood('Chicken, batch mid2', 170, 20),
+      mkFood('Chicken, batch mid3', 160, 20),
+    ];
+    const est = medianFallbackEstimate(rows, 'chicken');
+    expect(est).not.toBeNull();
+    expect(est!.supporterId).toBe('Chicken, batch mid');
+    expect(est!.nutrients.protein).toBe(20);
+    expect(est!.nutrients.kcal).toBe(4 * 20 + 4 * 20 + 9 * 5);
+  });
+
   it('returns null below the support floor (caller keeps the flat default)', () => {
     expect(medianFallbackEstimate(CHICKENS.slice(0, MIN_FALLBACK_SUPPORT - 1), 'chicken')).toBeNull();
     expect(medianFallbackEstimate(CHICKENS, 'quinoa')).toBeNull();

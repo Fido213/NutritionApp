@@ -181,6 +181,9 @@ export class FoodService {
             carbs_per_100g: fb.nutrients.carbs,
             fat_per_100g: fb.nutrients.fat,
             water_per_100g: 0,
+            // Medoid provenance: stored values are this real row's measured
+            // macros (see FallbackEstimate.supporterId), not medians.
+            source_reference: fb.supporterId,
           };
           confidence = Math.min(confidence, fb.confidence);
         }
