@@ -13,6 +13,7 @@ import { hybridRetrieve, hybridRetrieveSync, buildBm25Index, addFoodsToIndex, ty
 import { cacheFoodEmbeddings } from './faiss-bridge';
 import { resolveVagueMarker, governedByNegation, stripReceiptTail } from './lexicon';
 import { splitComboSegments, groundSegments, segmentResolves } from './combo-split';
+import { isCupUnit, cupGramsFor, CUP_ML } from '@domain/units';
 import type { ScriptTag } from './language';
 import type { Food } from '@data/types';
 
@@ -122,6 +123,22 @@ function resolveSpanAmount(
   const qty = nearestQty(span, qtys);
   if (qty) {
     if (qty.amountG !== null || qty.amountMl !== null) {
+      // Cup-measured dry staples: a cup is a VOLUME, and pricing it as 240 g
+      // overstates oats/flour/cereal 2-3x (see CUP_GRAMS in domain/units).
+      // Liquids and untabled foods keep the volume (1 ml ~ 1 g for water-dense
+      // drinks), so this only converts where the density is known to differ.
+      if (qty.amountG === null && qty.amountMl !== null && isCupUnit(qty.unitText)) {
+        const perCup = cupGramsFor(spanText);
+        if (perCup !== null) {
+          return {
+            amountG: perCup * (qty.amountMl / CUP_ML),
+            amountMl: null,
+            rawUnit: qty.unitText,
+            confidence: Math.min(0.92, (spanConfidence + qty.confidence) / 2 + 0.05),
+            wasDefault: false,
+          };
+        }
+      }
       return {
         amountG: qty.amountG,
         amountMl: qty.amountMl,

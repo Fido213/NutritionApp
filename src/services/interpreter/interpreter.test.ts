@@ -390,3 +390,38 @@ describe('retrieval acceptance — no silently wrong food', () => {
     expect(interpretTextSync('chiken brest')[0].canonicalName).toBe('Chicken, breast, grilled');
   });
 });
+
+describe('cup-measured dry staples convert to grams (unit correctness)', () => {
+  const OATS = { id: 'o', canonical_name: 'Oats, raw', normalized_name: 'oats raw' } as any;
+  const MILK = { id: 'm', canonical_name: 'Milk, whole, 3.25%', normalized_name: 'milk whole' } as any;
+  const LIB = [OATS, MILK];
+
+  it('prices a cup of oats by its real cup weight, not 240 g', () => {
+    setFoodsForInterpreter(LIB);
+    const cup = interpretTextSync('1 cup rolled oats', LIB);
+    // 90 g per cup, not 240: the old behaviour charged 2.7x the calories.
+    expect(cup[0].amountG).toBeCloseTo(90, 0);
+    expect(cup[0].amountMl).toBeNull();
+    const threeQuarters = interpretTextSync('3/4 cup oats', LIB);
+    expect(threeQuarters[0].amountG).toBeCloseTo(67.5, 0);
+  });
+
+  it('leaves liquids as volume (1 ml ~ 1 g for water-dense drinks)', () => {
+    setFoodsForInterpreter(LIB);
+    const milk = interpretTextSync('1 cup milk', LIB);
+    expect(milk[0].amountMl).toBe(240);
+    expect(milk[0].amountG).toBeNull();
+  });
+
+  it('does not convert a liquid whose name contains a staple token', () => {
+    setFoodsForInterpreter(LIB);
+    const oatMilk = interpretTextSync('1 cup oat milk', LIB);
+    expect(oatMilk[0].amountMl).toBe(240);
+  });
+
+  it('leaves an untabled food as volume', () => {
+    setFoodsForInterpreter(LIB);
+    const mystery = interpretTextSync('1 cup zzyzx blend', LIB);
+    expect(mystery[0].amountMl).toBe(240);
+  });
+});

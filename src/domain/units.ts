@@ -8,6 +8,9 @@
 
 export type NormalizedUnit = 'g' | 'ml';
 
+/** US cup volume in ml — single source for the cup factor and cup densities. */
+export const CUP_ML = 240;
+
 export interface UnitDef {
   /** canonical grams/ml factor (multiply amount) */
   factor: number;
@@ -37,7 +40,7 @@ const WEIGHT_UNITS: UnitDef[] = [
 const VOLUME_UNITS: UnitDef[] = [
   { factor: 1000, kind: 'ml', aliases: ['l', 'l.', 'liter', 'liters', 'litre', 'litres', 'لتر', 'ltr'] },
   { factor: 1, kind: 'ml', aliases: ['ml', 'ml.', 'milliliter', 'milliliters', 'millilitre', 'millilitres', 'مل', 'ملليلتر'] },
-  { factor: 240, kind: 'ml', aliases: ['cup', 'cups', 'tasse', 'tassen', 'taza', 'tazas', 'coupe', 'coupes', 'كوب', 'أكواب'] },
+  { factor: CUP_ML, kind: 'ml', aliases: ['cup', 'cups', 'tasse', 'tassen', 'taza', 'tazas', 'coupe', 'coupes', 'كوب', 'أكواب'] },
   { factor: 15, kind: 'ml', aliases: ['tbsp', 'tbsps', 'tablespoon', 'tablespoons', 'el', 'eßl', 'càs', 'cuillère à soupe', 'ملعقة كبيرة'] },
   { factor: 5, kind: 'ml', aliases: ['tsp', 'tsps', 'teaspoon', 'teaspoons', 'tl', 'cc', 'cuillère à café', 'ملعقة صغيرة'] },
 ];
@@ -59,6 +62,67 @@ export const PER_PIECE_GRAMS: Record<string, number> = {
   // fallback for unknown piece
   '__default_piece': 40,
 };
+
+/**
+ * GRAMS PER US CUP (240 ml) for dry staples, used when a *volume* amount is
+ * applied to a solid.
+ *
+ * Why this exists: the interpreter prices `amountG ?? amountMl ?? 100`, so a
+ * cup of anything used to be charged as 240 g. That is right for water-dense
+ * liquids (milk 1.03 g/ml, juice 1.04) and wrong by 2-3x for dry staples —
+ * "1 cup rolled oats" is ~90 g, not 240 g, i.e. 341 kcal instead of 910.
+ * Cup-measured dry staples are a normal logging pattern in the real-user data
+ * ("3/4 cup rolled oats"), so the error was both large and frequent.
+ *
+ * Deliberately narrow: only cup-family units, only these keys, and never when
+ * a liquid token is present ("1 cup oat milk" stays a volume). Values are the
+ * usual USDA household-measure weights.
+ */
+export const CUP_GRAMS: Record<string, number> = {
+  'oat': 90, 'oatmeal': 90, 'flour': 125, 'sugar': 200, 'rice': 185,
+  'cereal': 40, 'granola': 110, 'cornmeal': 160, 'couscous': 175,
+  'quinoa': 170, 'lentil': 190, 'lentils': 190, 'cocoa': 85,
+};
+
+/** Tokens that mean "this cup is a liquid" — never apply CUP_GRAMS then. */
+const LIQUID_TOKENS: ReadonlySet<string> = new Set([
+  'milk', 'water', 'juice', 'drink', 'soda', 'cola', 'tea', 'coffee', 'oil',
+  'cream', 'broth', 'stock', 'soup', 'vinegar', 'sauce', 'syrup', 'yogurt',
+  'yoghurt', 'smoothie', 'wine', 'beer', 'milkshake', 'lait', 'laitier',
+]);
+
+/** Cup-family unit aliases (mirrors VOLUME_UNITS' cup entry). */
+const CUP_ALIASES: ReadonlySet<string> = new Set(
+  ['cup', 'cups', 'tasse', 'tassen', 'taza', 'tazas', 'coupe', 'coupes', 'كوب', 'أكواب'],
+);
+
+export function isCupUnit(unitRaw: string | null | undefined): boolean {
+  if (!unitRaw) return false;
+  return CUP_ALIASES.has(normalizeAlias(unitRaw));
+}
+
+/**
+ * Grams for one cup of the hinted food, or null when the hint is not one of
+ * the tabled dry staples (or names a liquid). Token-set matching, not
+ * substring, so "oat milk" cannot match 'oat' and "rice krispies" only
+ * matches when 'rice' is a whole token.
+ */
+export function cupGramsFor(foodHint: string | null | undefined): number | null {
+  if (!foodHint) return null;
+  const tokens = new Set(
+    foodHint.toLowerCase().normalize('NFKC')
+      .replace(/[^a-z0-9\u00C0-\u024F\s]/g, ' ')
+      .split(/\s+/).filter(Boolean)
+      .map(t => (t.length > 3 && t.endsWith('s') && !t.endsWith('ss') ? t.slice(0, -1) : t)),
+  );
+  for (const t of tokens) if (LIQUID_TOKENS.has(t)) return null;
+  for (const [key, grams] of Object.entries(CUP_GRAMS)) {
+    const k = key.length > 3 && key.endsWith('s') ? key.slice(0, -1) : key;
+    if (tokens.has(k)) return grams;
+  }
+  return null;
+}
+
 
 const ALL_UNITS: UnitDef[] = [...WEIGHT_UNITS, ...VOLUME_UNITS];
 
