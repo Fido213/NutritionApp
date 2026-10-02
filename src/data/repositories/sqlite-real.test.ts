@@ -166,6 +166,28 @@ describe('FoodRepository on a real SQLite database', () => {
     expect(reused.calories_per_100g).toBe(130);
   });
 
+  it('upsertFromAI stores medoid provenance and keeps measured zeros (P1.6)', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+
+    // The estimated row's values are a real supporter row's measurements, so
+    // the supporter id must survive to storage — that is the entire point of
+    // the medoid snap. It used to be hardcoded to null on the insert path.
+    const created = await repo.upsertFromAI('Zzyzx stew', {
+      calories_per_100g: 88, protein_per_100g: 6, carbs_per_100g: 0, fat_per_100g: 0,
+      water_per_100g: 0, source_reference: 'supporter-row-id',
+    }, 0.5);
+    expect(created.source_reference).toBe('supporter-row-id');
+    // A measured 0 is a value: `|| null` used to erase it into "unknown".
+    expect(created.carbs_per_100g).toBe(0);
+    expect(created.fat_per_100g).toBe(0);
+    expect(created.water_per_100g).toBe(0);
+    // Absent nutrients stay absent.
+    const sparse = await repo.upsertFromAI('Sparse food', { calories_per_100g: 10 }, 0.4);
+    expect(sparse.protein_per_100g).toBeNull();
+    expect(sparse.source_reference).toBeNull();
+  });
+
   it('upsertFromAI keys agree with resolveFood lookups (P1.4, no forked dupes)', async () => {
     const { conn } = createRealDb();
     const repo = new FoodRepository(conn);

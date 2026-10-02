@@ -266,14 +266,21 @@ export class FoodRepository {
     return this.insert({
       canonical_name: canonicalName,
       normalized_name: normalized || stripped,
-      calories_per_100g: nutrients.calories_per_100g || null,
-      protein_per_100g: nutrients.protein_per_100g || null,
-      carbs_per_100g: nutrients.carbs_per_100g || null,
-      fat_per_100g: nutrients.fat_per_100g || null,
-      water_per_100g: nutrients.water_per_100g || null,
+      // `??`, not `||`: a measured 0 (0-carb meat, 0-kcal drink, 0-fat
+      // vinegar) is a value, not an absence. `||` stored NULL for it, which
+      // is indistinguishable from "unknown" in every reader and export.
+      calories_per_100g: nutrients.calories_per_100g ?? null,
+      protein_per_100g: nutrients.protein_per_100g ?? null,
+      carbs_per_100g: nutrients.carbs_per_100g ?? null,
+      fat_per_100g: nutrients.fat_per_100g ?? null,
+      water_per_100g: nutrients.water_per_100g ?? null,
       nutrition_basis: 'per_100g',
       source_type: 'ai_estimate',
-      source_reference: null,
+      // Medoid provenance (fallback-estimate.ts supporterId, passed by
+      // FoodService.resolveFood): the stored estimate's values are this real
+      // row's measurements. Dropping it here broke the one thing the medoid
+      // snap exists for — "stored estimates trace to a real row".
+      source_reference: nutrients.source_reference ?? null,
       confidence,
     });
   }
