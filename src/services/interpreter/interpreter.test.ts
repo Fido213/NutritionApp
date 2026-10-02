@@ -344,3 +344,49 @@ describe('E3 combo split (quantity-less multi-food spans)', () => {
     expect(out.every(s => !s.wasDefault)).toBe(true);
   });
 });
+
+/**
+ * Retrieval acceptance: a food name may only be adopted with evidence.
+ *
+ * The lexical channel scores only rows sharing a query token, so any lexical
+ * hit is evidence. The semantic channel is a hashed char-3-gram cosine whose
+ * brute-force ranker never filters zero-similarity rows, so with an EMPTY
+ * lexical shortlist it still returns some row. Before this rule that row's
+ * canonical name was adopted unconditionally: "riz" (a real French word in no
+ * library here) logged as "Apple, raw", and FoodService then minted that row
+ * as the user's food. Measured hash cosines (see SEMANTIC_ONLY_MIN):
+ *   zzyzx 0.000 | war2a 3enab 0.203 | sheesh tawook 0.134 | riz 0.000
+ *   chiken brest 0.309 (a genuine typo of "chicken breast")
+ * The floor 0.3 sits in the gap between unrelated (<=0.203) and real typo.
+ */
+describe('retrieval acceptance — no silently wrong food', () => {
+  const APPLE = { id: 'a', canonical_name: 'Apple, raw', normalized_name: 'apple raw' } as any;
+  const CHICKEN = { id: 'c', canonical_name: 'Chicken, breast, grilled', normalized_name: 'chicken breast grilled' } as any;
+  const LIB = [APPLE, CHICKEN];
+
+  it('keeps the user phrase when nothing in the library shares a token', () => {
+    setFoodsForInterpreter(LIB);
+    expect(interpretTextSync('riz')[0].canonicalName).toBe('riz');
+    expect(interpretTextSync('war2a 3enab')[0].canonicalName).toBe('war2a 3enab');
+    expect(interpretTextSync('sheesh tawook')[0].canonicalName).toBe('sheesh tawook');
+  });
+
+  it('keeps the phrase on the async path too (mirror discipline)', async () => {
+    const { interpretText } = await import('./index');
+    setFoodsForInterpreter(LIB);
+    const out = await interpretText('riz', LIB);
+    expect(out[0].canonicalName).toBe('riz');
+  });
+
+  it('still adopts a row the lexical channel matched', () => {
+    setFoodsForInterpreter(LIB);
+    expect(interpretTextSync('apple')[0].canonicalName).toBe('Apple, raw');
+    expect(interpretTextSync('chicken breast')[0].canonicalName).toBe('Chicken, breast, grilled');
+  });
+
+  it('keeps typo recovery when the hash channel has real evidence', () => {
+    setFoodsForInterpreter(LIB);
+    // Both tokens misspelled -> zero lexical hits; hash cosine 0.309 clears the floor.
+    expect(interpretTextSync('chiken brest')[0].canonicalName).toBe('Chicken, breast, grilled');
+  });
+});

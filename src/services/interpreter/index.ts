@@ -173,6 +173,39 @@ function dropNegatedSpans<T extends { span: [number, number] }>(text: string, sp
 }
 
 /**
+ * Minimum hashed-trigram cosine before a semantic-ONLY winner may name a food.
+ *
+ * The lexical channel only scores rows that share a token with the phrase, so a
+ * lexical hit is always evidence that the row is related. The semantic channel
+ * is a hashed char-3-gram cosine whose brute-force path (`rankFoods` in
+ * faiss-bridge) never filters zero-similarity rows: with an EMPTY lexical
+ * shortlist (every query token unknown — typos, transliterations, brand names)
+ * it still returns *some* row, and the previous code adopted that row's
+ * canonical name unconditionally. That silently logs a food the user never
+ * mentioned (`war2a 3enab` -> whatever the hash ranked first) and, via
+ * FoodService.resolveFood -> upsertFromAI, mints a wrong library row.
+ *
+ * Typo recovery is real and stays: a misspelling shares character trigrams
+ * ("chiken" vs "Chicken"), so it clears this floor. An unrelated phrase does
+ * not, and falls back to the user's own words — which resolveFood then runs
+ * through alias -> name -> head-median fallback, producing an honest
+ * user-named estimate row instead of a confidently wrong reference row.
+ * Measured, not guessed: see the acceptance tests in interpreter.test.ts.
+ */
+export const SEMANTIC_ONLY_MIN = 0.3;
+
+/**
+ * The name this span should be logged under. `exact` (normalized-name
+ * equality) and any lexical hit are accepted as-is; a semantic-only winner
+ * must carry real hash evidence, otherwise the user's phrase is kept.
+ */
+function adoptedCanonicalName(best: RetrievalHit | undefined, spanText: string): string {
+  if (!best) return spanText;
+  if (best.method === 'exact' || best.lexicalScore > 0) return best.food.canonical_name;
+  return best.semanticScore >= SEMANTIC_ONLY_MIN ? best.food.canonical_name : spanText;
+}
+
+/**
  * Main entry — text like "250g poulet, 100g riz" (any lang) -> spans with amounts.
  * Amounts are aligned to NER spans by proximity (nearest qty).
  */
@@ -246,7 +279,7 @@ export async function interpretText(
     if (g < 0 || g > 5000) continue;
 
     out.push({
-      canonicalName: best ? best.food.canonical_name : span.text,
+      canonicalName: adoptedCanonicalName(best, span.text),
       amountG,
       amountMl,
       confidence: retrievalScore < 0.4 ? Math.min(amt.confidence, 0.68) : amt.confidence,
@@ -311,7 +344,7 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
     const g = amt.amountG ?? amt.amountMl ?? 0;
     if (g < 0 || g > 5000) continue;
     out.push({
-      canonicalName: best ? best.food.canonical_name : span.text,
+      canonicalName: adoptedCanonicalName(best, span.text),
       amountG: amt.amountG, amountMl: amt.amountMl,
       confidence: retrievalScore < 0.4 ? Math.min(amt.confidence, 0.68) : amt.confidence,
       isComposite: !!span.isCompositeHint,
