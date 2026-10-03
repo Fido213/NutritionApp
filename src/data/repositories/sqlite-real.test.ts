@@ -1279,3 +1279,44 @@ describe('LogRepository.getFoodLogCounts on a real SQLite database', () => {
     expect((await new LogRepository(conn).getFoodLogCounts()).size).toBe(0);
   });
 });
+
+describe('LogRepository.getTypicalAmountGrams (E3 personal portion prior)', () => {
+  const ins = (conn: any, foodId: string, amountG: number | null) =>
+    conn.run(
+      `INSERT INTO food_logs (id, date, food_id, amount_g, calories, protein_g, carbs_g, fat_g, created_at)
+       VALUES (?, '2026-10-02', ?, ?, 0, 0, 0, 0, '2026-10-02T00:00:00.000Z')`,
+      [`l${Math.random().toString(36).slice(2)}`, foodId, amountG]
+    );
+  const seedFood = (conn: any, name: string) =>
+    new FoodRepository(conn).insert({
+      canonical_name: name, normalized_name: name.toLowerCase(),
+      calories_per_100g: 100, protein_per_100g: 1, carbs_per_100g: 1, fat_per_100g: 1,
+      water_per_100g: 0, nutrition_basis: 'per_100g', source_type: 'user_entered', confidence: 1,
+    } as any);
+
+  it('returns the median logged grams and ignores null amounts', async () => {
+    const { conn } = createRealDb();
+    const repo = new LogRepository(conn);
+    const chicken = await seedFood(conn, 'Chicken');
+    await ins(conn, chicken.id, 40);
+    await ins(conn, chicken.id, 60);
+    await ins(conn, chicken.id, 80);
+    await ins(conn, chicken.id, null);      // legacy row with no amount: ignored
+    expect(await repo.getTypicalAmountGrams(chicken.id)).toBe(60);   // 40,60,80 -> 60
+    await ins(conn, chicken.id, 100);                                // 40,60,80,100 -> 70
+    expect(await repo.getTypicalAmountGrams(chicken.id)).toBe(70);
+  });
+
+  it('is per food, and null when a food has no history', async () => {
+    const { conn } = createRealDb();
+    const repo = new LogRepository(conn);
+    const chicken = await seedFood(conn, 'Chicken');
+    const butter = await seedFood(conn, 'Butter');
+    const never = await seedFood(conn, 'Never Logged');
+    await ins(conn, chicken.id, 250);
+    await ins(conn, butter.id, 30);
+    expect(await repo.getTypicalAmountGrams(chicken.id)).toBe(250);
+    expect(await repo.getTypicalAmountGrams(butter.id)).toBe(30);
+    expect(await repo.getTypicalAmountGrams(never.id)).toBeNull();
+  });
+});

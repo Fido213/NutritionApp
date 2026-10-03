@@ -180,7 +180,11 @@ export class FoodService {
             protein_per_100g: fb.nutrients.protein,
             carbs_per_100g: fb.nutrients.carbs,
             fat_per_100g: fb.nutrients.fat,
-            water_per_100g: 0,
+            // Medoid-snap water (eval_fallback_v2): estimates stored 0, so
+            // food-derived hydration never reached the daily water total.
+            // Null passes through unchanged (repo insert floor keeps the
+            // old 0-row behavior exactly).
+            water_per_100g: fb.waterPer100g,
             // Medoid provenance: stored values are this real row's measured
             // macros (see FallbackEstimate.supporterId), not medians.
             source_reference: fb.supporterId,
@@ -204,6 +208,30 @@ export class FoodService {
   }
 
   /**
+   * E3 personal portion prior: when the interpreter had to ASSUME an amount
+   * (`wasDefault`, i.e. no quantity and no vague marker in the text), the flat
+   * 100 g default is replaced by the median grams this user has actually
+   * logged for exactly this food.
+   *
+   * Measured leave-one-out on 395 of the user's own labelled portions
+   * (`ai models/eval/measure_portion_prior.py`): the per-food median has MAE
+   * 44.5 g against 76.4 g for the flat default, and lands within ±25 % of the
+   * real portion 39.3 % of the time against 19.1 %. Only ever applied to an
+   * assumed amount — an explicit quantity is never overridden — and it stays
+   * flagged as an assumption (`wasDefault`), because it still is one.
+   */
+  private async withTypicalPortion(food: FoodReference, item: InterpretedFoodItem): Promise<InterpretedFoodItem> {
+    if (!item.wasDefault) return item;
+    try {
+      const typical = await this.logRepo.getTypicalAmountGrams(food.id);
+      if (typical === null || !Number.isFinite(typical) || typical <= 0 || typical > 5000) return item;
+      return { ...item, amountG: typical, amountMl: null };
+    } catch {
+      return item; // history is a nicety: a failed read keeps the flat default
+    }
+  }
+
+  /**
    * Log a single interpreted food item for a date:
    * resolve the food, record the observation, calculate nutrition deterministically,
    * insert the food log, and store any food-derived water separately.
@@ -215,21 +243,22 @@ export class FoodService {
    */
   async logTextEntry(date: string, rawInput: string, item: InterpretedFoodItem, markerId: string | null = null): Promise<LoggedTextEntry> {
     const food = await this.resolveFood(item, DEFAULT_NUTRIENT_ESTIMATE, extractSpanText(rawInput, item));
+    const effective = await this.withTypicalPortion(food, item);
     let observation = markerId ? await this.observationRepo.findById(markerId) : null;
     if (!observation) {
       observation = await this.observationRepo.insert({
         food_id: food.id,
         source_type: 'text',
-        estimated_amount: item.amountG ?? item.amountMl ?? 100,
-        final_amount: item.amountG ?? item.amountMl ?? 100,
-        amount_unit: item.amountMl !== null ? 'ml' : 'g',
-        confidence: item.confidence,
+        estimated_amount: effective.amountG ?? effective.amountMl ?? 100,
+        final_amount: effective.amountG ?? effective.amountMl ?? 100,
+        amount_unit: effective.amountMl !== null ? 'ml' : 'g',
+        confidence: effective.confidence,
         raw_input: rawInput,
-        interpretation_json: JSON.stringify(item),
+        interpretation_json: JSON.stringify(effective),
         user_corrected: 0
       });
     }
-    return this.insertEntryLogs(date, food, item, observation);
+    return this.insertEntryLogs(date, food, effective, observation);
   }
 
   /**
@@ -283,10 +312,11 @@ export class FoodService {
     const phrase = groupPhrase(rawInput, members);
     const resolved: Array<{ item: InterpretedFoodItem; food: FoodReference }> = [];
     for (const item of members) {
-      resolved.push({
-        item,
-        food: await this.resolveFood(item, DEFAULT_NUTRIENT_ESTIMATE, extractSpanText(rawInput, item)),
-      });
+      // Split members are quantity-less by construction, so the assumed-amount
+      // path is the common one here: give each member the user's own typical
+      // portion for that food when there is one.
+      const food = await this.resolveFood(item, DEFAULT_NUTRIENT_ESTIMATE, extractSpanText(rawInput, item));
+      resolved.push({ item: await this.withTypicalPortion(food, item), food });
     }
     const marker = await this.observationRepo.insert({
       food_id: null,

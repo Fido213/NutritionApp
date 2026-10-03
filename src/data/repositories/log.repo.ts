@@ -207,4 +207,33 @@ export class LogRepository {
     }
     return out;
   }
+
+  /**
+   * Median logged gram amount for one food, or null when the user has no
+   * history for it (E3 personal portion prior).
+   *
+   * Measured before wiring (`ai models/eval/measure_portion_prior.py`, 395 of
+   * this user's own labelled portions, leave-one-out): a per-food median beats
+   * the flat 100 g default by a wide margin where it exists — MAE 44.5 g vs
+   * 76.4 g, and within ±25 % of the real portion 39.3 % vs 19.1 %. A head-noun
+   * family median is the weaker but wider-coverage layer (65.6 g vs 83.6 g at
+   * 80 % coverage); it needs the food list, so it is not wired yet.
+   *
+   * One indexed lookup for a food that is being logged, only on the
+   * defaulted-amount path — never a scan of the log table.
+   */
+  async getTypicalAmountGrams(foodId: string): Promise<number | null> {
+    const res = await this.db.query(
+      `SELECT amount_g FROM food_logs
+       WHERE food_id = ? AND amount_g IS NOT NULL AND amount_g > 0
+       ORDER BY amount_g`,
+      [foodId]
+    );
+    const vals = ((res.values as Array<{ amount_g: number }>) || [])
+      .map(r => Number(r.amount_g))
+      .filter(v => Number.isFinite(v) && v > 0);
+    if (vals.length === 0) return null;
+    const mid = vals.length >> 1;
+    return vals.length % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+  }
 }

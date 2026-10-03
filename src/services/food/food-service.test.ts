@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { FoodRepository } from '@data/repositories/food.repo';
 import { LogRepository } from '@data/repositories/log.repo';
 import { ObservationRepository } from '@data/repositories/observation.repo';
@@ -455,6 +455,8 @@ describe('resolveFood P2 head-median fallback', () => {
     expect(upserted().confidence).toBeCloseTo(0.52, 5);
     // Medoid provenance: values trace to a real row, linked by id.
     expect(upserted().nutrients.source_reference).toBe('c0');
+    // Medoid-snap water (v2): the supporter's measured water, not a 0.
+    expect(upserted().nutrients.water_per_100g).toBe(65);
   });
 
   it('keeps the flat floor when head support is thin', async () => {
@@ -557,5 +559,73 @@ describe('E3 split-group logging (split for math, clustered for display)', () =>
     expect(groupPhrase('eggs, bacon', members)).toBe('eggs, bacon');
     const spanless = members.map((m: any) => ({ ...m, span: undefined })) as any;
     expect(groupPhrase('eggs, bacon', spanless)).toBe('eggs, bacon');
+  });
+});
+
+describe('E3 personal portion prior (assumed amounts only)', () => {
+  const FOOD = {
+    id: 'f1', canonical_name: 'Chicken Breast', normalized_name: 'chicken breast',
+    calories_per_100g: 200, protein_per_100g: 10, carbs_per_100g: 25, fat_per_100g: 5,
+    water_per_100g: 0, nutrition_basis: 'per_100g', source_type: 'user_entered',
+    source_reference: null, confidence: 1, created_at: '', updated_at: '',
+  } as any;
+
+  function stubs(typical: number | null) {
+    const logs: any[] = [];
+    const foodRepo = {
+      findByAlias: async () => null,
+      findByNormalizedName: async () => FOOD,
+      toFoodReference: (f: any) => ({
+        id: f.id, canonicalName: f.canonical_name, caloriesPer100g: f.calories_per_100g,
+        proteinPer100g: f.protein_per_100g, carbsPer100g: f.carbs_per_100g,
+        fatPer100g: f.fat_per_100g, waterPer100g: f.water_per_100g,
+        nutritionBasis: f.nutrition_basis, confidence: f.confidence, sourceType: f.source_type,
+      }),
+      upsertFromAI: async () => FOOD,
+      findById: async () => FOOD,
+    };
+    const logRepo = {
+      getTypicalAmountGrams: async () => typical,
+      insertFoodLog: async (l: any) => { logs.push(l); return { id: 'log1', ...l }; },
+      getFoodLogCounts: async () => new Map<string, number>(),
+    };
+    const observationRepo = { insert: async (o: any) => ({ id: 'obs1', ...o }), findById: async () => null };
+    const waterRepo = { insertWaterLog: async (w: any) => w };
+    const aliasRepo = { findByNormalized: async () => null, create: async (a: any) => a, deleteByNormalized: async () => {} };
+    const service = new FoodService(foodRepo as any, logRepo as any, observationRepo as any, waterRepo as any, aliasRepo as any);
+    return { service, logs };
+  }
+
+  it('uses the user\'s own median portion when the amount was ASSUMED', async () => {
+    const { service, logs } = stubs(250);
+    const [r] = await service.logTextInput('2026-10-02', 'chicken breast', [
+      { canonicalName: 'Chicken Breast', amountG: 100, amountMl: null, confidence: 0.65, isComposite: false, wasDefault: true } as any,
+    ]);
+    expect(logs[0].amount_g).toBe(250);          // 250 g instead of the flat 100 g
+    expect(r.nutrition.calories).toBe(500);      // 200 kcal/100 g x 2.5
+  });
+
+  it('never overrides an explicitly stated amount', async () => {
+    const { service, logs } = stubs(250);
+    await service.logTextInput('2026-10-02', '150g chicken breast', [
+      { canonicalName: 'Chicken Breast', amountG: 150, amountMl: null, confidence: 0.9, isComposite: false, wasDefault: false } as any,
+    ]);
+    expect(logs[0].amount_g).toBe(150);
+  });
+
+  it('keeps the flat default when the user has no history for that food', async () => {
+    const { service, logs } = stubs(null);
+    await service.logTextInput('2026-10-02', 'chicken breast', [
+      { canonicalName: 'Chicken Breast', amountG: 100, amountMl: null, confidence: 0.65, isComposite: false, wasDefault: true } as any,
+    ]);
+    expect(logs[0].amount_g).toBe(100);
+  });
+
+  it('ignores an implausible stored median (never fabricates a portion)', async () => {
+    const { service, logs } = stubs(99999);
+    await service.logTextInput('2026-10-02', 'chicken breast', [
+      { canonicalName: 'Chicken Breast', amountG: 100, amountMl: null, confidence: 0.65, isComposite: false, wasDefault: true } as any,
+    ]);
+    expect(logs[0].amount_g).toBe(100);
   });
 });
