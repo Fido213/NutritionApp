@@ -14,6 +14,7 @@ import { cacheFoodEmbeddings } from './faiss-bridge';
 import { resolveVagueMarker, governedByNegation, stripReceiptTail } from './lexicon';
 import { splitComboSegments, groundSegments, segmentResolves } from './combo-split';
 import { isCupUnit, cupGramsFor, CUP_ML } from '@domain/units';
+import { normalizeFoodName } from '@domain/logging';
 import type { ScriptTag } from './language';
 import type { Food } from '@data/types';
 
@@ -48,15 +49,72 @@ export interface InterpretedSpan {
 let foodsCache: Food[] | null = null;
 /** Library generation the cached BM25 index was built from (-1 = cold). */
 let indexedVersion = -1;
+/** alias phrase (normalized) -> food id, for the pre-retrieval alias step. */
+let aliasToFoodId = new Map<string, string>();
+/** Alias-map size the warm index was built with (part of the rebuild gate). */
+let indexedAliasCount = 0;
 
-export function setFoodsForInterpreter(foods: Food[], version?: number): void {
+/**
+ * Group alias rows by food id for the index and the alias short-circuit.
+ * Accepts the `food_aliases` row shape; phrases are stored raw plus their
+ * normalized key so a user typing either one lands on the row.
+ */
+export function buildAliasText(
+  aliases: Array<{ food_id: string; alias: string; normalized_alias: string }>,
+): Map<string, string[]> {
+  const byFood = new Map<string, string[]>();
+  for (const a of aliases) {
+    if (!a?.food_id) continue;
+    const phrases = [a.alias, a.normalized_alias].filter((p): p is string => !!p && p.trim().length > 0);
+    if (phrases.length === 0) continue;
+    const list = byFood.get(a.food_id);
+    if (list) list.push(...phrases);
+    else byFood.set(a.food_id, [...phrases]);
+  }
+  return byFood;
+}
+
+export function setFoodsForInterpreter(
+  foods: Food[],
+  version?: number,
+  aliasesByFood?: Map<string, string[]>,
+): void {
   // Version-gated rebuild: steady-state submits reuse the warm index (the
   // 39k-row refetch + rebuild every submit was the submit-path seconds).
-  // Callers without a version (tests, one-shots) always rebuild.
-  if (version !== undefined && version === indexedVersion && foodsCache) return;
+  // Callers without a version (tests, one-shots) always rebuild. The alias
+  // map is part of the gate: a user pin changes aliases without touching the
+  // food version, and a stale map would keep the old ranking.
+  const aliasCount = aliasesByFood?.size ?? 0;
+  if (version !== undefined && version === indexedVersion && foodsCache
+      && aliasCount === indexedAliasCount) return;
   foodsCache = foods;
   if (version !== undefined) indexedVersion = version;
-  buildBm25Index(foods);
+  indexedAliasCount = aliasCount;
+  aliasToFoodId = new Map();
+  if (aliasesByFood) {
+    for (const [foodId, phrases] of aliasesByFood) {
+      for (const p of phrases) {
+        const key = normalizeFoodName(p);
+        if (key && !aliasToFoodId.has(key)) aliasToFoodId.set(key, foodId);
+      }
+    }
+  }
+  buildBm25Index(foods, aliasesByFood);
+}
+
+/**
+ * Pre-retrieval alias step ("exact alias" in the retriever's documented
+ * cascade, which until now was never actually performed here): a phrase the
+ * user or the curated list has pinned resolves to its row outright, with
+ * `method: 'alias'` so callers and tests can see why.
+ */
+function aliasHit(spanText: string, foods: Food[]): RetrievalHit | null {
+  if (aliasToFoodId.size === 0) return null;
+  const id = aliasToFoodId.get(normalizeFoodName(spanText));
+  if (!id) return null;
+  const food = foods.find(f => f.id === id);
+  if (!food) return null;
+  return { food, score: 1, lexicalScore: 1, semanticScore: 0, method: 'alias', rank: 1 };
 }
 
 /** Generation currently indexed (tests + submit-path decisions). */
@@ -281,7 +339,12 @@ export async function interpretText(
 
   const out: InterpretedSpan[] = [];
   for (const span of work) {
-    const hybrid = preRetrieved.get(span.text) ? [preRetrieved.get(span.text)!] : await hybridRetrieve(span.text, foods, { topK: 3, counts: opts.counts });
+    const pinned = aliasHit(span.text, foods);
+    const hybrid = pinned
+      ? [pinned]
+      : preRetrieved.get(span.text)
+        ? [preRetrieved.get(span.text)!]
+        : await hybridRetrieve(span.text, foods, { topK: 3, counts: opts.counts });
     const best = hybrid[0];
     // Validate threshold: cos>0.72 or BM25>6/10 normalized >0.6
     // If below, mark low confidence but still return span text as canonical (will upsert as new food)
@@ -353,7 +416,12 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
 
   const out: InterpretedSpan[] = [];
   for (const span of work) {
-    const hybrid = preRetrieved.get(span.text) ? [preRetrieved.get(span.text)!] : hybridRetrieveSync(span.text, foods, 3, opts.counts);
+    const pinned = aliasHit(span.text, foods);
+    const hybrid = pinned
+      ? [pinned]
+      : preRetrieved.get(span.text)
+        ? [preRetrieved.get(span.text)!]
+        : hybridRetrieveSync(span.text, foods, 3, opts.counts);
     const best = hybrid[0];
     const retrievalScore = best?.score ?? 0;
     const method = best?.method ?? 'hybrid';

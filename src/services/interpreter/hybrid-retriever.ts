@@ -33,7 +33,19 @@ export interface RetrievalHit {
 }
 
 // In-memory BM25 fallback when SQLite FTS5 not available (web)
-interface Bm25Doc { id: string; terms: Map<string, number>; len: number; head: string[] }
+interface Bm25Doc {
+  id: string;
+  terms: Map<string, number>;
+  len: number;
+  head: string[];
+  /**
+   * Canonical-name-only preparation state. Alias text is indexed for MATCHING
+   * (so a colloquial or translated phrase reaches the row) but must never
+   * change this flag: an alias like "boiled rice" would otherwise demote its
+   * own plain row whenever the query names no preparation.
+   */
+  hasPrep: boolean;
+}
 let bm25Index: {
   docFreq: Map<string, number>;
   docs: Bm25Doc[];
@@ -46,15 +58,29 @@ let bm25Index: {
   totalLen: number;
 } | null = null;
 
-export function buildBm25Index(foods: Food[]): void {
+function canonicalHasPrep(canonicalText: string): boolean {
+  return [...new Set(tokenizeBM25(canonicalText))].some(t => PREP_WORDS.has(t));
+}
+
+/**
+ * Build the lexical index. `aliasText` maps a food id to its alias phrases
+ * (curated + user pins, from the food_aliases table): indexing them is what
+ * lets "arroz blanco" or "white rice" reach a row named "Rice, cooked, NFS".
+ * Without it the retriever could not see aliases at all — they were applied
+ * only after retrieval, where they can override a wrong pick but never rank.
+ */
+export function buildBm25Index(foods: Food[], aliasText?: Map<string, string[]>): void {
   const docs: Bm25Doc[] = [];
   const docFreq = new Map<string, number>();
   const postings = new Map<string, number[]>();
   const byId = new Map<string, Food>();
   let totalLen = 0;
   for (const f of foods) {
-    const text = `${f.canonical_name} ${f.normalized_name}`;
-    const terms = tokenizeBM25(text);
+    const canonicalText = `${f.canonical_name} ${f.normalized_name}`;
+    const canonicalTerms = tokenizeBM25(canonicalText);
+    const aliases = aliasText?.get(f.id);
+    const terms = [...canonicalTerms];
+    if (aliases?.length) for (const a of aliases) terms.push(...tokenizeBM25(a));
     const tf = new Map<string, number>();
     for (const t of terms) tf.set(t, (tf.get(t) || 0) + 1);
     const idx = docs.length;
@@ -64,9 +90,20 @@ export function buildBm25Index(foods: Food[]): void {
       if (!list) { list = []; postings.set(t, list); }
       list.push(idx);
     }
-    docs.push({ id: f.id, terms: tf, len: terms.length, head: headOf(f.canonical_name) });
+    docs.push({
+      id: f.id, terms: tf,
+      // Length counts CANONICAL tokens only. Alias text is pure recall: it can
+      // match a query without diluting the row's canonical score through BM25's
+      // length normalisation. Measured (ai models/results/alias_ranking_report.json):
+      // length-including-aliases cost English hit@1 38.2 -> 33.8 % while
+      // canonical-length kept it at 38.2 % AND scored the non-English slice
+      // higher (60.9 % vs 51.6 % hit@1).
+      len: canonicalTerms.length,
+      head: headOf(f.canonical_name),
+      hasPrep: canonicalHasPrep(canonicalText),
+    });
     byId.set(f.id, f);
-    totalLen += terms.length;
+    totalLen += canonicalTerms.length;
   }
   bm25Index = { docFreq, docs, postings, byId, avgLen: foods.length ? totalLen / foods.length : 1, N: foods.length, totalLen };
 }
@@ -102,9 +139,9 @@ function removeDocFromIndex(idx: number): void {
 function appendDocToIndex(food: Food): void {
   if (!bm25Index) return;
   const text = `${food.canonical_name} ${food.normalized_name}`;
-  const terms = tokenizeBM25(text);
+  const canonicalTerms = tokenizeBM25(text);
   const tf = new Map<string, number>();
-  for (const t of terms) tf.set(t, (tf.get(t) || 0) + 1);
+  for (const t of canonicalTerms) tf.set(t, (tf.get(t) || 0) + 1);
   const idx = bm25Index.docs.length;
   for (const t of tf.keys()) {
     bm25Index.docFreq.set(t, (bm25Index.docFreq.get(t) || 0) + 1);
@@ -112,9 +149,13 @@ function appendDocToIndex(food: Food): void {
     if (!list) { list = []; bm25Index.postings.set(t, list); }
     list.push(idx);
   }
-  bm25Index.docs.push({ id: food.id, terms: tf, len: terms.length, head: headOf(food.canonical_name) });
+  bm25Index.docs.push({
+    id: food.id, terms: tf, len: canonicalTerms.length,
+    head: headOf(food.canonical_name),
+    hasPrep: canonicalHasPrep(text),
+  });
   bm25Index.byId.set(food.id, food);
-  bm25Index.totalLen += terms.length;
+  bm25Index.totalLen += canonicalTerms.length;
   bm25Index.N += 1;
 }
 
@@ -184,10 +225,8 @@ export function bm25Search(query: string, foods: Food[], topK = 8): Array<{ food
       // ("Apple, dried" is 10x the kcal of raw). When the query names no
       // preparation, candidates carrying one are demoted — never boosted away
       // entirely, just stopped from outranking the plain row on brevity.
-      if (prep.length === 0) {
-        const docPrep = [...doc.terms.keys()].filter(t => PREP_WORDS.has(t));
-        if (docPrep.length > 0) boosted *= 0.6;
-      }
+      // Canonical-name prep only: alias text must not trigger this.
+      if (prep.length === 0 && doc.hasPrep) boosted *= 0.6;
       return { food: foodById.get(id)!, score: boosted, rank: 0 };
     })
     .filter(h => h.food)

@@ -70,7 +70,7 @@ async function logTextInputInner(rawText: string) {
   // Try new interpreter first (offline, L12 + FP16). Needs food list for hybrid retrieval.
   let items: any[] | null = null;
   try {
-    const { interpretText, setFoodsForInterpreter, getInterpreterFoods, getIndexedVersion } = await import('@services/interpreter');
+    const { interpretText, setFoodsForInterpreter, getInterpreterFoods, getIndexedVersion, buildAliasText } = await import('@services/interpreter');
     // Version-gated: refetch + rebuild only when the library changed.
     // A failed refetch keeps the previous cache (possibly null → the
     // interpreter degrades to span-text logging, as before).
@@ -95,7 +95,11 @@ async function logTextInputInner(rawText: string) {
       try {
         if (cold) card?.setStage('Warming up search…');
         interpreterFoods = await ctx.foodRepo.getAllFoodsLight();
-        setFoodsForInterpreter(interpreterFoods, version);
+        // Aliases are part of the index, not a post-step: without them a
+        // curated or user-pinned phrase ("white rice", "arroz blanco") could
+        // never influence ranking, only override a pick afterwards.
+        const aliases = await ctx.aliasRepo.getAllAliases().catch(() => []);
+        setFoodsForInterpreter(interpreterFoods, version, buildAliasText(aliases));
         interpreterVersion = version;
         if (cold) {
           try { await interpretText('warmup probe', interpreterFoods.length ? interpreterFoods : null); }

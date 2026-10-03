@@ -135,7 +135,12 @@ async function initApp() {
     boot?.setStage('Warming up search…');
     try {
       const foods = await ctx.foodRepo.getAllFoodsLight();
-      setFoodsForInterpreter(foods, ctx.foodRepo.getVersion());
+      // Aliases ride the same warm: the curated list is applied just above,
+      // user pins persist in food_aliases, and indexing their phrases is what
+      // lets a colloquial/translated name reach its reference row.
+      const { buildAliasText } = await import('@services/interpreter');
+      const aliases = await ctx.aliasRepo.getAllAliases().catch(() => []);
+      setFoodsForInterpreter(foods, ctx.foodRepo.getVersion(), buildAliasText(aliases));
       // Prewarm the embedding cache + asset probes now (first submit's
       // hidden seconds otherwise): a throwaway interpret pays them here.
       try {

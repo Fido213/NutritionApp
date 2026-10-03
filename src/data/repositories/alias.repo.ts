@@ -44,6 +44,18 @@ export class AliasRepository {
   }
 
   /**
+   * Every alias row, for the interpreter's boot warm: the retriever indexes
+   * alias phrases so a curated or user-pinned name can influence RANKING
+   * (previously aliases were only consulted after retrieval, where they can
+   * override a wrong pick but never compete with it). Small table — a few
+   * curated rows plus one per user pin.
+   */
+  async getAllAliases(): Promise<FoodAlias[]> {
+    const res = await this.db.query(`SELECT * FROM food_aliases ORDER BY created_at ASC`);
+    return (res.values as FoodAlias[]) || [];
+  }
+
+  /**
    * Delete every alias row for a normalized phrase (any food). User defaults
    * move: re-pinning a phrase must not leave a stale mapping behind for the
    * reader (findByNormalized takes the first match) to trip over.

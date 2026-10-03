@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseQuantities } from './unit-parser';
 import { extractFoodSpansSync } from './ner-client';
-import { interpretTextSync, setFoodsForInterpreter, getIndexedVersion, getInterpreterFoods, patchInterpreterFoods } from './index';
+import { interpretTextSync, setFoodsForInterpreter, getIndexedVersion, getInterpreterFoods, patchInterpreterFoods, buildAliasText } from './index';
 import { bm25Search, buildBm25Index, addFoodsToIndex } from './hybrid-retriever';
 import { faissSearchSync, cacheFoodEmbeddings } from './faiss-bridge';
 import { normalizeAmount } from '@domain/units';
@@ -423,5 +423,79 @@ describe('cup-measured dry staples convert to grams (unit correctness)', () => {
     setFoodsForInterpreter(LIB);
     const mystery = interpretTextSync('1 cup zzyzx blend', LIB);
     expect(mystery[0].amountMl).toBe(240);
+  });
+});
+
+describe('alias indexing (curated + user pins reach ranking)', () => {
+  const RICE = { id: 'r', canonical_name: 'Rice, cooked, NFS', normalized_name: 'rice cooked nfs' } as any;
+  const RICE_PLAIN = { id: 'p', canonical_name: 'Rice, white, long-grain, regular, raw', normalized_name: 'rice white long grain regular raw' } as any;
+  const APPLE = { id: 'a', canonical_name: 'Apple, raw', normalized_name: 'apple raw' } as any;
+  const aliasRows = (foodId: string, phrase: string) => ([
+    { food_id: foodId, alias: phrase, normalized_alias: phrase.toLowerCase() },
+  ]);
+
+  it('lexically retrieves a translated alias that shares no token with the row', () => {
+    // "arroz blanco" has no character overlap with "Rice, cooked, NFS" beyond
+    // nothing at all — before alias indexing this query had zero lexical hits
+    // and fell through to the hash channel (an arbitrary row).
+    const lex = bm25Search('arroz blanco', [RICE, APPLE, RICE_PLAIN], 200);
+    expect(lex.length).toBe(0);
+    setFoodsForInterpreter([RICE, APPLE, RICE_PLAIN], undefined, buildAliasText(aliasRows('r', 'arroz blanco')));
+    const lex2 = bm25Search('arroz blanco', [RICE, APPLE, RICE_PLAIN], 200);
+    expect(lex2[0].food.id).toBe('r');
+    expect(interpretTextSync('arroz blanco')[0].canonicalName).toBe('Rice, cooked, NFS');
+  });
+
+  it('resolves a pinned phrase before retrieval and says so (method alias)', () => {
+    setFoodsForInterpreter([RICE, RICE_PLAIN], undefined, buildAliasText(aliasRows('r', 'white rice')));
+    const out = interpretTextSync('white rice');
+    expect(out[0].canonicalName).toBe('Rice, cooked, NFS');
+    expect(out[0].method).toBe('alias');
+    expect(out[0].retrievalScore).toBe(1);
+  });
+
+  it('alias text never demotes its own row via the prep-word rule', () => {
+    // An alias containing a preparation word ("boiled rice") must not count
+    // as the row's own prep state, or a generic query would demote it.
+    const BOILED = { id: 'b', canonical_name: 'Rice, cooked, NFS', normalized_name: 'rice cooked nfs' } as any;
+    const noAlias = bm25Search('rice', [BOILED], 5)[0].score;
+    setFoodsForInterpreter([BOILED], undefined, buildAliasText(aliasRows('b', 'boiled rice')));
+    const withAlias = bm25Search('rice', [BOILED], 5)[0].score;
+    expect(withAlias).toBeCloseTo(noAlias, 6);
+  });
+
+  it('alias text does not dilute canonical ranking (length counts canonical tokens)', () => {
+    // Measured in the workbench (ai models/results/alias_ranking_report.json):
+    // letting alias tokens into the document LENGTH cost English hit@1
+    // (38.2 -> 33.8 %), while canonical-only length kept it identical and
+    // scored the non-English slice higher. A distinct-script alias shares no
+    // token with any canonical name, so with the rule in place every score must
+    // be byte-identical.
+    setFoodsForInterpreter([RICE, RICE_PLAIN]);
+    const before = bm25Search('rice cooked nfs', [RICE, RICE_PLAIN], 5).map(h => [h.food.id, h.score]);
+    setFoodsForInterpreter([RICE, RICE_PLAIN], undefined, buildAliasText([
+      { food_id: 'r', alias: 'أرز أبيض', normalized_alias: 'أرز أبيض' },
+    ]));
+    const after = bm25Search('rice cooked nfs', [RICE, RICE_PLAIN], 5).map(h => [h.food.id, h.score]);
+    expect(after).toEqual(before);
+
+    // An alias sharing a token with a canonical name does move that token's
+    // document frequency, so a competitor's score may shift a hair — the
+    // ranking must not. (This is the residual second-order effect the length
+    // rule removes the first-order part of.)
+    setFoodsForInterpreter([RICE, RICE_PLAIN], undefined, buildAliasText([
+      { food_id: 'r', alias: 'white rice', normalized_alias: 'white rice' },
+    ]));
+    const shared = bm25Search('rice cooked nfs', [RICE, RICE_PLAIN], 5).map(h => h.food.id);
+    expect(shared).toEqual(before.map(x => x[0]));
+  });
+
+  it('rebuilds the index when only the alias map changed', () => {
+    setFoodsForInterpreter([RICE], 77, buildAliasText(aliasRows('r', 'arroz blanco')));
+    expect(getIndexedVersion()).toBe(77);
+    expect(interpretTextSync('arroz blanco')[0].method).toBe('alias');
+    // Same food version, empty alias map: the pin must stop applying.
+    setFoodsForInterpreter([RICE], 77, new Map());
+    expect(interpretTextSync('arroz blanco')[0].method).not.toBe('alias');
   });
 });
