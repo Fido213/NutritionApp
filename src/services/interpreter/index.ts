@@ -13,6 +13,7 @@ import { hybridRetrieve, hybridRetrieveSync, buildBm25Index, addFoodsToIndex, ty
 import { cacheFoodEmbeddings } from './faiss-bridge';
 import { resolveVagueMarker, governedByNegation, stripReceiptTail } from './lexicon';
 import { splitComboSegments, groundSegments, segmentResolves } from './combo-split';
+import { looksNonFood, looksNonFoodWhenUnexplained } from './non-food';
 import { isCupUnit, cupGramsFor, CUP_ML } from '@domain/units';
 import { normalizeFoodName } from '@domain/logging';
 import type { ScriptTag } from './language';
@@ -270,14 +271,22 @@ function dropNegatedSpans<T extends { span: [number, number] }>(text: string, sp
 export const SEMANTIC_ONLY_MIN = 0.3;
 
 /**
- * The name this span should be logged under. `exact` (normalized-name
- * equality) and any lexical hit are accepted as-is; a semantic-only winner
- * must carry real hash evidence, otherwise the user's phrase is kept.
+ * The name this span should be logged under, and whether any retrieval
+ * evidence backed it. `exact` (normalized-name equality), `alias` and any
+ * lexical hit are accepted as-is; a semantic-only winner must carry real hash
+ * evidence. `adopted: false` means the user's own phrase is being kept, i.e.
+ * nothing in the library explains this span.
  */
-function adoptedCanonicalName(best: RetrievalHit | undefined, spanText: string): string {
-  if (!best) return spanText;
-  if (best.method === 'exact' || best.lexicalScore > 0) return best.food.canonical_name;
-  return best.semanticScore >= SEMANTIC_ONLY_MIN ? best.food.canonical_name : spanText;
+function resolveAdoption(
+  best: RetrievalHit | undefined,
+  spanText: string,
+): { name: string; adopted: boolean } {
+  if (!best) return { name: spanText, adopted: false };
+  if (best.method === 'exact' || best.method === 'alias' || best.lexicalScore > 0) {
+    return { name: best.food.canonical_name, adopted: true };
+  }
+  if (best.semanticScore >= SEMANTIC_ONLY_MIN) return { name: best.food.canonical_name, adopted: true };
+  return { name: spanText, adopted: false };
 }
 
 /**
@@ -339,6 +348,12 @@ export async function interpretText(
 
   const out: InterpretedSpan[] = [];
   for (const span of work) {
+    // Plainly-not-food text (body stats, an instruction verb, a bare pronoun)
+    // is dropped before retrieval can dress it up as a row: measured on the
+    // real log, "speed" and "incline" were ADOPTED (Hemp seed, Marsala wine)
+    // through a trigram coincidence, so relying on "no winner -> drop" left
+    // permanent junk rows behind.
+    if (looksNonFood(span.text)) continue;
     const pinned = aliasHit(span.text, foods);
     const hybrid = pinned
       ? [pinned]
@@ -346,6 +361,12 @@ export async function interpretText(
         ? [preRetrieved.get(span.text)!]
         : await hybridRetrieve(span.text, foods, { topK: 3, counts: opts.counts });
     const best = hybrid[0];
+    const adoption = resolveAdoption(best, span.text);
+    // Nothing in the library explains this span and it reads as exercise
+    // telemetry: drop it rather than mint a permanent junk row. A span the
+    // library CAN explain never gets here, so real foods are untouched.
+    // Dropping is visible: with no items left, the UI hands the text back.
+    if (!adoption.adopted && looksNonFoodWhenUnexplained(span.text)) continue;
     // Validate threshold: cos>0.72 or BM25>6/10 normalized >0.6
     // If below, mark low confidence but still return span text as canonical (will upsert as new food)
     const retrievalScore = best?.score ?? 0;
@@ -359,7 +380,7 @@ export async function interpretText(
     if (g < 0 || g > 5000) continue;
 
     out.push({
-      canonicalName: adoptedCanonicalName(best, span.text),
+      canonicalName: adoption.name,
       amountG,
       amountMl,
       confidence: retrievalScore < 0.4 ? Math.min(amt.confidence, 0.68) : amt.confidence,
@@ -423,13 +444,15 @@ export function interpretTextSync(rawInput: string, foods: Food[] | null = foods
         ? [preRetrieved.get(span.text)!]
         : hybridRetrieveSync(span.text, foods, 3, opts.counts);
     const best = hybrid[0];
+    const adoption = resolveAdoption(best, span.text);
+    if (looksNonFood(span.text) || (!adoption.adopted && looksNonFoodWhenUnexplained(span.text))) continue;
     const retrievalScore = best?.score ?? 0;
     const method = best?.method ?? 'hybrid';
     const amt = resolveSpanAmount(text, span.text, span.span, span.confidence, qtys, opts.defaultGrams ?? 100);
     const g = amt.amountG ?? amt.amountMl ?? 0;
     if (g < 0 || g > 5000) continue;
     out.push({
-      canonicalName: adoptedCanonicalName(best, span.text),
+      canonicalName: adoption.name,
       amountG: amt.amountG, amountMl: amt.amountMl,
       confidence: retrievalScore < 0.4 ? Math.min(amt.confidence, 0.68) : amt.confidence,
       isComposite: !!span.isCompositeHint,

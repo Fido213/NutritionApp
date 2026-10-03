@@ -499,3 +499,34 @@ describe('alias indexing (curated + user pins reach ranking)', () => {
     expect(interpretTextSync('arroz blanco')[0].method).not.toBe('alias');
   });
 });
+
+describe('non-food spans never become food rows', () => {
+  const CHICKEN = { id: 'c', canonical_name: 'Chicken, breast, grilled', normalized_name: 'chicken breast grilled' } as any;
+
+  it('drops body stats, telemetry and instructions instead of minting a row', () => {
+    setFoodsForInterpreter([CHICKEN]);
+    expect(interpretTextSync("I'm 68 kg", [CHICKEN])).toHaveLength(0);
+    expect(interpretTextSync('68 kg 173 cm height', [CHICKEN])).toHaveLength(0);
+    expect(interpretTextSync('Speed 3, incline 2, time 30 minutes, treadmill', [CHICKEN])).toHaveLength(0);
+    expect(interpretTextSync('Test', [CHICKEN])).toHaveLength(0);
+  });
+
+  it('keeps the food spans of a mixed message', () => {
+    setFoodsForInterpreter([CHICKEN]);
+    const out = interpretTextSync('100g chicken breast\ntreadmill 30 minutes', [CHICKEN]);
+    expect(out.length).toBeGreaterThanOrEqual(1);
+    expect(out.some(s => (s.canonicalName ?? '').includes('Chicken'))).toBe(true);
+    expect(out.some(s => /treadmill|minutes/i.test(s.canonicalName ?? ''))).toBe(false);
+  });
+
+  it('keeps a real product whose name carries a telemetry word', () => {
+    // Telemetry words are checked ONLY for spans nothing can explain, because
+    // real names carry them ("Minute Maid" matches the minutes? pattern). A
+    // library-explained span is never dropped pre-retrieval.
+    const MAID = { id: 'm', canonical_name: 'Minute Maid Orange Juice', normalized_name: 'minute maid orange juice' } as any;
+    setFoodsForInterpreter([MAID]);
+    const out = interpretTextSync('minute maid orange juice', [MAID]);
+    expect(out).toHaveLength(1);
+    expect(out[0].canonicalName).toBe('Minute Maid Orange Juice');
+  });
+});
