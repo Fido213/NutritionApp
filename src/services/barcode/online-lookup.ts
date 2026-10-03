@@ -35,12 +35,14 @@ interface OffProductResponse {
   } | null;
 }
 
-function toFiniteNonNegative(value: unknown): number | null {
+/** Shared with the E2 enrichment search client (same OFF nutriments shape). */
+export function toFiniteNonNegative(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
   return Math.round(value * 10) / 10;
 }
 
-function energyKcal(nutriments: Record<string, unknown>): number | null {
+/** Shared with the E2 enrichment search client (kJ-first labels included). */
+export function energyKcal(nutriments: Record<string, unknown>): number | null {
   const kcal = toFiniteNonNegative(nutriments['energy-kcal_100g']);
   if (kcal !== null) return kcal;
   const kj = toFiniteNonNegative(nutriments['energy_100g']);

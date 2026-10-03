@@ -1,3 +1,5 @@
+import type { SourceType } from '@data/types';
+
 export interface FoodReference {
   id: string;
   canonicalName: string;
@@ -8,7 +10,7 @@ export interface FoodReference {
   waterPer100g: number | null;
   nutritionBasis: 'per_100g' | 'per_100ml' | 'per_serving';
   confidence: number | null;
-  sourceType: 'ai_estimate' | 'barcode' | 'nutrition_label' | 'user_entered' | 'imported';
+  sourceType: SourceType;
 }
 
 export interface NutritionResult {

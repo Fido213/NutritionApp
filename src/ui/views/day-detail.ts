@@ -94,6 +94,11 @@ export function confidenceLabel(
     if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'estimated';
     return `estimated · ${Math.round(confidence * 100)}%`;
   }
+  // E2 enrichment tier: measured online values, crowd-sourced provenance.
+  if (sourceType === 'online_match') {
+    if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'online';
+    return `online · ${Math.round(confidence * 100)}%`;
+  }
   if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return 'no estimate';
   return `${Math.round(confidence * 100)}% sure`;
 }

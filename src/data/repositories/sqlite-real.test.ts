@@ -150,6 +150,26 @@ describe('FoodRepository on a real SQLite database', () => {
     expect(updated?.updated_at).toBeTruthy();
   });
 
+  it('getFoodsBySourceType returns only that source, with a bound (E2 sweep)', async () => {
+    const { conn } = createRealDb();
+    const repo = new FoodRepository(conn);
+
+    await repo.insert({
+      canonical_name: 'Imported Thing', normalized_name: 'imported thing',
+      calories_per_100g: 100, protein_per_100g: 1, carbs_per_100g: 1, fat_per_100g: 1,
+      nutrition_basis: 'per_100g', source_type: 'imported', confidence: 1,
+    } as any);
+    const e1 = await repo.upsertFromAI('Estimate One', { calories_per_100g: 200 }, 0.5);
+    const e2 = await repo.upsertFromAI('Estimate Two', { calories_per_100g: 300 }, 0.5);
+
+    const rows = await repo.getFoodsBySourceType('ai_estimate');
+    expect(rows.map(r => r.id).sort()).toEqual([e1.id, e2.id].sort());
+    expect(rows.every(r => r.source_type === 'ai_estimate')).toBe(true);
+    // Bounded: the sweep must never page the whole library through the bridge.
+    expect((await repo.getFoodsBySourceType('ai_estimate', 1)).length).toBe(1);
+    expect(await repo.getFoodsBySourceType('online_match')).toEqual([]);
+  });
+
   it('upsertFromAI inserts an unknown food and reuses a known one', async () => {
     const { conn } = createRealDb();
     const repo = new FoodRepository(conn);

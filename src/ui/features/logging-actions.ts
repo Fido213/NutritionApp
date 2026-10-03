@@ -213,6 +213,37 @@ async function logTextInputInner(rawText: string) {
   } catch { /* next submit re-evaluates the version gate */ }
   console.debug('[logTextInput:timings] ms since submit:', marks);
   showToast(`Logged ${results.length} item(s) · ${Math.round(totalCal)} kcal${assumed > 0 ? ` · ${assumed} amount(s) assumed — tap to correct` : ''}`);
+  // E2: background enrichment for fresh estimates (opt-in toggle, silent).
+  // Fire-and-forget behind the toast — never delays or breaks logging.
+  void enrichFreshLogEstimates(results).catch(() => {});
+}
+
+/**
+ * E2 post-log trigger: freshly-created ai_estimate rows get one background
+ * enrichment attempt each. Refreshes state only when something actually
+ * upgraded (chip flips from estimated on next render).
+ */
+async function enrichFreshLogEstimates(results: Array<{ food?: { id: string; canonicalName: string; sourceType: string } | null }>) {
+  const fresh = (results || [])
+    .filter(r => r?.food?.sourceType === 'ai_estimate')
+    .map(r => ({ id: r.food!.id, name: r.food!.canonicalName, sourceType: 'ai_estimate' }));
+  if (fresh.length === 0) return;
+  try {
+    const { enrichFreshEstimates } = await import('@services/enrichment/pipeline');
+    const done = await enrichFreshEstimates(
+      {
+        foodRepo: ctx.foodRepo,
+        settingsRepo: ctx.settingsRepo,
+        onUpgraded: (id) => ctx.foodCache.delete(id),
+      },
+      fresh,
+    );
+    if (done > 0) {
+      invalidateIndexCaches();
+      await ctx.dbManager.saveWebStore();
+      await refreshStateForDate(store.getState().selectedDate);
+    }
+  } catch { /* background only */ }
 }
 
 /** Log a library food at an exact gram amount on the selected date. */

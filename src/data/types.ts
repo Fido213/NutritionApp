@@ -1,5 +1,9 @@
 export type NutritionBasis = 'per_100g' | 'per_100ml' | 'per_serving';
-export type SourceType = 'ai_estimate' | 'barcode' | 'nutrition_label' | 'user_entered' | 'imported';
+// E2 enrichment tier: measured values pulled from Open Food Facts for a row
+// born as ai_estimate. Sits between ai_estimate and user_entered in trust:
+// traced to a real measured source, not inferred — but crowd-sourced, so
+// below hand-verified entries. Never written by estimation paths.
+export type SourceType = 'ai_estimate' | 'barcode' | 'nutrition_label' | 'user_entered' | 'imported' | 'online_match';
 export type WaterSource = 'explicit' | 'drink' | 'food';
 export type ObservationSource = 'text' | 'image' | 'label_ocr' | 'barcode' | 'combo';
 

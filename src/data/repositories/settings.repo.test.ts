@@ -4,7 +4,7 @@
  * add nothing over the query text asserted here).
  */
 import { describe, it, expect } from 'vitest';
-import { SettingsRepository, SHOW_SEED_LIBRARY_KEY } from './settings.repo';
+import { SettingsRepository, SHOW_SEED_LIBRARY_KEY, ONLINE_ENRICHMENT_KEY } from './settings.repo';
 
 function stubConn() {
   const store = new Map<string, string>();
@@ -44,5 +44,16 @@ describe('SettingsRepository', () => {
     expect(conn.store.get(SHOW_SEED_LIBRARY_KEY)).toBe('1');
     await repo.setShowSeedLibrary(false);
     expect(await repo.getShowSeedLibrary()).toBe(false);
+  });
+
+  it('keeps online enrichment off by default until explicitly enabled (E2)', async () => {
+    const conn = stubConn();
+    const repo = new SettingsRepository(conn as any);
+    expect(await repo.getOnlineEnrichment()).toBe(false);
+    await repo.setOnlineEnrichment(true);
+    expect(await repo.getOnlineEnrichment()).toBe(true);
+    expect(conn.store.get(ONLINE_ENRICHMENT_KEY)).toBe('1');
+    await repo.setOnlineEnrichment(false);
+    expect(await repo.getOnlineEnrichment()).toBe(false);
   });
 });

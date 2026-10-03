@@ -84,6 +84,11 @@ describe('confidenceLabel', () => {
     expect(confidenceLabel(undefined, 'ai_estimate')).toBe('estimated');
   });
 
+  it('marks online_match rows online (E2 enrichment tier)', () => {
+    expect(confidenceLabel(0.85, 'online_match')).toBe('online · 85%');
+    expect(confidenceLabel(null, 'online_match')).toBe('online');
+  });
+
   it('stays honest when confidence is missing', () => {
     expect(confidenceLabel(null, 'user_entered')).toBe('no estimate');
   });

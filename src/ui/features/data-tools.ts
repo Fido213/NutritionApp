@@ -350,6 +350,48 @@ export function setupLibrarySettingsHandler() {
     await renderIndex();
     showToast(box.checked ? 'Full reference library shown in Index' : 'Index shows your foods only');
   });
+
+  // E2 enrichment toggle (same card). Flipping ON runs one backfill sweep
+  // over existing estimates (summary toast only); flipping OFF just stops
+  // future attempts — already-enriched rows keep their measured values.
+  const enrich = document.getElementById('online-enrichment') as HTMLInputElement | null;
+  if (!enrich) return;
+  ctx.settingsRepo.getOnlineEnrichment()
+    .then(on => { enrich.checked = on; })
+    .catch(() => { enrich.checked = false; });
+  enrich.addEventListener('change', async () => {
+    await ctx.settingsRepo.setOnlineEnrichment(enrich.checked);
+    await ctx.dbManager.saveWebStore();
+    if (enrich.checked) {
+      showToast('Checking estimates against online data…');
+      try {
+        const { sweepEstimates } = await import('@services/enrichment/pipeline');
+        const res = await sweepEstimates({
+          foodRepo: ctx.foodRepo,
+          settingsRepo: ctx.settingsRepo,
+          onToast: (m) => showToast(m),
+          onUpgraded: (id) => ctx.foodCache.delete(id),
+        });
+        invalidateIndexCaches();
+        await ctx.dbManager.saveWebStore();
+        await refreshStateForDate(store.getState().selectedDate);
+        // A bounded sweep that stopped early is not "no matches" — say which.
+        if (res.enriched === 0) {
+          if (res.stopped === 'time' || res.stopped === 'cap') {
+            showToast(`Checked ${res.tried} estimate${res.tried === 1 ? '' : 's'} — turn the toggle off and on to continue`);
+          } else if (res.stopped === 'toggle-off') {
+            showToast('Online enrichment off — estimates stay local');
+          } else {
+            showToast(res.tried === 0 ? 'No estimates to enrich' : 'No online matches — estimates kept');
+          }
+        }
+      } catch {
+        showToast('Enrichment sweep failed — estimates kept');
+      }
+    } else {
+      showToast('Online enrichment off — estimates stay local');
+    }
+  });
 }
 
 // ---------- Delete All Data (§5d: complete local wipe, double-guarded) ----------

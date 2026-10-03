@@ -2,6 +2,8 @@ import { SQLiteDBConnection } from '@capacitor-community/sqlite';
 
 /** Index shows the 39k reference library only when explicitly enabled. */
 export const SHOW_SEED_LIBRARY_KEY = 'show_seed_library';
+/** E2 silent online enrichment (Open Food Facts) for estimated rows. Default OFF. */
+export const ONLINE_ENRICHMENT_KEY = 'online_enrichment';
 
 export class SettingsRepository {
   constructor(private db: SQLiteDBConnection) {}
@@ -29,5 +31,19 @@ export class SettingsRepository {
 
   async setShowSeedLibrary(on: boolean): Promise<void> {
     await this.set(SHOW_SEED_LIBRARY_KEY, on ? '1' : '0');
+  }
+
+  /**
+   * E2: silently enrich estimated rows with measured online values (Open
+   * Food Facts, structured API, cached per row forever)? Default OFF —
+   * explicit opt-in: it spends data/battery and phones home per unknown
+   * food. When off, estimates stay local and labeled, exactly as before.
+   */
+  async getOnlineEnrichment(): Promise<boolean> {
+    return (await this.get(ONLINE_ENRICHMENT_KEY)) === '1';
+  }
+
+  async setOnlineEnrichment(on: boolean): Promise<void> {
+    await this.set(ONLINE_ENRICHMENT_KEY, on ? '1' : '0');
   }
 }

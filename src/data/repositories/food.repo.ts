@@ -113,6 +113,19 @@ export class FoodRepository {
     return (res.values as Food[]) || [];
   }
 
+  /**
+   * Rows of ONE source_type, newest first (E2 sweep: the handful of
+   * `ai_estimate` rows only — never the whole 39k library through the
+   * bridge just to filter it in JS).
+   */
+  async getFoodsBySourceType(sourceType: string, limit: number = 500): Promise<Food[]> {
+    const res = await this.db.query(
+      `SELECT * FROM foods WHERE source_type = ? ORDER BY created_at DESC LIMIT ?`,
+      [sourceType, limit]
+    );
+    return (res.values as Food[]) || [];
+  }
+
   async fuzzySearch(query: string, limit: number = 20, opts?: { includeSeed?: boolean }): Promise<Food[]> {
     // Alias-aware: curated/user phrases ("white rice") reach their rows even
     // when the canonical name orders words differently ("Rice, cooked, NFS").
