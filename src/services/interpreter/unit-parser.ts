@@ -46,6 +46,20 @@ const RANGE_RE = new RegExp(`(${NUM_RE})\\s*(?:-|–|—|to|bis|à)\\s*(${NUM_RE
 const QTY_UNIT_RE = new RegExp(`(${NUM_RE})\\s*(${UNIT_RE})(?=\\b|\\s|$)`, 'giu');
 // 4) bare count: 2 apples (digit + no unit, food word handled later) — extracted as fallback
 
+/**
+ * Units that carry a piece weight without being a measure ("1 slice", "1 can").
+ * UNCHANGED from the frozen qty-harness contract (q023 "1 egg", q057 "2 Eier",
+ * q024 "2 بيضة" — the Arabic form is deliberately NOT accepted here, so it
+ * resolves through the bare-count path instead).
+ */
+const PIECE_UNIT_WHITELIST = /^(piece|pieces|stück|morceau|قطعة|can|dose|egg|eggs|ei|eier|œuf|slice)$/i;
+
+/**
+ * The subset of the whitelist that is a FOOD rather than a portion noun: these
+ * resolve their piece weight here, but must not also consume the food text.
+ */
+const PIECE_FOOD_WORDS = /^(egg|eggs|ei|eier|œuf)$/i;
+
 export function parseQuantities(text: string): ParsedQuantity[] {
   const out: ParsedQuantity[] = [];
   const seen = new Set<string>(); // dedupe by span key
@@ -134,15 +148,24 @@ export function parseQuantities(text: string): ParsedQuantity[] {
     const unit = m[2] || null;
     if (val === null) continue;
     // Filter false positives where unit is actually a food word (apple) without number semantics
-    // Keep piece units, else require resolveUnit to exist
-    if (unit && !resolveUnit(unit) && !/^(piece|pieces|stück|morceau|قطعة|can|dose|egg|eggs|ei|eier|œuf|slice)$/i.test(unit)) {
+    // Keep piece units, else require resolveUnit to exist.
+    if (unit && !resolveUnit(unit) && !PIECE_UNIT_WHITELIST.test(unit)) {
       // Might be food word like "chicken" — skip, will be bare number fallback if needed
       // But "1 chicken" should be piece; we allow bare count path
       continue;
     }
     const { amountG, amountMl } = normalizeAmount(val, unit);
+    // A piece unit that is also a FOOD word ("3 eggs") resolves its grams here
+    // (frozen qty-harness contract: egg = 50 g) but must not also eat the food
+    // text — the span is narrowed to the number so the NER still names the
+    // food. Before this, "3 eggs" / "1 egg" / "2 Eier" produced NO food span at
+    // all, so the message logged nothing through the primary offline
+    // interpreter (only the Gemma fallback covered it). Portion nouns
+    // (slice/piece/can/dose) keep the whole span: "1 slice" names no food.
+    const pieceFood = !!unit && PIECE_FOOD_WORDS.test(unit);
     add({
-      raw, span: [start, end],
+      raw: pieceFood ? m[1] : raw,
+      span: pieceFood ? [start, start + m[1].length] : [start, end],
       amountG, amountMl,
       canonicalGrams: amountG,
       originalValue: val, unitText: unit,

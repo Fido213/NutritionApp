@@ -530,3 +530,49 @@ describe('non-food spans never become food rows', () => {
     expect(out[0].canonicalName).toBe('Minute Maid Orange Juice');
   });
 });
+
+describe('bare-count foods keep their identity (piece units vs food words)', () => {
+  const EGG = { id: 'e', canonical_name: 'Egg, whole, raw, fresh', normalized_name: 'egg whole raw fresh' } as any;
+
+  it('logs "3 eggs" with the food AND the resolved piece weight', () => {
+    // "3 eggs" used to be parsed as quantity "3 eggs" (unit="eggs"), which
+    // consumed the food word: the NER produced no span and the message logged
+    // NOTHING through the primary offline interpreter. The grams are still
+    // resolved here (frozen qty-harness contract: egg = 50 g), but the span is
+    // narrowed to the number so the food survives.
+    setFoodsForInterpreter([EGG]);
+    const q = parseQuantities('3 eggs');
+    expect(q).toHaveLength(1);
+    expect(q[0].originalValue).toBe(3);
+    expect(q[0].amountG).toBe(150);
+    const out = interpretTextSync('3 eggs', [EGG]);
+    expect(out).toHaveLength(1);
+    expect(out[0].canonicalName).toBe('Egg, whole, raw, fresh');
+    expect(out[0].amountG).toBe(150);
+    expect(out[0].wasDefault).toBe(false);
+  });
+
+  it('applies to the other piece-weight food words too', () => {
+    setFoodsForInterpreter([EGG]);
+    for (const t of ['1 egg', '2 eggs']) {
+      const out = interpretTextSync(t, [EGG]);
+      expect(out).toHaveLength(1);
+      expect(out[0].canonicalName).toBe('Egg, whole, raw, fresh');
+      expect(out[0].amountG).toBeGreaterThan(0);
+    }
+    // A form outside the frozen whitelist keeps its food text through the
+    // bare-count path (grams resolve later via the piece-weight table).
+    const fr = interpretTextSync('3 œufs', [EGG]);
+    expect(fr).toHaveLength(1);
+    expect(fr[0].canonicalName.toLowerCase()).toContain('œuf');
+  });
+
+  it('still consumes a pure portion noun ("1 slice" names no food)', () => {
+    setFoodsForInterpreter([EGG]);
+    // "slice" is a portion, not a food: it must not become a food span.
+    expect(interpretTextSync('1 slice', [EGG])).toHaveLength(0);
+    // ...but a slice OF something keeps the food.
+    const out = interpretTextSync('2 slices of egg', [EGG]);
+    expect(out.some(s => (s.canonicalName ?? '').includes('Egg'))).toBe(true);
+  });
+});
