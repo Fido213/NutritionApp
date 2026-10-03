@@ -1,21 +1,249 @@
 {
-  "_comment": "Curated UI/search aliases for confusing reference rows (rice family first). Tracked in git so every install — including already-seeded ones — converges without a wipe: applied idempotently at boot, never overwriting user pins. Format: natural phrase -> EXACT food_name_en from the cleaned corpus. Add rows freely; keep aliases 1:1 (one phrase, one food).",
+  "_comment": "Curated UI/search aliases for confusing reference rows (rice family first) plus verified translations of common foods. Tracked in git so every install — including already-seeded ones — converges without a wipe: applied idempotently at boot, never overwriting user pins. Format: natural phrase -> EXACT food_name_en from the cleaned corpus. Keep aliases 1:1 (one phrase, one food); non-Latin phrases are preserved by normalizeFoodName, and the retriever indexes these phrases so they affect ranking, not just the final lookup.",
   "aliases": [
-    { "alias": "white rice", "canonical": "Rice, cooked, NFS" },
-    { "alias": "brown rice", "canonical": "Grains, rice, brown, long-grain, cooked" },
-    { "alias": "spanish rice", "canonical": "Rice, Spanish rice" },
-    { "alias": "glutinous rice", "canonical": "Grains, rice, white, glutinous, cooked" },
-    { "alias": "sticky rice", "canonical": "Grains, rice, white, glutinous, cooked" },
-    { "alias": "basmati rice", "canonical": "Rice, basmati, cooked, no added salt" },
-    { "alias": "fried rice", "canonical": "Rice, fried, NFS" },
-    { "alias": "rice noodles", "canonical": "Pasta, rice noodles, cooked" },
-    { "alias": "wild rice", "canonical": "Wild rice, cooked" },
-    { "alias": "red rice", "canonical": "Rice, red, cooked, no added salt" },
-    { "alias": "yellow rice", "canonical": "Yellow rice, cooked, no added fat" },
-    { "alias": "rice cakes", "canonical": "RICE CAKE" },
-    { "alias": "rice cake", "canonical": "RICE CAKE" },
-    { "alias": "rice milk", "canonical": "Rice milk" },
-    { "alias": "rice flour", "canonical": "Rice flour" },
-    { "alias": "rice pudding", "canonical": "Pudding, rice" }
+    {
+      "alias": "white rice",
+      "canonical": "Rice, cooked, NFS"
+    },
+    {
+      "alias": "brown rice",
+      "canonical": "Grains, rice, brown, long-grain, cooked"
+    },
+    {
+      "alias": "spanish rice",
+      "canonical": "Rice, Spanish rice"
+    },
+    {
+      "alias": "glutinous rice",
+      "canonical": "Grains, rice, white, glutinous, cooked"
+    },
+    {
+      "alias": "sticky rice",
+      "canonical": "Grains, rice, white, glutinous, cooked"
+    },
+    {
+      "alias": "basmati rice",
+      "canonical": "Rice, basmati, cooked, no added salt"
+    },
+    {
+      "alias": "fried rice",
+      "canonical": "Rice, fried, NFS"
+    },
+    {
+      "alias": "rice noodles",
+      "canonical": "Pasta, rice noodles, cooked"
+    },
+    {
+      "alias": "wild rice",
+      "canonical": "Wild rice, cooked"
+    },
+    {
+      "alias": "red rice",
+      "canonical": "Rice, red, cooked, no added salt"
+    },
+    {
+      "alias": "yellow rice",
+      "canonical": "Yellow rice, cooked, no added fat"
+    },
+    {
+      "alias": "rice cakes",
+      "canonical": "RICE CAKE"
+    },
+    {
+      "alias": "rice cake",
+      "canonical": "RICE CAKE"
+    },
+    {
+      "alias": "rice milk",
+      "canonical": "Rice milk"
+    },
+    {
+      "alias": "rice flour",
+      "canonical": "Rice flour"
+    },
+    {
+      "alias": "rice pudding",
+      "canonical": "Pudding, rice"
+    },
+    {
+      "alias": "دقيق الأرز",
+      "canonical": "rice flour"
+    },
+    {
+      "alias": "harina de arroz",
+      "canonical": "rice flour"
+    },
+    {
+      "alias": "farine de riz",
+      "canonical": "rice flour"
+    },
+    {
+      "alias": "leche de arroz",
+      "canonical": "rice milk"
+    },
+    {
+      "alias": "lait de riz",
+      "canonical": "rice milk"
+    },
+    {
+      "alias": "طماطم طازجة",
+      "canonical": "tomato, raw"
+    },
+    {
+      "alias": "بندورة نيئة",
+      "canonical": "tomato, raw"
+    },
+    {
+      "alias": "tomate crudo",
+      "canonical": "tomato, raw"
+    },
+    {
+      "alias": "tomate fresco",
+      "canonical": "tomato, raw"
+    },
+    {
+      "alias": "tomate crue",
+      "canonical": "tomato, raw"
+    },
+    {
+      "alias": "Tomate roh",
+      "canonical": "tomato, raw"
+    },
+    {
+      "alias": "سمك القد",
+      "canonical": "cod"
+    },
+    {
+      "alias": "bacalao",
+      "canonical": "cod"
+    },
+    {
+      "alias": "cabillaud",
+      "canonical": "cod"
+    },
+    {
+      "alias": "鳕鱼",
+      "canonical": "cod"
+    },
+    {
+      "alias": "سلمون نيء",
+      "canonical": "salmon, raw"
+    },
+    {
+      "alias": "salmón crudo",
+      "canonical": "salmon, raw"
+    },
+    {
+      "alias": "saumon cru",
+      "canonical": "salmon, raw"
+    },
+    {
+      "alias": "بيض نيء",
+      "canonical": "egg, raw"
+    },
+    {
+      "alias": "بيضة نيئة",
+      "canonical": "egg, raw"
+    },
+    {
+      "alias": "huevo crudo",
+      "canonical": "egg, raw"
+    },
+    {
+      "alias": "œuf cru",
+      "canonical": "egg, raw"
+    },
+    {
+      "alias": "Ei roh",
+      "canonical": "egg, raw"
+    },
+    {
+      "alias": "تفاح طازج",
+      "canonical": "apple, raw"
+    },
+    {
+      "alias": "تفاحة",
+      "canonical": "apple, raw"
+    },
+    {
+      "alias": "manzana cruda",
+      "canonical": "apple, raw"
+    },
+    {
+      "alias": "pomme crue",
+      "canonical": "apple, raw"
+    },
+    {
+      "alias": "苹果",
+      "canonical": "apple, raw"
+    },
+    {
+      "alias": "موز طازج",
+      "canonical": "banana, raw"
+    },
+    {
+      "alias": "plátano crudo",
+      "canonical": "banana, raw"
+    },
+    {
+      "alias": "banane crue",
+      "canonical": "banana, raw"
+    },
+    {
+      "alias": "شوفان نيء",
+      "canonical": "oats, raw"
+    },
+    {
+      "alias": "avena cruda",
+      "canonical": "oats, raw"
+    },
+    {
+      "alias": "avoine crue",
+      "canonical": "oats, raw"
+    },
+    {
+      "alias": "خبز أبيض",
+      "canonical": "bread, white"
+    },
+    {
+      "alias": "pan blanco",
+      "canonical": "bread, white"
+    },
+    {
+      "alias": "pain blanc",
+      "canonical": "bread, white"
+    },
+    {
+      "alias": "زيت زيتون",
+      "canonical": "olive oil"
+    },
+    {
+      "alias": "aceite de oliva",
+      "canonical": "olive oil"
+    },
+    {
+      "alias": "huile d'olive",
+      "canonical": "olive oil"
+    },
+    {
+      "alias": "Brown Toast",
+      "canonical": "TOAST, WHEAT TOAST, MCENNEDY SLICED BROWN BREAD, LIDL, HIGH-SODIUM"
+    },
+    {
+      "alias": "McDonald's Ice Cream Cone",
+      "canonical": "McDONALD'S, Vanilla Reduced Fat Ice Cream Cone"
+    },
+    {
+      "alias": "Papa John'S Pepperoni Pizza",
+      "canonical": "PAPA JOHN'S 14\" Pepperoni Pizza, Original Crust"
+    },
+    {
+      "alias": "Pork Gyro",
+      "canonical": "Gyros (pork) fried"
+    },
+    {
+      "alias": "Malteser",
+      "canonical": "Maltesers"
+    }
   ]
 }
